@@ -59,8 +59,8 @@
 #### MAC Address Spoofing
 
 - **Intel/Realtek NICs**: Permanent changes possible:
-  - [Intel NIC MAC Spoofing Guide](MAC-Spoofing.md#intel-nics)
-  - [Realtek NIC MAC Spoofing Guide](MAC-Spoofing.md#realtek-nics)
+  - [Intel NIC MAC Spoofing Guide](Files/MAC-Spoofing/MAC-Spoofing.md#intel-nics)
+  - [Realtek NIC MAC Spoofing Guide](Files/MAC-Spoofing/MAC-Spoofing.md#realtek-nics)
   - Note: Certain models might not support flashing or may revert.
 - **USB-Based**: Use adapters with **AX88179** chips (steer clear of uncertain “A/B” revisions).
   - **Spoof Utility**: [ASIXFlash](https://github.com/jglim/ASIXFlash).

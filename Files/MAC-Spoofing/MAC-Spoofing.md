@@ -5,10 +5,13 @@ This guide provides instructions for spoofing MAC addresses on different network
 ### Prerequisites
 
 - Windows 10/11 OS
-- Realtek eFuse Programmer toolkit (realtek_efuse_prog.zip)
-  - If you have an Realtek NIC:
-- Intel EEUPDATE
-  - If you have an Intel NIC:
+- If you have a Realtek NIC:
+  - Download required tools:
+    - [RealTekNicPgW2.7.5.0.zip](Realtek%20Files/RealTecNicPgW2.7.5.0.zip)
+    - [realtek_efuse_prog.zip](Realtek%20Files/realtek_efuse_prog.zip)
+- If you have an Intel NIC:
+  - Download required tools:
+    - [Intel Files/EEupdate_5.35.12.0.zip](Intel%20Files/EEupdate_5.35.12.0.zip)
 
 ---
 
