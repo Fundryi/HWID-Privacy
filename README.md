@@ -12,10 +12,10 @@
 - **Steps**:
   - Change only 2–5 digits of your original serial.
   - Avoid odd patterns (e.g., `SPOOFER-XXXX`).
-     - **Example**:
-       - Original: `08ZU9T1_NAVX2ZXV4F`
-       - Changed: `08ZU9T1_NABX12XZ4A`
-     - The prefix is usually part of a broader ID scheme. Make only reasonable adjustments.
+    - **Example**:
+      - Original: `08ZU9T1_NAVX2ZXV4F`
+      - Changed: `08ZU9T1_NABX12XZ4A`
+    - The prefix is usually part of a broader ID scheme. Make only reasonable adjustments.
   - Reflash the BIOS.
   - Clear CMOS when done.
 
@@ -58,8 +58,10 @@
 
 #### MAC Address Spoofing
 
-- **Intel/Realtek NICs**: Permanent changes with **EEUPDATE**.
-  - Certain models might not support flashing or may revert.
+- **Intel/Realtek NICs**: Permanent changes possible:
+  - [Intel NIC MAC Spoofing Guide](MAC-Spoofing.md#intel-nics)
+  - [Realtek NIC MAC Spoofing Guide](MAC-Spoofing.md#realtek-nics)
+  - Note: Certain models might not support flashing or may revert.
 - **USB-Based**: Use adapters with **AX88179** chips (steer clear of uncertain “A/B” revisions).
   - **Spoof Utility**: [ASIXFlash](https://github.com/jglim/ASIXFlash).
 - **Purchasable HWID Spoofers**: Some handle NIC spoofing, but certain NICs resist it, and they can produce questionable serial data in other areas.
@@ -113,18 +115,18 @@
 - **Process**:
   - Change the router’s MAC and hostname.
   - Change the MAC of the port you’re using on the router.
-     - (This is different from the router’s main MAC!)
+    - (This is different from the router’s main MAC!)
   - Plug only your gaming PC into the router’s LAN port.
   - Connect the router’s WAN port to your home router.
-     - Avoid connecting other devices, so the ARP table shows only your gaming PC.
-     - And don’t worry about those ARP addresses; these are normal and not unique. They’re created by Windows:
-       - 192.168.8.255         ff-ff-ff-ff-ff-ff     static  
-       - 224.0.0.22            01-00-5e-00-00-16     static  
-       - 224.0.0.236           01-00-5e-00-00-ec     static  
-       - 224.0.0.251           01-00-5e-00-00-fb     static  
-       - 224.0.0.252           01-00-5e-00-00-fc     static  
-       - 239.255.255.250       01-00-5e-7f-ff-fa     static  
-       - 255.255.255.255       ff-ff-ff-ff-ff-ff     static  
+    - Avoid connecting other devices, so the ARP table shows only your gaming PC.
+    - And don’t worry about those ARP addresses; these are normal and not unique. They’re created by Windows:
+      - 192.168.8.255 ff-ff-ff-ff-ff-ff static
+      - 224.0.0.22 01-00-5e-00-00-16 static
+      - 224.0.0.236 01-00-5e-00-00-ec static
+      - 224.0.0.251 01-00-5e-00-00-fb static
+      - 224.0.0.252 01-00-5e-00-00-fc static
+      - 239.255.255.250 01-00-5e-7f-ff-fa static
+      - 255.255.255.255 ff-ff-ff-ff-ff-ff static
 
 ---
 
