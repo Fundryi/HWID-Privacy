@@ -8,53 +8,6 @@ This guide provides instructions for spoofing MAC addresses on different network
 
 ---
 
-## Realtek NICs
-
-### Prerequisites
-
-- Download required tools(trial and error):
-  - [RealTekNicPgW2.7.5.0.zip](Realtek%20Files/RealTecNicPgW2.7.5.0.zip)
-  - [realtek_efuse_prog.zip](Realtek%20Files/realtek_efuse_prog.zip)
-
-For Realtek network adapters, you can modify the MAC address using the Realtek eFuse Programmer toolkit.
-
-### Programming Steps
-
-1. Modify MAC Address:
-
-   - Open `8168FEF.CFG` file
-   - Edit the first line to set your desired MAC address:
-     ```
-     NODEID = 00 E0 4C 88 00 18
-     ;ENDID = 00 E0 4C 68 FF FF
-     ```
-
-2. Run the Programming Script:
-
-   - Execute `WINPG64.BAT`
-   - A successful rewrite will show output similar to:
-
-     ```
-     ****************************************************************************
-     *       EEPROM/EFUSE/FLASH Windows Programming Utility for                 *
-     *    Realtek RTL8136/RTL8168/RTL8169/RTL8125 Family Ethernet Controller  *
-     *   Version : 2.69.0.3                                                    *
-     * Copyright (C) 2020 Realtek Semiconductor Corp.. All Rights Reserved.    *
-     ****************************************************************************
-
-     PG EFuse is Successful!!!
-     NodeID = 00 E0 4C 88 00 18
-     EFuse Remain 61 Bytes!!!
-     ```
-
-3. Verify MAC Address Change:
-   - Open PowerShell
-   - Run `ipconfig /all`
-   - Look for your network adapter's Physical Address
-   - It should match your programmed MAC address
-
----
-
 ## Intel NICs
 
 ### Prerequisites
@@ -138,3 +91,50 @@ pause
 - Some systems may require specific versions of EEUPDATE
 - Not all Intel NICs support MAC address modification
 - Incorrect MAC address format can cause network issues
+
+---
+
+## Realtek NICs
+
+### Prerequisites
+
+- Download required tools(trial and error):
+  - [RealTekNicPgW2.7.5.0.zip](Realtek%20Files/RealTecNicPgW2.7.5.0.zip)
+  - [realtek_efuse_prog.zip](Realtek%20Files/realtek_efuse_prog.zip)
+
+For Realtek network adapters, you can modify the MAC address using the Realtek eFuse Programmer toolkit.
+
+### Programming Steps
+
+1. Modify MAC Address:
+
+   - Open `8168FEF.CFG` file
+   - Edit the first line to set your desired MAC address:
+     ```
+     NODEID = 00 E0 4C 88 00 18
+     ;ENDID = 00 E0 4C 68 FF FF
+     ```
+
+2. Run the Programming Script:
+
+   - Execute `WINPG64.BAT`
+   - A successful rewrite will show output similar to:
+
+     ```
+     ****************************************************************************
+     *       EEPROM/EFUSE/FLASH Windows Programming Utility for                 *
+     *    Realtek RTL8136/RTL8168/RTL8169/RTL8125 Family Ethernet Controller  *
+     *   Version : 2.69.0.3                                                    *
+     * Copyright (C) 2020 Realtek Semiconductor Corp.. All Rights Reserved.    *
+     ****************************************************************************
+
+     PG EFuse is Successful!!!
+     NodeID = 00 E0 4C 88 00 18
+     EFuse Remain 61 Bytes!!!
+     ```
+
+3. Verify MAC Address Change:
+   - Open PowerShell
+   - Run `ipconfig /all`
+   - Look for your network adapter's Physical Address
+   - It should match your programmed MAC address
