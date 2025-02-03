@@ -12,14 +12,14 @@
 ## Building the Project
 
 ```bash
-dotnet publish "source/HWIDChecker.csproj" -c Releas
+dotnet publish "HWID-Checkers/Software-Project/source/HWIDChecker.csproj" -c Releas
 ```
 
 This will:
 
 - Build the project in Release configuration
 - Create a single-file executable
-- Copy published files to `/source/bin/RELEASE/win-x64/publish`
+- Copy published files to `HWID-Checkers/Software-Project/source/bin/RELEASE/win-x64/publish`
 
 ## Requirements
 
