@@ -1,0 +1,21 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HWIDChecker", "source\HWIDChecker.csproj", "{ED5B2CF8-462D-3C30-3B21-D05D89E95ADC}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{ED5B2CF8-462D-3C30-3B21-D05D89E95ADC}.Release|x64.ActiveCfg = Release|x64
+		{ED5B2CF8-462D-3C30-3B21-D05D89E95ADC}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {F11AC911-7131-40F4-BAD6-323C2651F463}
+	EndGlobalSection
+EndGlobal
