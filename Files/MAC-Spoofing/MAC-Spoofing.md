@@ -121,6 +121,8 @@ pause
    - Boot back into Windows to verify the change
    - Revert your secure boot and CMS settings.
 
+---
+
 ### Important Notes
 
 - Replace `AABBCCDDEE11` with your desired MAC address
@@ -131,6 +133,8 @@ pause
 - Some systems may require specific versions of EEUPDATE
 - Not all Intel NICs support MAC address modification
 - Incorrect MAC address format can cause network issues
+
+---
 
 ## Additional Resources
 
