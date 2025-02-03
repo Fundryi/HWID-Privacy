@@ -2,20 +2,19 @@
 
 This guide provides instructions for spoofing MAC addresses on different network interface controllers (NICs).
 
-### Prerequisites
+### System Requirements
 
-- Windows 10/11 OS
-- If you have a Realtek NIC:
-  - Download required tools:
-    - [RealTekNicPgW2.7.5.0.zip](Realtek%20Files/RealTecNicPgW2.7.5.0.zip)
-    - [realtek_efuse_prog.zip](Realtek%20Files/realtek_efuse_prog.zip)
-- If you have an Intel NIC:
-  - Download required tools:
-    - [Intel Files/EEupdate_5.35.12.0.zip](Intel%20Files/EEupdate_5.35.12.0.zip)
+- Windows 10/11
 
 ---
 
 ## Realtek NICs
+
+### Prerequisites
+
+- Download required tools(trial and error):
+  - [RealTekNicPgW2.7.5.0.zip](Realtek%20Files/RealTecNicPgW2.7.5.0.zip)
+  - [realtek_efuse_prog.zip](Realtek%20Files/realtek_efuse_prog.zip)
 
 For Realtek network adapters, you can modify the MAC address using the Realtek eFuse Programmer toolkit.
 
@@ -58,9 +57,14 @@ For Realtek network adapters, you can modify the MAC address using the Realtek e
 
 ## Intel NICs
 
+### Prerequisites
+
+- Download required tools:
+  - [EEUPDATE Utility](Intel%20Files/EEupdate_5.35.12.0.zip)
+
 For Intel network cards, you can use the EEUPDATE utility through a DOS bootable USB.
 
-### Prerequisites
+### Setup Steps
 
 1. Create Bootable DOS USB:
 
@@ -124,8 +128,6 @@ pause
    - Boot back into Windows to verify the change
    - Revert your secure boot and CMS settings.
 
----
-
 ### Important Notes
 
 - Replace `AABBCCDDEE11` with your desired MAC address
@@ -136,11 +138,3 @@ pause
 - Some systems may require specific versions of EEUPDATE
 - Not all Intel NICs support MAC address modification
 - Incorrect MAC address format can cause network issues
-
----
-
-## Additional Resources
-
-- Always verify the authenticity of tools before using them
-- Consider backup plans in case of failed MAC address changes
-- Test network connectivity after making changes
