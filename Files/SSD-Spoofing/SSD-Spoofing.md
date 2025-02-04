@@ -16,7 +16,7 @@
   - **[M2_SERIAL_CHANGE_TOOL.zip](./M.2-SSD-Files/M2_SERIAL_CHANGE_TOOL.zip)**
   - **A USB-to-M.2 Adapter**
 - Optional:
-  - **[HWIDChecker.exe](HWIDChecker.exe)**
+  - **[HWIDChecker.exe](/HWIDChecker.exe)**
     - (Optional but recommended to check your before/after SSD details)
   - **A Secondary PC** (with **no anti-cheat** installed)
     - This is optinal, you can use it on your main pc, just no Anti-Cheat open/installed! :)
@@ -67,7 +67,7 @@ Follow these steps carefully to spoof your M.2 SSD.
 
 14. **Power on** your **MAIN PC**.
 
-15. **Open** [HWIDChecker.exe](HWIDChecker.exe).
+15. **Open** [HWIDChecker.exe](/HWIDChecker.exe).
 
 16. **Verify** that your **Model Name**, **Firmware Version**, and **Serial Number** have been updated.
 
@@ -81,7 +81,7 @@ Follow these steps carefully to spoof your M.2 SSD.
   - **[SSD_SERIAL_CHANGE_TOOL.zip](./Normal-2.5-SSD-Files/SSD_SERIAL_CHANGE_TOOL.zip)**
   - **A SATA-to-USB with ASMT 2115 Chipset**
 - Optional:
-  - **[HWIDChecker.exe](HWIDChecker.exe)**
+  - **[HWIDChecker.exe](/HWIDChecker.exe)**
     - (Optional but recommended to check your before/after SSD details)
   - **A Secondary PC** (with **no anti-cheat** installed)
     - This is optinal, you can use it on your main pc, just no Anti-Cheat open/installed! :)
