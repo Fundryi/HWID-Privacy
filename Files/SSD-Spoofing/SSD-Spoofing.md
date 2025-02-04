@@ -99,9 +99,9 @@ Follow these steps carefully to spoof your M.2 SSD.
 
 ## **Prerequisites**
 
-- Compatible SSD(needs a `Maxio MAP1202 Controller`):
+- Compatible SSD(needs to be `YANSEN Manufactured SSD`):
   - ✅ **Tested SSD:**
-    - **KingSpec SSD (Any from YANSEN should work)**
+    - **KingSpec SSD**
       - [Amazon SSD Link](https://www.hagglezon.com/en/s/https%3A%2F%2Fwww.amazon.de%2F-%2Fen%2FKingSpec-Internal-Compatible-Desktop-Laptop%2Fdp%2FB0B2K3ZCHH%3Fth%3D1)
   - ❓ **Other SSDs (not personally tested):**
     - Just make sure "YANSEN" is the manufacture and give it a try.
