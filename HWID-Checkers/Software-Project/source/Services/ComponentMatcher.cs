@@ -21,22 +21,37 @@ namespace HWIDChecker.Services
             var results = new List<(ComponentIdentifier Base, ComponentIdentifier Target)>();
             var processedTargets = new HashSet<ComponentIdentifier>();
 
+            // First, try to match using primary keys
             foreach (var baseComponent in baseComponents)
             {
-                var matches = FindMatches(baseComponent, targetComponents)
+                var primaryMatches = FindMatchesByPrimaryKey(baseComponent, targetComponents)
                     .Where(target => !processedTargets.Contains(target))
                     .ToList();
 
-                if (matches.Any())
+                if (primaryMatches.Any())
                 {
-                    var bestMatch = matches.First();
+                    var bestMatch = primaryMatches.First();
                     processedTargets.Add(bestMatch);
                     results.Add((baseComponent, bestMatch));
                 }
                 else
                 {
-                    // No match found - component was removed
-                    results.Add((baseComponent, null));
+                    // Try fallback matching if primary key matching failed
+                    var fallbackMatches = FindMatchesByFallbackKey(baseComponent, targetComponents)
+                        .Where(target => !processedTargets.Contains(target))
+                        .ToList();
+
+                    if (fallbackMatches.Any())
+                    {
+                        var bestMatch = fallbackMatches.First();
+                        processedTargets.Add(bestMatch);
+                        results.Add((baseComponent, bestMatch));
+                    }
+                    else
+                    {
+                        // No match found - component was removed
+                        results.Add((baseComponent, null));
+                    }
                 }
             }
 
@@ -49,12 +64,48 @@ namespace HWIDChecker.Services
             return results;
         }
 
-        private IEnumerable<ComponentIdentifier> FindMatches(
+        private IEnumerable<ComponentIdentifier> FindMatchesByPrimaryKey(
             ComponentIdentifier component,
             List<ComponentIdentifier> candidates)
         {
-            // Only match components of the same type
-            return candidates.Where(c => c.Type == component.Type);
+            if (!_strategies.TryGetValue(component.Type, out var strategy))
+            {
+                return Enumerable.Empty<ComponentIdentifier>();
+            }
+
+            var baseId = strategy.GetIdentifier(component.Properties);
+            if (string.IsNullOrEmpty(baseId))
+            {
+                return Enumerable.Empty<ComponentIdentifier>();
+            }
+
+            return candidates
+                .Where(c => c.Type == component.Type)
+                .Where(c => strategy.GetIdentifier(c.Properties) == baseId);
+        }
+
+        private IEnumerable<ComponentIdentifier> FindMatchesByFallbackKey(
+            ComponentIdentifier component,
+            List<ComponentIdentifier> candidates)
+        {
+            if (!_strategies.TryGetValue(component.Type, out var strategy))
+            {
+                return Enumerable.Empty<ComponentIdentifier>();
+            }
+
+            var baseFallbacks = strategy.GetFallbackIdentifiers(component.Properties);
+            if (!baseFallbacks.Any())
+            {
+                return Enumerable.Empty<ComponentIdentifier>();
+            }
+
+            return candidates
+                .Where(c => c.Type == component.Type)
+                .Where(c =>
+                {
+                    var targetFallbacks = strategy.GetFallbackIdentifiers(c.Properties);
+                    return baseFallbacks.Any(bf => targetFallbacks.Contains(bf));
+                });
         }
     }
 }
