@@ -65,4 +65,4 @@ ehthumbs.db
 *.txt
 
 # But don't ignore this specific exe
-!HWID-CHECKER-Project/HWIDChecker.exe
+!HWID-Checkers/Software-Project/HWIDChecker.exe
