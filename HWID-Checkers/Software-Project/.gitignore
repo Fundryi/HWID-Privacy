@@ -63,6 +63,3 @@ ehthumbs.db
 
 # Ignore all .txt files
 *.txt
-
-# But don't ignore this specific exe
-!HWID-Checkers/Software-Project/HWIDChecker.exe
