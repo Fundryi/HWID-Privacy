@@ -11,51 +11,49 @@
 ## Steps to Follow:
 
 1. Plug the M.2 into a USB adapter.  
-   ![Step 1](Files/SSD-Spoofing/M.2%20SSD%20Files/Images/image_1.png)
+   ![Step 1](Files\SSD-Spoofing\M.2-SSD-Files\Images\image_1.png)
 
 2. Plug the USB adapter into your SECOND PC (**NO ANTICHEAT SHOULD BE INSTALLED**).  
-   ![Step 2](Files/SSD-Spoofing/M.2%20SSD%20Files/Images/image_2.png)
+   ![Step 2](Files\SSD-Spoofing\M.2-SSD-Files\Images\image_2.png)
 
 3. Download **SERIAL_CHANGE_TOOL** from:  
-   [DOWNLOAD LINK](Files/SSD-Spoofing/M.2%20SSD%20Files/M2_SERIAL_CHANGE_TOOL.zip)
+   [DOWNLOAD LINK](Files\SSD-Spoofing\M.2-SSD-Files\M2_SERIAL_CHANGE_TOOL.zip)
 
-4. Unzip using the password found **below the QR code** you just scanned.
+4. Start the tool.
 
-5. Start the tool.
+5. Go to **"Test items"**.  
+   ![Step 6](Files\SSD-Spoofing\M.2-SSD-Files\Images\image_3.png)
 
-6. Go to **"Test items"**.  
-   ![Step 6](Files/SSD-Spoofing/M.2%20SSD%20Files/Images/image_3.png)
+6. Configure it like the image above.
 
-7. Configure it as required.
+7. Go to **"Device Setting"**.  
+   ![Step 8](Files\SSD-Spoofing\M.2-SSD-Files\Images\image_4.png)
 
-8. Go to **"Device Setting"**.  
-   ![Step 8](Files/SSD-Spoofing/M.2%20SSD%20Files/Images/image_4.png)
+8. Enter your **Firmware Version** (use only numbers).
 
-9. Enter your **Firmware Version** (use only numbers).
+9. Enter your **Model Number** (use only letters, max 20 characters).
 
-10. Enter your **Model Number** (use only letters, max 20 characters).
+10. Enter your **preferred Serial Number** (max length = TARGET SN LENGTH, default: 13).
 
-11. Enter your **preferred Serial Number** (max length = TARGET SN LENGTH, default: 13).
+11. Go back to the **"Main Page"**.
 
-12. Go back to the **"Main Page"**.
+12. Click **"Start"**.
 
-13. Click **"Start"**.  
-    ![Step 13](Files/SSD-Spoofing/M.2%20SSD%20Files/Images/image_5.png)
+13. When the first port turns **green**, the process was successful.
+    ![Step 14](Files\SSD-Spoofing\M.2-SSD-Files\Images\image_5.png)
 
-14. When the first port turns **green**, the process was successful.
+14. Unplug the **USB adapter**.
 
-15. Unplug the **USB adapter**.
+15. Shutdown your **MAIN PC**.
 
-16. Shutdown your **MAIN PC**.
+16. Unplug your **PC completely**.
 
-17. Unplug your **PC completely**.
+17. Install the **M.2 SSD** back into the **M.2 slot** of your PC.
 
-18. Install the **M.2 SSD** back into the **M.2 slot** of your PC.
+18. Start your **PC**.
 
-19. Start your **PC**.
+19. Open [HWIDChecker.exe](HWIDChecker.exe).
 
-20. Open **Hwinfo**.
-
-21. You should now see your updated **Model Name, Firmware Version, and Serial Number**.
+20. You should now see your updated **Model Name, Firmware Version, and Serial Number**.
 
 ---
