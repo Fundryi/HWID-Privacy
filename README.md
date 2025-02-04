@@ -31,15 +31,15 @@
 
 #### NVMe SSDs (M.2)
 
-- **Controller**: Maxio MAP1202 (allows direct serial/model editing).
-- **Steps**:
-  1. Use **MXMPTool_MAP1202** with an M.2-to-USB adapter.
-  2. Enter realistic serial, firmware, and model names.
+- **Controller**: Maxio MAP1202 NEEDED
+- **How-To**:
+  - [M.2 SSD Spoofing](/Files/SSD-Spoofing/SSD-Spoofing.md/#M.2-SSD-SPOOFING)
 
 #### SATA SSDs (2.5")
 
-- **Option**: YANSEN SSDs with custom flashing software (LINK HERE).
-- **Adapter**: A SATA-to-USB with **JMicron JMS578** is recommended for flashing.
+- **Controller**: YANSEN SSD NEEDED
+- **How-To**:
+  - [NORMAL 2.5' SSD Spoofing](/Files/SSD-Spoofing/SSD-Spoofing.md/#NORMAL-2.5'-SSD-SPOOFING)
 
 > Modifying these drives can void warranties.  
 > Software/Bios-based RAID0 is generally virtual and unsafe for HWID evasion.
