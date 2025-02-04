@@ -3,8 +3,8 @@
 
 # Index
 
-- [M.2 SSD Spoofing](#M.2-SSD-SPOOFING)
-- [NORMAL 2.5' SSD Spoofing](#NORMAL-2.5'-SSD-SPOOFING)
+- [M.2 SSD Spoofing](#m2-ssd-spoofing)
+- [NORMAL 2.5' SSD Spoofing](#normal-25-ssd-spoofing)
 
 ---
 
