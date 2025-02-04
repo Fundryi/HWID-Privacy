@@ -1,4 +1,4 @@
-# Comprehensive Hardware Identification (HWID) Evasion Guide
+# Hardware Identification (HWID) Privacy Guide
 
 ---
 
