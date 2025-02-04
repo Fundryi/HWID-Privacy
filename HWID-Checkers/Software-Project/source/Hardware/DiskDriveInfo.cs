@@ -23,9 +23,9 @@ public class DiskDriveInfo : IHardwareInfo
         using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_DiskDrive");
         foreach (ManagementObject disk in searcher.Get())
         {
-            var deviceId = disk["DeviceID"].ToString();
-            var model = disk["Model"].ToString().Trim();
-            var serial = disk["SerialNumber"].ToString().Trim();
+            var deviceId = disk["DeviceID"]?.ToString() ?? "Unknown Device";
+            var model = disk["Model"]?.ToString()?.Trim() ?? "Unknown Model";
+            var serial = disk["SerialNumber"]?.ToString()?.Trim() ?? "Unknown Serial";
 
             // Find associated logical drive
             var logicalDrive = logicalDrives.FirstOrDefault(d => d.PhysicalDrive == deviceId);
@@ -55,7 +55,7 @@ public class DiskDriveInfo : IHardwareInfo
 
         foreach (ManagementObject disk in logicalDiskSearcher.Get())
         {
-            var driveLetter = disk["DeviceID"].ToString();
+            var driveLetter = disk["DeviceID"]?.ToString() ?? "Unknown";
             var volumeSerial = disk["VolumeSerialNumber"]?.ToString() ?? "";
 
             // Use DiskDriveToDiskPartition and LogicalDiskToPartition to find physical drive
@@ -69,7 +69,8 @@ public class DiskDriveInfo : IHardwareInfo
 
                 foreach (var drive in physicalDriveSearcher.Get())
                 {
-                    result.Add((drive["DeviceID"].ToString(), driveLetter, volumeSerial));
+                    var physicalDeviceId = drive["DeviceID"]?.ToString() ?? "Unknown";
+                    result.Add((physicalDeviceId, driveLetter, volumeSerial));
                 }
             }
         }
