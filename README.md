@@ -63,7 +63,8 @@
   - [Realtek NIC MAC Spoofing Guide](Files/MAC-Spoofing/MAC-Spoofing.md#realtek-nics)
   - Note: Certain models might not support flashing or may revert.
 - **USB-Based**: Use adapters with **AX88179** chips (steer clear of uncertain “A/B” revisions).
-  - **Spoof Utility**: [ASIXFlash](https://github.com/jglim/ASIXFlash).
+  - **Spoof Utility**: [ASIXFlash Repository](https://github.com/jglim/ASIXFlash).
+    - Backup if original repository went down: [ASIXFlash-master.zip](/Files/MAC-Spoofing/USB%20AX88179%20Files/ASIXFlash-master.zip).
 - **Purchasable HWID Spoofers**: Some handle NIC spoofing, but certain NICs resist it, and they can produce questionable serial data in other areas.
 - **Recommended USB NIC**: [Taobao Link via Sugargoo](https://www.sugargoo.com/#/home/productDetail?productLink=https%253A%252F%252Fitem.taobao.com%252Fitem.htm%253Fid%253D745242613972)
 - **Best Practice**: Keep the first 6 digits (vendor ID), change only the last 6.
@@ -155,13 +156,8 @@
 - This guide evolves as new findings emerge.
 
 ### Credit
+
 meow
-
-
-
-
-
-
 
 ⠀⠀⠀⠀⠀⠀⣀⣀⣤⣤⣴⣦⣦⣀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 ⠀⠀⠀⣠⣾⡿⠛⠛⡉⣉⣉⡀⠀⢤⡉⢳⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
