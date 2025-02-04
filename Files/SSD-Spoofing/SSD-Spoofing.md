@@ -104,9 +104,9 @@ Follow these steps carefully to spoof your M.2 SSD.
 5. Set your preferred information as follows:
 
    - **Firmware Version**: Use only numbers (FW Version).
-   - **Model Name**: Use only letters, max 20 characters (Model).
+   - **Model Name**: Use only letters and numbers, max 20 characters.
    - **Serial Number**: Maximum length is **TARGET SN LENGTH** (default: 13).
-   - **WWN**: Not needed.
+   - **WWN**: Not needed, but you can edit.
 
 6. Click **"Save"**.
 
@@ -116,16 +116,18 @@ Follow these steps carefully to spoof your M.2 SSD.
 8. When the program shows **PASS** in the top right corner, everything succeeded.  
    ![Step 10](./Normal-2.5-SSD-Files/Images/image_5.png)
 
-9. Unplug the **USB adapter**.
+9. You should now see your updated **Model Name, Firmware Version, and Serial Number**.
 
-10. Shut down your **MAIN PC**.
+10. **Unplug the USB adapter** from the PC.
 
-11. Unplug your **PC completely**.
+11. **Shutdown** your **MAIN PC**.
 
-12. Install the **SSD** back into the **SSD slot** of your PC.
+12. **Unplug** your **MAIN PC** **completely** (remove the power cable).
 
-13. Start your **PC**.
+13. **Reinstall** the **NORMAL SSD** back into your **MAIN PC**.
 
-14. Open **Hwinfo**.
+14. **Power on** your **MAIN PC**.
 
-15. You should now see your updated **Model Name, Firmware Version, and Serial Number**.
+15. **Open** [HWIDChecker.exe](/HWIDChecker.exe).
+
+16. **Verify** that your **Model Name**, **Firmware Version**, and **Serial Number** have been updated.
