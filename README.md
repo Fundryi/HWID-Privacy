@@ -84,7 +84,6 @@
 
 - **Null Serials**:
   - Corsair/GEIL modules default to `00000000`.
-- **Check Tools**: [**HWID CHECKER**](https://github.com/Fundryi/HWID-Privacy/edit/main/README.md#hwid-checker-references)
 
 ---
 
@@ -116,18 +115,18 @@
 - **Process**:
   - Change the router’s MAC and hostname.
   - Change the MAC of the port you’re using on the router.
-    - (This is different from the router’s main MAC!)
+    - (_This is different from the router’s main MAC!_)
   - Plug only your gaming PC into the router’s LAN port.
   - Connect the router’s WAN port to your home router.
     - Avoid connecting other devices, so the ARP table shows only your gaming PC.
     - And don’t worry about those ARP addresses; these are normal and not unique. They’re created by Windows:
-      - 192.168.8.255 ff-ff-ff-ff-ff-ff static
-      - 224.0.0.22 01-00-5e-00-00-16 static
-      - 224.0.0.236 01-00-5e-00-00-ec static
-      - 224.0.0.251 01-00-5e-00-00-fb static
-      - 224.0.0.252 01-00-5e-00-00-fc static
-      - 239.255.255.250 01-00-5e-7f-ff-fa static
-      - 255.255.255.255 ff-ff-ff-ff-ff-ff static
+      - `224.0.0.22 01-00-5e-00-00-16 static`
+      - `224.0.0.236 01-00-5e-00-00-ec static`
+      - `224.0.0.251 01-00-5e-00-00-fb static`
+      - `224.0.0.252 01-00-5e-00-00-fc static`
+      - `192.168.8.255 ff-ff-ff-ff-ff-ff static`
+      - `239.255.255.250 01-00-5e-7f-ff-fa static`
+      - `255.255.255.255 ff-ff-ff-ff-ff-ff static`
 
 ---
 
@@ -145,8 +144,8 @@
 
 ## HWID Checker References
 
-- **Windows 10**: [HWID Checker Script](https://gist.github.com/Fundryi/2aaebe81aba039756e807cadfe953f91)
-- **Windows 11**: [HWID Checker Script](https://gist.github.com/Fundryi/a269ace22cea6d990be8219cbaccda9f)
+- **Windows 10**: [HWID Checker Script](/HWID-Checkers/Bats/HWID%20CHECK%20W10.bat)
+- **Windows 11**: [HWID Checker Script](/HWID-Checkers/Bats/HWID%20CHECK%20W11.bat)
 
 ---
 
