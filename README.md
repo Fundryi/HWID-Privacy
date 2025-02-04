@@ -1,5 +1,7 @@
 # Hardware Identification (HWID) Privacy Guide
 
+---
+
 ## Table of Contents
 
 1. [Hardware Categories & Evasion Strategies](#hardware-categories--evasion-strategies)
@@ -169,6 +171,8 @@
 
 - Additional NIC spoofer models may be listed in the future.
 - This guide evolves as new findings emerge.
+
+---
 
 ### Credit
 
