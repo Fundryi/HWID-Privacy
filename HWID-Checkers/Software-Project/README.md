@@ -1,5 +1,7 @@
 # HWID Checker Project
 
+> This whole project is 99.99% written by AI.
+
 ## Table of Contents
 
 - [Building](#building-the-project)
