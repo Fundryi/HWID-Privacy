@@ -17,18 +17,19 @@
 
 - Compatible SSD(needs a `Maxio MAP1202 Controller`):
   - ✅ **Tested SSD:**
-    - **fanxiang M.2 SSD 2TB PCIe 3.0 S500**
-      - [Manufacturer Link](https://www.fanxiangssd.com/products/internal-solid-state-drive-fanxiang-s500-nvme-ssd-pcle?variant=45220228399421)
+    - [Priventive 512GB](https://priventive.de/products/priventive-m2-nvme-512-gb)
+    - [Priventive 1TB](https://priventive.de/products/kopie-von-priventive-m-2-nvme-2280-m-key-1-tb-nulled-serials-no-hwid)
+    - [Priventive 2TB](https://priventive.de/products/priventive-m-2-nvme-2280-m-key-2-tb-nulled-serials-no-hwid)
+      - **X% COUPON** for priventive.de `CODE`
+        - This coupon is not an affiliat coupon, you get the max out of it.
   - ❓ **Other SSDs (not personally tested):**
-    - [Amazon SSD Link](https://www.hagglezon.com/en/s/https%3A%2F%2Fwww.amazon.de%2Fdp%2FB0BCQS37R7%3Fpsc%3D1)
-    - [Fanxiang SSD 1](https://www.fanxiangssd.com/products/internal-solid-state-drive-fanxiang-s500-nvme-ssd-pcle?variant=45220228399421)
-    - [Fanxiang SSD 2](https://www.fanxiangssd.com/products/internal-solid-state-drive-fanxiang-s500-nvme-ssd-pcle?variant=45220228399421)
-  - [List Of SSD's](https://ssd-tester.de/top_ssd.php)
-    - CTRL + F + `MAP1202` then choose.
+    - [Manufacturer Link](https://www.fanxiangssd.com/products/internal-solid-state-drive-fanxiang-s500-nvme-ssd-pcle?variant=45220228399421)
+    - [List Of SSD's](https://ssd-tester.de/top_ssd.php)
+      - CTRL + F + `MAP1202` then choose.
 - Required:
 
   - **[M2_SERIAL_CHANGE_TOOL.zip](./M.2-SSD-Files/M2_SERIAL_CHANGE_TOOL.zip)**
-
+  - **[USB-to-M.2 Adapter](https://priventive.de/products/m2-usb-adapter)**
     - <details>
        <summary>A USB-to-M.2 Adapter(Exapnd me to see picture)</summary>
       Try to look for a "JMicron JMS583" chipset.
@@ -36,6 +37,7 @@
       ![Step 1](./M.2-SSD-Files/Images/image_0.png)
 
        </details>
+
 
 - Optional:
   - **[HWIDChecker.exe](/HWIDChecker.exe)**
@@ -99,12 +101,15 @@ Follow these steps carefully to spoof your M.2 SSD.
 
 ## **Prerequisites**
 
-- Compatible SSD(needs to be `YANSEN Manufactured SSD`):
+- Compatible SSD(Manufacture `YANSEN`):
   - ✅ **Tested SSD:**
+    - **Priventive SSD**
+      - [Priventive 1TB](https://priventive.de/products/priventive-1-tb-nulled-serials-no-hwid-changeable-serials)
+      - [Priventive 2TB](https://priventive.de/products/priventive-2-tb-nulled-serials-no-hwid-changeable-serials)
+      - [Priventive 4TB](https://priventive.de/products/priventive-4-tb-nulled-serials-no-hwid)
+  - ❓ **Other SSDs:**
     - **KingSpec SSD**
       - [Amazon SSD Link](https://www.hagglezon.com/en/s/https%3A%2F%2Fwww.amazon.de%2F-%2Fen%2FKingSpec-Internal-Compatible-Desktop-Laptop%2Fdp%2FB0B2K3ZCHH%3Fth%3D1)
-  - ❓ **Other SSDs (not personally tested):**
-    - Just make sure "YANSEN" is the manufacture and give it a try.
 - Required:
   - **[SSD_SERIAL_CHANGE_TOOL.zip](./Normal-2.5-SSD-Files/SSD_SERIAL_CHANGE_TOOL.zip)**
   - **A SATA-to-USB with ASMT 2115 Chipset**
