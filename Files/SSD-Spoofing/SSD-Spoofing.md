@@ -20,7 +20,7 @@
     - [Priventive 512GB](https://priventive.de/products/priventive-m2-nvme-512-gb)
     - [Priventive 1TB](https://priventive.de/products/kopie-von-priventive-m-2-nvme-2280-m-key-1-tb-nulled-serials-no-hwid)
     - [Priventive 2TB](https://priventive.de/products/priventive-m-2-nvme-2280-m-key-2-tb-nulled-serials-no-hwid)
-      - **X% COUPON** for priventive.de `CODE`
+      - **10% COUPON** for priventive.de `HWIDZERO`
         - This coupon is not an affiliat coupon, you get the max out of it.
   - ❓ **Other SSDs (not personally tested):**
     - [Manufacturer Link](https://www.fanxiangssd.com/products/internal-solid-state-drive-fanxiang-s500-nvme-ssd-pcle?variant=45220228399421)
@@ -107,6 +107,7 @@ Follow these steps carefully to spoof your M.2 SSD.
       - [Priventive 1TB](https://priventive.de/products/priventive-1-tb-nulled-serials-no-hwid-changeable-serials)
       - [Priventive 2TB](https://priventive.de/products/priventive-2-tb-nulled-serials-no-hwid-changeable-serials)
       - [Priventive 4TB](https://priventive.de/products/priventive-4-tb-nulled-serials-no-hwid)
+      - **10% COUPON** for priventive.de `HWIDZERO`
   - ❓ **Other SSDs:**
     - **KingSpec SSD**
       - [Amazon SSD Link](https://www.hagglezon.com/en/s/https%3A%2F%2Fwww.amazon.de%2F-%2Fen%2FKingSpec-Internal-Compatible-Desktop-Laptop%2Fdp%2FB0B2K3ZCHH%3Fth%3D1)

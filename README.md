@@ -179,7 +179,7 @@
 > Credits are a weird thing, not everything can be traced, a lot of work/info went into this guide from many many diffrent places and people.
 > I will only note the people that I KNOW helped or are resonpsible for these sections in the first place.
 
-- Storage guide/info: [ASDF/Priventive.de](https://priventive.de/)
+- Storage guide/info: [Priventive.de](https://priventive.de/)
 - Network guide/info: `fA`, and "`the collective hive mind of the internet`"
 - EDID guide/info: `fA`
 - The broad base guide/structure was written by "`IthaLove`", [Old Guide Link](https://docs.google.com/document/u/0/d/e/2PACX-1vSjtQF1bSUxN57NXsYKS7haiPvYD68UXg77qinZ4ctcwx7073p9Jbp4W55LdP7vMgmjhZ12DsNHYwft/pub?pli=1)
