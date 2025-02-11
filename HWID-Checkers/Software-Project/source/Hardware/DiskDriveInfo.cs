@@ -29,36 +29,35 @@ public class DiskDriveInfo : IHardwareInfo
     {
         if (!disks.Any()) return "No disk drives detected.";
 
-        // Calculate column widths based on content
-        var deviceIdWidth = Math.Max(10, disks.Max(d => d.DeviceId.Length));
-        var driveLetterWidth = Math.Max(6, disks.Max(d => d.DriveLetter.Length));
-        var volumeSerialWidth = Math.Max(12, disks.Max(d => d.VolumeSerial.Length));
-        var serialWidth = Math.Max(12, disks.Max(d => d.SerialNumber.Length));
-        var modelWidth = Math.Max(20, disks.Max(d => d.Model.Length));
-        var firmwareWidth = Math.Max(9, disks.Max(d => d.FirmwareVersion.Length));
-
         var sb = new StringBuilder();
 
-        // Add headers
-        sb.AppendLine();
-        sb.AppendFormat($"{{0,-{deviceIdWidth}}} {{1,-{driveLetterWidth}}} {{2,-{volumeSerialWidth}}} {{3,-{serialWidth}}} {{4,-{modelWidth}}} {{5,-{firmwareWidth}}}",
-            "Device ID", "Drive", "Volume-SN", "Serial", "Model", "Firmware");
-        sb.AppendLine();
-
+        sb.AppendLine("Device ID");
         // Add separator line
-        sb.AppendLine(new string('-', deviceIdWidth + driveLetterWidth + volumeSerialWidth + serialWidth + modelWidth + firmwareWidth + 5));
+        sb.AppendLine(new string('-', 50));
 
         // Add data rows
-        foreach (var disk in disks)
+        for (int i = 0; i < disks.Count; i++)
         {
-            sb.AppendFormat($"{{0,-{deviceIdWidth}}} {{1,-{driveLetterWidth}}} {{2,-{volumeSerialWidth}}} {{3,-{serialWidth}}} {{4,-{modelWidth}}} {{5,-{firmwareWidth}}}",
-                disk.DeviceId,
-                disk.DriveLetter,
-                disk.VolumeSerial,
-                disk.SerialNumber,
-                disk.Model,
-                disk.FirmwareVersion);
-            sb.AppendLine();
+            var disk = disks[i];
+            
+            // Device ID line
+            var deviceId = disk.DeviceId.Replace(@"\\.\", "");
+            sb.AppendLine($"└── {deviceId}");
+            
+            // Drive and nested Volume-SN info with proper indentation
+            sb.AppendLine($"    ├── Drive: {disk.DriveLetter}");
+            sb.AppendLine($"    │   └── Volume-SN: {disk.VolumeSerial}");
+            
+            // Model, Serial, and Firmware info
+            sb.AppendLine($"    ├── Model: {disk.Model}");
+            sb.AppendLine($"    ├── Serial: {disk.SerialNumber}");
+            sb.AppendLine($"    └── Firmware: {disk.FirmwareVersion}");
+            
+            // Add separator between drives, but not after the last one
+            if (i < disks.Count - 1)
+            {
+                sb.AppendLine(new string('-', 50));
+            }
         }
 
         return sb.ToString();
