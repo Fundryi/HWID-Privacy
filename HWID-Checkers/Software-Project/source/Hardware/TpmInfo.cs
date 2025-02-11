@@ -30,12 +30,27 @@ public class TpmInfo : IHardwareInfo
             string tpmOutput = tpmProcess.StandardOutput.ReadToEnd();
             tpmProcess.WaitForExit();
 
-            if (string.IsNullOrWhiteSpace(tpmOutput) || !tpmOutput.Contains("TpmPresent") || 
+            // If TPM is not present at all, return TPM OFF
+            if (string.IsNullOrWhiteSpace(tpmOutput) || !tpmOutput.Contains("TpmPresent") ||
                 (tpmOutput.Contains("TpmPresent") && !tpmOutput.Contains("True")))
             {
                 sb.AppendLine("TPM OFF");
                 return sb.ToString();
             }
+
+            // Always show TPM state first (enabled or disabled) before showing details
+            var tpmLines = tpmOutput.Split('\n');
+            bool isEnabled = false;
+            foreach (var line in tpmLines)
+            {
+                if (line.Contains("TpmEnabled") && line.Contains("True"))
+                {
+                    isEnabled = true;
+                    break;
+                }
+            }
+            
+            sb.AppendLine(isEnabled ? "TPM: ENABLED" : "TPM: DISABLED");
 
             // Get detailed TPM information
             var process = new Process
