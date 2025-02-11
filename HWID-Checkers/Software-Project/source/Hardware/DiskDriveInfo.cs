@@ -22,6 +22,8 @@ public class DiskDriveInfo : IHardwareInfo
         public string VolumeSerial { get; set; } = "";
         public string Model { get; set; } = "";
         public string SerialNumber { get; set; } = "";
+        public string FirmwareVersion { get; set; } = "";
+        public string WWN { get; set; } = "";
     }
 
     private string FormatAsTable(List<DiskInfo> disks)
@@ -32,29 +34,33 @@ public class DiskDriveInfo : IHardwareInfo
         var deviceIdWidth = Math.Max(10, disks.Max(d => d.DeviceId.Length));
         var driveLetterWidth = Math.Max(6, disks.Max(d => d.DriveLetter.Length));
         var volumeSerialWidth = Math.Max(12, disks.Max(d => d.VolumeSerial.Length));
-        var modelWidth = Math.Max(20, disks.Max(d => d.Model.Length));
         var serialWidth = Math.Max(12, disks.Max(d => d.SerialNumber.Length));
+        var modelWidth = Math.Max(20, disks.Max(d => d.Model.Length));
+        var firmwareWidth = Math.Max(9, disks.Max(d => d.FirmwareVersion.Length));
+        var wwnWidth = Math.Max(5, disks.Max(d => d.WWN.Length));
 
         var sb = new StringBuilder();
 
         // Add headers
         sb.AppendLine();
-        sb.AppendFormat($"{{0,-{deviceIdWidth}}} {{1,-{driveLetterWidth}}} {{2,-{volumeSerialWidth}}} {{3,-{modelWidth}}} {{4,-{serialWidth}}}",
-            "Device ID", "Drive", "Volume-SN", "Model", "Serial");
+        sb.AppendFormat($"{{0,-{deviceIdWidth}}} {{1,-{driveLetterWidth}}} {{2,-{volumeSerialWidth}}} {{3,-{serialWidth}}} {{4,-{modelWidth}}} {{5,-{firmwareWidth}}} {{6,-{wwnWidth}}}",
+            "Device ID", "Drive", "Volume-SN", "Serial", "Model", "Firmware", "WWN");
         sb.AppendLine();
 
         // Add separator line
-        sb.AppendLine(new string('-', deviceIdWidth + driveLetterWidth + volumeSerialWidth + modelWidth + serialWidth + 4));
+        sb.AppendLine(new string('-', deviceIdWidth + driveLetterWidth + volumeSerialWidth + serialWidth + modelWidth + firmwareWidth + wwnWidth + 6));
 
         // Add data rows
         foreach (var disk in disks)
         {
-            sb.AppendFormat($"{{0,-{deviceIdWidth}}} {{1,-{driveLetterWidth}}} {{2,-{volumeSerialWidth}}} {{3,-{modelWidth}}} {{4,-{serialWidth}}}",
+            sb.AppendFormat($"{{0,-{deviceIdWidth}}} {{1,-{driveLetterWidth}}} {{2,-{volumeSerialWidth}}} {{3,-{serialWidth}}} {{4,-{modelWidth}}} {{5,-{firmwareWidth}}} {{6,-{wwnWidth}}}",
                 disk.DeviceId,
                 disk.DriveLetter,
                 disk.VolumeSerial,
+                disk.SerialNumber,
                 disk.Model,
-                disk.SerialNumber);
+                disk.FirmwareVersion,
+                disk.WWN);
             sb.AppendLine();
         }
 
@@ -72,6 +78,30 @@ public class DiskDriveInfo : IHardwareInfo
             var deviceId = disk["DeviceID"]?.ToString() ?? "Unknown Device";
             var model = disk["Model"]?.ToString()?.Trim() ?? "Unknown Model";
             var serial = disk["SerialNumber"]?.ToString()?.Trim() ?? "Unknown Serial";
+            var firmware = disk["FirmwareRevision"]?.ToString()?.Trim() ?? "";
+            
+            // Attempt to get WWN from Storage_Query_WWN property if available
+            var wwn = "";
+            try
+            {
+                var wwnValue = disk["WWN"]?.ToString();
+                if (!string.IsNullOrEmpty(wwnValue))
+                {
+                    // Convert hex string to integer string if it's a valid hex value
+                    if (long.TryParse(wwnValue, System.Globalization.NumberStyles.HexNumber, null, out long wwnInt))
+                    {
+                        wwn = wwnInt.ToString();
+                    }
+                    else
+                    {
+                        wwn = wwnValue;
+                    }
+                }
+            }
+            catch
+            {
+                // If WWN retrieval fails, leave it as empty string
+            }
 
             // Find associated logical drive
             var logicalDrive = logicalDrives.FirstOrDefault(d => d.PhysicalDrive == deviceId);
@@ -82,7 +112,9 @@ public class DiskDriveInfo : IHardwareInfo
                 DriveLetter = logicalDrive != default ? logicalDrive.DriveLetter.TrimEnd(':') : "",
                 VolumeSerial = logicalDrive != default ? logicalDrive.VolumeSerial : "",
                 Model = model,
-                SerialNumber = serial
+                SerialNumber = serial,
+                FirmwareVersion = firmware,
+                WWN = wwn
             });
         }
 
