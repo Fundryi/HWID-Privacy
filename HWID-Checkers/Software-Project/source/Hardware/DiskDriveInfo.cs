@@ -40,7 +40,7 @@ public class DiskDriveInfo : IHardwareInfo
         // Add headers
         sb.AppendLine();
         sb.AppendFormat($"{{0,-{deviceIdWidth}}} {{1,-{driveLetterWidth}}} {{2,-{volumeSerialWidth}}} {{3,-{modelWidth}}} {{4,-{serialWidth}}}",
-            "Device ID", "Drive", "Volume Serial", "Model", "Serial");
+            "Device ID", "Drive", "Volume-SN", "Model", "Serial");
         sb.AppendLine();
 
         // Add separator line

@@ -80,7 +80,8 @@ namespace HWIDChecker.UI.Forms
                 BorderStyle = BorderStyle.None,
                 Margin = new Padding(10),
                 Padding = new Padding(5),
-                HideSelection = false
+                HideSelection = false,
+                Font = new Font("Consolas", 9.75f, FontStyle.Regular)
             };
 
             LoadingLabel = new Label
