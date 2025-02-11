@@ -15,9 +15,55 @@ public class DiskDriveInfo : IHardwareInfo
         _textFormatter = textFormatter;
     }
 
+    private class DiskInfo
+    {
+        public string DeviceId { get; set; } = "";
+        public string DriveLetter { get; set; } = "";
+        public string VolumeSerial { get; set; } = "";
+        public string Model { get; set; } = "";
+        public string SerialNumber { get; set; } = "";
+    }
+
+    private string FormatAsTable(List<DiskInfo> disks)
+    {
+        if (!disks.Any()) return "No disk drives detected.";
+
+        // Calculate column widths based on content
+        var deviceIdWidth = Math.Max(10, disks.Max(d => d.DeviceId.Length));
+        var driveLetterWidth = Math.Max(6, disks.Max(d => d.DriveLetter.Length));
+        var volumeSerialWidth = Math.Max(12, disks.Max(d => d.VolumeSerial.Length));
+        var modelWidth = Math.Max(20, disks.Max(d => d.Model.Length));
+        var serialWidth = Math.Max(12, disks.Max(d => d.SerialNumber.Length));
+
+        var sb = new StringBuilder();
+
+        // Add headers
+        sb.AppendLine();
+        sb.AppendFormat($"{{0,-{deviceIdWidth}}} {{1,-{driveLetterWidth}}} {{2,-{volumeSerialWidth}}} {{3,-{modelWidth}}} {{4,-{serialWidth}}}",
+            "Device ID", "Drive", "Volume Serial", "Model", "Serial");
+        sb.AppendLine();
+
+        // Add separator line
+        sb.AppendLine(new string('-', deviceIdWidth + driveLetterWidth + volumeSerialWidth + modelWidth + serialWidth + 4));
+
+        // Add data rows
+        foreach (var disk in disks)
+        {
+            sb.AppendFormat($"{{0,-{deviceIdWidth}}} {{1,-{driveLetterWidth}}} {{2,-{volumeSerialWidth}}} {{3,-{modelWidth}}} {{4,-{serialWidth}}}",
+                disk.DeviceId,
+                disk.DriveLetter,
+                disk.VolumeSerial,
+                disk.Model,
+                disk.SerialNumber);
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
     public string GetInformation()
     {
-        var sb = new StringBuilder();
+        var disks = new List<DiskInfo>();
         var logicalDrives = GetLogicalDrives();
 
         using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_DiskDrive");
@@ -29,23 +75,18 @@ public class DiskDriveInfo : IHardwareInfo
 
             // Find associated logical drive
             var logicalDrive = logicalDrives.FirstOrDefault(d => d.PhysicalDrive == deviceId);
-            if (logicalDrive != default)
+            
+            disks.Add(new DiskInfo
             {
-                _textFormatter.AppendCombinedInfoLine(sb,
-                    (deviceId, ""),
-                    ($"{logicalDrive.DriveLetter}", logicalDrive.VolumeSerial),
-                    (model, serial));
-            }
-            else
-            {
-                _textFormatter.AppendCombinedInfoLine(sb,
-                    (deviceId, ""),
-                    ("", ""),
-                    (model, serial));
-            }
+                DeviceId = deviceId,
+                DriveLetter = logicalDrive != default ? logicalDrive.DriveLetter.TrimEnd(':') : "",
+                VolumeSerial = logicalDrive != default ? logicalDrive.VolumeSerial : "",
+                Model = model,
+                SerialNumber = serial
+            });
         }
 
-        return sb.ToString();
+        return FormatAsTable(disks);
     }
 
     private List<(string PhysicalDrive, string DriveLetter, string VolumeSerial)> GetLogicalDrives()

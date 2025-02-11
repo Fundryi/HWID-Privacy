@@ -74,7 +74,7 @@ namespace HWIDChecker.UI.Forms
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
                 Dock = DockStyle.Fill,
-                Font = new Font("Cascadia Code", 10),
+                WordWrap = true,
                 BackColor = ThemeColors.TextBoxBackground,
                 ForeColor = ThemeColors.TextBoxText,
                 BorderStyle = BorderStyle.None,
@@ -89,7 +89,6 @@ namespace HWIDChecker.UI.Forms
                 AutoSize = true,
                 ForeColor = ThemeColors.LoadingLabelText,
                 BackColor = ThemeColors.LoadingLabelBackground,
-                Font = new Font("Segoe UI", 10, FontStyle.Regular),
                 Visible = false,
                 Padding = new Padding(5),
                 TextAlign = ContentAlignment.MiddleCenter
