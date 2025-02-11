@@ -18,7 +18,7 @@ public class UsbInfo : IHardwareInfo
     public string GetInformation()
     {
         var sb = new StringBuilder();
-        var devices = new List<(string Name, string Description, string Type, string Serial)>();
+        var devices = new List<(string Name, string Serial)>();
 
         try
         {
@@ -29,13 +29,11 @@ public class UsbInfo : IHardwareInfo
                 if (string.IsNullOrEmpty(pnpDeviceID) || !pnpDeviceID.Contains("\\")) continue;
 
                 string serial = pnpDeviceID.Split('\\').Last();
-                if (serial != "0000000000000000" && !serial.Contains("&") && !serial.Contains(".") && !serial.Contains("{"))
+                if (!serial.Contains("&") && !serial.Contains(".") && !serial.Contains("{"))
                 {
                     string name = device["Name"]?.ToString() ?? "";
-                    string description = device["Description"]?.ToString() ?? "";
-                    string pnpClass = device["PNPClass"]?.ToString() ?? "USB";
 
-                    devices.Add((name, description, pnpClass, serial));
+                    devices.Add((name, serial));
                 }
             }
 
@@ -43,8 +41,6 @@ public class UsbInfo : IHardwareInfo
             var deviceInfos = devices.Select(d => new[]
             {
                 ("Device", d.Name),
-                ("Description", d.Description),
-                ("Type", d.Type),
                 ("Serial", d.Serial)
             }).ToList();
 
