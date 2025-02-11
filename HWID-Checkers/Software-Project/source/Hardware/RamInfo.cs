@@ -23,10 +23,20 @@ public class RamInfo : IHardwareInfo
         foreach (ManagementObject ram in searcher.Get())
         {
             var deviceLocator = ram["DeviceLocator"]?.ToString() ?? "";
+            var manufacturer = ram["Manufacturer"]?.ToString() ?? "";
+            var partNumber = ram["PartNumber"]?.ToString() ?? "";
             var serialNumber = ram["SerialNumber"]?.ToString() ?? "";
+            
+            // Convert capacity from bytes to GB and format with 0 decimal places
+            var capacityBytes = Convert.ToUInt64(ram["Capacity"] ?? 0);
+            var capacityGB = capacityBytes / (1024.0 * 1024.0 * 1024.0);
+            var capacityFormatted = $"{capacityGB:N0} GB";
 
             _textFormatter.AppendCombinedInfoLine(sb,
                 ("DeviceLocator", deviceLocator),
+                ("Manufacturer", manufacturer),
+                ("PartNumber", partNumber),
+                ("Capacity", capacityFormatted),
                 ("SerialNumber", serialNumber));
         }
 
