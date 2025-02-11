@@ -24,8 +24,9 @@ public class MotherboardInfo : IHardwareInfo
         {
             _textFormatter.AppendInfoLine(sb, "Manufacturer", board["Manufacturer"]?.ToString() ?? "");
             _textFormatter.AppendInfoLine(sb, "Product", board["Product"]?.ToString() ?? "");
+            _textFormatter.AppendInfoLine(sb, "Model", board["Model"]?.ToString() ?? "");
+            _textFormatter.AppendInfoLine(sb, "SKU", board["SKU"]?.ToString() ?? "");
             _textFormatter.AppendInfoLine(sb, "SerialNumber", board["SerialNumber"]?.ToString() ?? "");
-            // Version marked as (CAN BE REMOVED) is not included here
         }
 
         return sb.ToString();

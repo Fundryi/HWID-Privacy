@@ -27,6 +27,7 @@ public class BiosInfo : IHardwareInfo
             {
                 info["Manufacturer"] = bios["Manufacturer"]?.ToString() ?? "";
                 info["Version"] = bios["Version"]?.ToString() ?? "";
+                info["SMBIOSBIOSVersion"] = bios["SMBIOSBIOSVersion"]?.ToString() ?? "";
                 info["SerialNumber"] = bios["SerialNumber"]?.ToString() ?? "";
             }
         }
@@ -47,6 +48,7 @@ public class BiosInfo : IHardwareInfo
         _textFormatter.AppendInfoLine(sb, "Manufacturer", info["Manufacturer"]);
         _textFormatter.AppendInfoLine(sb, "Vendor", info["Vendor"]);
         _textFormatter.AppendInfoLine(sb, "Version", info["Version"]);
+        _textFormatter.AppendInfoLine(sb, "SMBIOS Version", info["SMBIOSBIOSVersion"]);
         _textFormatter.AppendInfoLine(sb, "UUID", info["UUID"]);
         _textFormatter.AppendInfoLine(sb, "IdentifyingNumber", info["IdentifyingNumber"]);
         _textFormatter.AppendInfoLine(sb, "SerialNumber", info["SerialNumber"]);

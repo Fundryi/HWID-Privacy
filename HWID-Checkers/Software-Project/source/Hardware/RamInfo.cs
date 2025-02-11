@@ -38,7 +38,6 @@ public class RamInfo : IHardwareInfo
         var sb = new StringBuilder();
 
         // Add headers
-        sb.AppendLine();
         sb.AppendFormat($"{{0,-{deviceLocatorWidth}}} {{1,-{manufacturerWidth}}} {{2,-{partNumberWidth}}} {{3,-{capacityWidth}}} {{4,-{serialNumberWidth}}}",
             "DeviceLocator", "Manufacturer", "PartNumber", "Capacity", "SerialNumber");
         sb.AppendLine();

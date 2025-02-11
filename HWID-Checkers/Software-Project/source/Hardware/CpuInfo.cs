@@ -13,8 +13,8 @@ public class CpuInfo : IHardwareInfo
         using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_Processor");
         foreach (ManagementObject cpu in searcher.Get())
         {
-            sb.AppendLine($"ProcessorId: {cpu["ProcessorId"]}");
             sb.AppendLine($"Name: {cpu["Name"]}");
+            sb.AppendLine($"ProcessorId: {cpu["ProcessorId"]}");
             if (cpu["SerialNumber"] != null)
             {
                 sb.AppendLine($"SerialNumber: {cpu["SerialNumber"]}");

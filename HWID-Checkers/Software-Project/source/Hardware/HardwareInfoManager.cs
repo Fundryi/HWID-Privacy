@@ -23,14 +23,14 @@ namespace HWIDChecker.Hardware
             return new List<IHardwareInfo>
             {
                 new DiskDriveInfo(textFormatter),
-                new CpuInfo(),
-                new SystemInfo(),
                 new MotherboardInfo(textFormatter),
                 new BiosInfo(textFormatter),
-                new RamInfo(textFormatter),
+                new SystemInfo(),
+                new CpuInfo(),
                 new TpmInfo(),
-                new GpuInfo(),
+                new RamInfo(textFormatter),
                 new UsbInfo(textFormatter),
+                new GpuInfo(),
                 new MonitorInfo(textFormatter),
                 new NetworkInfo(textFormatter),
                 new ArpInfo(textFormatter)

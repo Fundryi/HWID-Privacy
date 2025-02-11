@@ -30,9 +30,10 @@ public class TpmInfo : IHardwareInfo
             string tpmOutput = tpmProcess.StandardOutput.ReadToEnd();
             tpmProcess.WaitForExit();
 
-            if (!tpmOutput.Contains("TpmPresent"))
+            if (string.IsNullOrWhiteSpace(tpmOutput) || !tpmOutput.Contains("TpmPresent") || 
+                (tpmOutput.Contains("TpmPresent") && !tpmOutput.Contains("True")))
             {
-                sb.AppendLine("IsPresent: False");
+                sb.AppendLine("TPM OFF");
                 return sb.ToString();
             }
 
@@ -68,15 +69,7 @@ public class TpmInfo : IHardwareInfo
                 var trimmedLine = line.Trim();
                 if (string.IsNullOrWhiteSpace(trimmedLine)) continue;
 
-                if (trimmedLine.StartsWith("IsPresent"))
-                {
-                    var parts = trimmedLine.Split(new[] { ':' }, 2);
-                    if (parts.Length == 2)
-                    {
-                        processedLines["IsPresent"] = parts[1].Trim();
-                    }
-                }
-                else if (trimmedLine.StartsWith("PublicKeyHash"))
+                if (trimmedLine.StartsWith("PublicKeyHash"))
                 {
                     var parts = trimmedLine.Split(new[] { ':' }, 2);
                     if (parts.Length == 2)
@@ -115,8 +108,6 @@ public class TpmInfo : IHardwareInfo
             }
 
             // Output in desired order
-            if (processedLines.ContainsKey("IsPresent"))
-                sb.AppendLine($"IsPresent: {processedLines["IsPresent"]}");
             if (processedLines.ContainsKey("PublicKeyHash"))
                 sb.AppendLine($"PublicKeyHash: {processedLines["PublicKeyHash"]}");
             if (processedLines.ContainsKey("Serial Number"))
@@ -124,26 +115,9 @@ public class TpmInfo : IHardwareInfo
             if (processedLines.ContainsKey("Thumbprint"))
                 sb.AppendLine($"Thumbprint: {processedLines["Thumbprint"]}");
             if (processedLines.ContainsKey("TPMVersion"))
-                sb.AppendLine(processedLines["TPMVersion"]); // TPMVersion already includes the full line with equals signs
+                sb.AppendLine(processedLines["TPMVersion"]); // TPMVersion already includes the full line
             if (processedLines.ContainsKey("Issuer"))
                 sb.AppendLine($"Issuer: {processedLines["Issuer"]}");
-
-            // Remove any extra blank lines and ensure consistent spacing
-            var result = sb.ToString().Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
-            sb.Clear();
-            foreach (var line in result)
-            {
-                // Ensure consistent spacing after colons
-                if (line.Contains(":"))
-                {
-                    var parts = line.Split(new[] { ':' }, 2);
-                    sb.AppendLine($"{parts[0]}: {parts[1].Trim()}");
-                }
-                else
-                {
-                    sb.AppendLine(line);
-                }
-            }
         }
         catch (Exception ex)
         {

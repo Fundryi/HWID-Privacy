@@ -11,15 +11,6 @@ public class SystemInfo : IHardwareInfo
     {
         var sb = new StringBuilder();
 
-        // Get System UUID
-        using (var searcher = new ManagementObjectSearcher("SELECT UUID FROM Win32_ComputerSystemProduct"))
-        {
-            foreach (ManagementObject obj in searcher.Get())
-            {
-                sb.AppendLine($"UUID: {obj["UUID"]}");
-            }
-        }
-
         // Get Windows Product Key
         using (var searcher = new ManagementObjectSearcher("SELECT * FROM SoftwareLicensingService"))
         {
@@ -34,6 +25,15 @@ public class SystemInfo : IHardwareInfo
                 {
                     sb.AppendLine("Activation Status: Not activated or using Volume License");
                 }
+            }
+        }
+
+        // Get System UUID
+        using (var searcher = new ManagementObjectSearcher("SELECT UUID FROM Win32_ComputerSystemProduct"))
+        {
+            foreach (ManagementObject obj in searcher.Get())
+            {
+                sb.AppendLine($"UUID: {obj["UUID"]}");
             }
         }
 
