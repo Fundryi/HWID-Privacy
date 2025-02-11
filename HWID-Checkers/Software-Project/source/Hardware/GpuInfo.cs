@@ -63,14 +63,29 @@ public class GpuInfo : IHardwareInfo
 
         // Fallback to WMI
         using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_VideoController");
-        foreach (ManagementObject gpu in searcher.Get())
+        var gpus = searcher.Get().Cast<ManagementObject>().ToList();
+
+        if (!gpus.Any())
         {
-            var name = gpu["Name"]?.ToString() ?? "Unknown";
-            var pnpId = gpu["PNPDeviceID"]?.ToString() ?? "Unknown";
-            sb.AppendLine($"└── {name}");
-            sb.AppendLine($"    └── {pnpId}");
+            return "No GPU detected.";
         }
 
-        return sb.ToString();
+        for (int i = 0; i < gpus.Count; i++)
+        {
+            var gpu = gpus[i];
+            var name = gpu["Name"]?.ToString() ?? "Unknown";
+            
+            sb.AppendLine($"GPU {i}");
+            sb.AppendLine($"└── {name}");
+            sb.AppendLine($"    └── {gpu["PNPDeviceID"]?.ToString() ?? "Unknown"}");
+
+            // Add a line break between GPUs except for the last one
+            if (i < gpus.Count - 1)
+            {
+                sb.AppendLine();
+            }
+        }
+
+        return sb.ToString().TrimEnd();
     }
 }
