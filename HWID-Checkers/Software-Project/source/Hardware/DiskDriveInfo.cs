@@ -23,7 +23,6 @@ public class DiskDriveInfo : IHardwareInfo
         public string Model { get; set; } = "";
         public string SerialNumber { get; set; } = "";
         public string FirmwareVersion { get; set; } = "";
-        public string WWN { get; set; } = "";
     }
 
     private string FormatAsTable(List<DiskInfo> disks)
@@ -37,30 +36,28 @@ public class DiskDriveInfo : IHardwareInfo
         var serialWidth = Math.Max(12, disks.Max(d => d.SerialNumber.Length));
         var modelWidth = Math.Max(20, disks.Max(d => d.Model.Length));
         var firmwareWidth = Math.Max(9, disks.Max(d => d.FirmwareVersion.Length));
-        var wwnWidth = Math.Max(5, disks.Max(d => d.WWN.Length));
 
         var sb = new StringBuilder();
 
         // Add headers
         sb.AppendLine();
-        sb.AppendFormat($"{{0,-{deviceIdWidth}}} {{1,-{driveLetterWidth}}} {{2,-{volumeSerialWidth}}} {{3,-{serialWidth}}} {{4,-{modelWidth}}} {{5,-{firmwareWidth}}} {{6,-{wwnWidth}}}",
-            "Device ID", "Drive", "Volume-SN", "Serial", "Model", "Firmware", "WWN");
+        sb.AppendFormat($"{{0,-{deviceIdWidth}}} {{1,-{driveLetterWidth}}} {{2,-{volumeSerialWidth}}} {{3,-{serialWidth}}} {{4,-{modelWidth}}} {{5,-{firmwareWidth}}}",
+            "Device ID", "Drive", "Volume-SN", "Serial", "Model", "Firmware");
         sb.AppendLine();
 
         // Add separator line
-        sb.AppendLine(new string('-', deviceIdWidth + driveLetterWidth + volumeSerialWidth + serialWidth + modelWidth + firmwareWidth + wwnWidth + 6));
+        sb.AppendLine(new string('-', deviceIdWidth + driveLetterWidth + volumeSerialWidth + serialWidth + modelWidth + firmwareWidth + 5));
 
         // Add data rows
         foreach (var disk in disks)
         {
-            sb.AppendFormat($"{{0,-{deviceIdWidth}}} {{1,-{driveLetterWidth}}} {{2,-{volumeSerialWidth}}} {{3,-{serialWidth}}} {{4,-{modelWidth}}} {{5,-{firmwareWidth}}} {{6,-{wwnWidth}}}",
+            sb.AppendFormat($"{{0,-{deviceIdWidth}}} {{1,-{driveLetterWidth}}} {{2,-{volumeSerialWidth}}} {{3,-{serialWidth}}} {{4,-{modelWidth}}} {{5,-{firmwareWidth}}}",
                 disk.DeviceId,
                 disk.DriveLetter,
                 disk.VolumeSerial,
                 disk.SerialNumber,
                 disk.Model,
-                disk.FirmwareVersion,
-                disk.WWN);
+                disk.FirmwareVersion);
             sb.AppendLine();
         }
 
@@ -79,29 +76,6 @@ public class DiskDriveInfo : IHardwareInfo
             var model = disk["Model"]?.ToString()?.Trim() ?? "Unknown Model";
             var serial = disk["SerialNumber"]?.ToString()?.Trim() ?? "Unknown Serial";
             var firmware = disk["FirmwareRevision"]?.ToString()?.Trim() ?? "";
-            
-            // Attempt to get WWN from Storage_Query_WWN property if available
-            var wwn = "";
-            try
-            {
-                var wwnValue = disk["WWN"]?.ToString();
-                if (!string.IsNullOrEmpty(wwnValue))
-                {
-                    // Convert hex string to integer string if it's a valid hex value
-                    if (long.TryParse(wwnValue, System.Globalization.NumberStyles.HexNumber, null, out long wwnInt))
-                    {
-                        wwn = wwnInt.ToString();
-                    }
-                    else
-                    {
-                        wwn = wwnValue;
-                    }
-                }
-            }
-            catch
-            {
-                // If WWN retrieval fails, leave it as empty string
-            }
 
             // Find associated logical drive
             var logicalDrive = logicalDrives.FirstOrDefault(d => d.PhysicalDrive == deviceId);
@@ -113,8 +87,7 @@ public class DiskDriveInfo : IHardwareInfo
                 VolumeSerial = logicalDrive != default ? logicalDrive.VolumeSerial : "",
                 Model = model,
                 SerialNumber = serial,
-                FirmwareVersion = firmware,
-                WWN = wwn
+                FirmwareVersion = firmware
             });
         }
 
