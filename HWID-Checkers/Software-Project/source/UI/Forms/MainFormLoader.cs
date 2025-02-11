@@ -65,6 +65,7 @@ namespace HWIDChecker.UI.Forms
         {
             layout.RefreshButton.Enabled = !isLoading;
             layout.ExportButton.Enabled = !isLoading;
+            layout.CompareButton.Enabled = !isLoading;
             layout.LoadingLabel.Visible = isLoading;
 
             if (isLoading)

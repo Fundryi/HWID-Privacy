@@ -110,7 +110,6 @@ public class NetworkInfo : IHardwareInfo
             // Add separator if not the last adapter
             if (i < realAdapters.Count - 1)
             {
-                sb.AppendLine();
                 _textFormatter.AppendItemSeparator(sb);
             }
         }
