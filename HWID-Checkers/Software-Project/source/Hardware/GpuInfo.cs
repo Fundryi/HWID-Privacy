@@ -33,7 +33,29 @@ public class GpuInfo : IHardwareInfo
 
             if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output))
             {
-                sb.Append(output.TrimEnd());
+                string[] lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                foreach (string line in lines)
+                {
+                    if (line.StartsWith("GPU "))
+                    {
+                        // Extract GPU index
+                        var parts = line.Split(':')[0].Trim();
+                        sb.AppendLine(parts);
+
+                        // Extract GPU name and UUID
+                        var info = line.Split(':', 2)[1].Trim();
+                        var gpuParts = info.Split("(UUID", 2);
+                        
+                        // Add GPU name
+                        sb.AppendLine($"└── {gpuParts[0].Trim()}");
+                        
+                        // Add UUID if present
+                        if (gpuParts.Length > 1)
+                        {
+                            sb.AppendLine($"    └── UUID{gpuParts[1].TrimEnd(')')}");
+                        }
+                    }
+                }
                 return sb.ToString().TrimEnd();
             }
         }
@@ -43,8 +65,10 @@ public class GpuInfo : IHardwareInfo
         using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_VideoController");
         foreach (ManagementObject gpu in searcher.Get())
         {
-            sb.AppendLine($"Name: {gpu["Name"]}");
-            sb.AppendLine($"PNPDeviceID: {gpu["PNPDeviceID"]}");
+            var name = gpu["Name"]?.ToString() ?? "Unknown";
+            var pnpId = gpu["PNPDeviceID"]?.ToString() ?? "Unknown";
+            sb.AppendLine($"└── {name}");
+            sb.AppendLine($"    └── {pnpId}");
         }
 
         return sb.ToString();
