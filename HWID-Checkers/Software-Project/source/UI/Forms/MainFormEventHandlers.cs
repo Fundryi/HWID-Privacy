@@ -14,7 +14,6 @@ namespace HWIDChecker.UI.Forms
         private readonly MainFormLayout layout;
         private readonly FileExportService fileExportService;
         private readonly HardwareInfoManager hardwareInfoManager;
-
         public MainFormEventHandlers(MainForm mainForm, MainFormLayout layout, FileExportService fileExportService, HardwareInfoManager hardwareInfoManager)
         {
             this.mainForm = mainForm;
@@ -27,6 +26,7 @@ namespace HWIDChecker.UI.Forms
         {
             layout.RefreshButton.Click += async (s, e) => await loadHardwareInfo();
             layout.ExportButton.Click += ExportButton_Click;
+            layout.CleanButton.Click += CleanButton_Click;
             layout.CompareButton.Click += CompareButton_Click;
         }
 
@@ -104,6 +104,19 @@ namespace HWIDChecker.UI.Forms
                 MessageBox.Show($"Error exporting file: {ex.Message}",
                     "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void CleanButton_Click(object sender, EventArgs e)
+        {
+            var cleanForm = new CleanDevicesForm();
+            cleanForm.ShowDialog(mainForm);
+        }
+
+        private bool IsAdministrator()
+        {
+            var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            var principal = new System.Security.Principal.WindowsPrincipal(identity);
+            return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
         }
     }
 }
