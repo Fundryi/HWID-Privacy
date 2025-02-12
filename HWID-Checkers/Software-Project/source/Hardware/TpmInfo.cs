@@ -92,10 +92,6 @@ public class TpmInfo : IHardwareInfo
                         processedLines["PublicKeyHash"] = parts[1].Trim();
                     }
                 }
-                else if (trimmedLine.StartsWith("TPMVersion"))
-                {
-                    processedLines["TPMVersion"] = trimmedLine;
-                }
                 else if (trimmedLine.StartsWith("[Issuer]"))
                 {
                     var nextLineIndex = Array.IndexOf(lines, line) + 1;
@@ -124,15 +120,25 @@ public class TpmInfo : IHardwareInfo
 
             // Output in desired order
             if (processedLines.ContainsKey("PublicKeyHash"))
-                sb.AppendLine($"PublicKeyHash: {processedLines["PublicKeyHash"]}");
+                sb.AppendLine($"Sha256 Hash: {processedLines["PublicKeyHash"]}");
             if (processedLines.ContainsKey("Serial Number"))
                 sb.AppendLine($"Serial Number: {processedLines["Serial Number"]}");
             if (processedLines.ContainsKey("Thumbprint"))
                 sb.AppendLine($"Thumbprint: {processedLines["Thumbprint"]}");
-            if (processedLines.ContainsKey("TPMVersion"))
-                sb.AppendLine(processedLines["TPMVersion"]); // TPMVersion already includes the full line
             if (processedLines.ContainsKey("Issuer"))
-                sb.AppendLine($"Issuer: {processedLines["Issuer"]}");
+            {
+                var issuerValue = processedLines["Issuer"];
+                // Extract CN and O values
+                var cnMatch = issuerValue.Contains("CN=") ? issuerValue.Split(new[] { "CN=" }, StringSplitOptions.None)[1].Split(',')[0].Trim() : "";
+                var orgMatch = issuerValue.Contains("O=") ? issuerValue.Split(new[] { "O=" }, StringSplitOptions.None)[1].Split(',')[0].Trim() : "";
+                
+                var formattedIssuer = new List<string>();
+                if (!string.IsNullOrEmpty(cnMatch)) formattedIssuer.Add($"CN={cnMatch}");
+                if (!string.IsNullOrEmpty(orgMatch)) formattedIssuer.Add($"O={orgMatch}");
+                
+                if (formattedIssuer.Count > 0)
+                    sb.AppendLine($"Issuer: {string.Join(", ", formattedIssuer)}");
+            }
         }
         catch (Exception ex)
         {
