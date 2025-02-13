@@ -133,9 +133,22 @@ namespace HWIDChecker.Services
                                 await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r SYSTEM:(F) /T");
                                 await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r \"{Environment.UserName}\":(F) /T");
                                 
-                                // Method 2: Try direct wevtutil commands
-                                var exportResult = await RunProcessAsync("wevtutil.exe", $"epl \"{logName}\" null");
-                                await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"");
+                                // Method 2: Try direct wevtutil commands using temp file
+                                string tempFile = System.IO.Path.GetTempFileName();
+                                try {
+                                    var exportResult = await RunProcessAsync("wevtutil.exe", $"epl \"{logName}\" \"{tempFile}\"");
+                                    await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"");
+                                }
+                                finally {
+                                    if (System.IO.File.Exists(tempFile)) {
+                                        try {
+                                            System.IO.File.Delete(tempFile);
+                                        }
+                                        catch {
+                                            // Ignore delete errors for temp file
+                                        }
+                                    }
+                                }
                                 
                                 // Method 3: Try to clear with PowerShell
                                 var psScript = $"Clear-EventLog -LogName \"{logName}\" -ErrorAction SilentlyContinue";
