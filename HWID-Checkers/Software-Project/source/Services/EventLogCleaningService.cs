@@ -17,6 +17,7 @@ namespace HWIDChecker.Services
             "System",
             "Security",
             "Application",
+            "PowerShellCore/Operational",
             
             // Storage and Device Related Logs
             "Microsoft-Windows-Storage-Storport/Operational",
@@ -25,12 +26,15 @@ namespace HWIDChecker.Services
             "Microsoft-Windows-StorageSpaces-Driver/Operational",
             "Microsoft-Windows-StorageVolume/Operational",
             "Microsoft-Windows-Ntfs/Operational",
+            "Microsoft-Windows-VolumeSnapshot-Driver/Operational",
             
             // Device Management Logs
             "Microsoft-Windows-DeviceSetupManager/Admin",
             "Microsoft-Windows-DeviceSetupManager/Operational",
             "Microsoft-Windows-Kernel-PnP/Device Management",
             "Microsoft-Windows-Kernel-PnP/Configuration",
+            "Microsoft-Windows-UserPnp/DeviceInstall",
+            "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
             
             // System Configuration and State
             "Microsoft-Windows-StateRepository/Operational",
@@ -38,6 +42,28 @@ namespace HWIDChecker.Services
             "Microsoft-Windows-Kernel-ShimEngine/Operational",
             "Microsoft-Windows-Kernel-EventTracing/Admin",
             "Microsoft-Windows-GroupPolicy/Operational",
+            "Microsoft-Windows-Known Folders API Service",
+            
+            // Hardware Monitoring and Diagnostics
+            "Microsoft-Windows-DriverFrameworks-UserMode/Operational",
+            "Microsoft-Windows-Hardware-Events/Operational",
+            "Microsoft-Windows-DeviceGuard/Operational",
+            "Microsoft-Windows-DNS-Client/Operational",
+            "Microsoft-Windows-Hyper-V-Drivers/Operational",
+            "Microsoft-Windows-Resource-Exhaustion-Detector/Operational",
+            
+            // Authentication and Security
+            "Microsoft-Windows-Authentication/AuthenticationPolicyFailures-DomainController",
+            "Microsoft-Windows-Authentication/ProtectedUser-Client",
+            "Microsoft-Windows-Security-SPP/Operational",
+            "Microsoft-Windows-Security-Auditing/Operational",
+            
+            // Network and Connectivity
+            "Microsoft-Windows-NetworkProfile/Operational",
+            "Microsoft-Windows-WLAN-AutoConfig/Operational",
+            "Microsoft-Windows-BranchCacheSMB/Operational",
+            "Microsoft-Windows-NetworkLocationWizard/Operational",
+            "Microsoft-Windows-NlaSvc/Operational",
             
             // Core System Services
             "Microsoft-Windows-WMI-Activity/Operational",
@@ -52,7 +78,16 @@ namespace HWIDChecker.Services
             "Microsoft-Windows-Diagnosis-PCW/Operational",
             "Microsoft-Windows-AppModel-Runtime/Admin",
             "Microsoft-Windows-Application-Experience/Program-Telemetry",
-            "Microsoft-Windows-AppxPackaging/Operational"
+            "Microsoft-Windows-AppxPackaging/Operational",
+            
+            // System Diagnostics and Troubleshooting
+            "Microsoft-Windows-Diagnostics-Performance/Operational",
+            "Microsoft-Windows-Diagnosis-Scripted/Operational",
+            "Microsoft-Windows-Diagnosis-Schedule/Operational",
+            "Microsoft-Windows-USB-USBHUB/Operational",
+            "Microsoft-Windows-USB-USBPORT/Operational",
+            "Microsoft-Windows-Winlogon/Operational",
+            "Microsoft-Windows-UAC/Operational"
         };
 
         private record ProcessResult(string StdOut, string StdErr);
