@@ -18,11 +18,9 @@ namespace HWIDChecker.Services
                 var clearResult = await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"");
                 if (string.IsNullOrEmpty(clearResult.StdErr))
                 {
-                    OnStatusUpdate?.Invoke($"Successfully cleared log: {logName}");
+                    OnStatusUpdate?.Invoke($"Cleared: {logName}");
                     return true;
                 }
-
-                OnStatusUpdate?.Invoke($"Standard clearing failed for {logName}, attempting advanced methods...");
 
                 // Construct log file path (handle both / and - in log names)
                 string logFileName = logName.Replace("/", "%4").Replace("-", "_").Replace(" ", "_") + ".evtx";
@@ -82,16 +80,15 @@ namespace HWIDChecker.Services
                 
                 if (cleared)
                 {
-                    OnStatusUpdate?.Invoke($"Successfully cleared log: {logName} using advanced methods");
+                    OnStatusUpdate?.Invoke($"Cleared: {logName}");
                     return true;
                 }
                 
-                OnStatusUpdate?.Invoke($"Failed to clear log: {logName} after trying all methods");
                 return false;
             }
             catch (Exception ex)
             {
-                OnStatusUpdate?.Invoke($"Error clearing log: {logName}\r\nError: {ex.Message}");
+                OnStatusUpdate?.Invoke($"Failed: {logName} - {ex.Message}");
                 return false;
             }
         }
@@ -144,12 +141,43 @@ namespace HWIDChecker.Services
             "Microsoft-Windows-Security-SPP/Operational",
             "Microsoft-Windows-Security-Auditing/Operational",
             
-            // Network and Connectivity
+            // Network, Connectivity and Hardware History
             "Microsoft-Windows-NetworkProfile/Operational",
             "Microsoft-Windows-WLAN-AutoConfig/Operational",
             "Microsoft-Windows-BranchCacheSMB/Operational",
             "Microsoft-Windows-NetworkLocationWizard/Operational",
             "Microsoft-Windows-NlaSvc/Operational",
+            "Microsoft-Windows-Dhcp-Client/Admin",
+            "Microsoft-Windows-Dhcp-Client/Operational",
+            "Microsoft-Windows-DHCPv6-Client/Operational",
+            "Microsoft-Windows-TCPIP/Operational",
+            "Microsoft-Windows-WLAN-AutoConfig/Diagnostic",
+            "Microsoft-Windows-Iphlpsvc/Operational",
+            "Microsoft-Windows-NetworkConnectivityStatus/Operational",
+            "Microsoft-Windows-NetCore/Operational",
+            
+            // Wireless and Bluetooth Device History
+            "Microsoft-Windows-Bluetooth-BthLEPrepairing/Operational",
+            "Microsoft-Windows-Bluetooth-MTPEnum/Operational",
+            "Microsoft-Windows-WLAN/Diagnostic",
+            "Microsoft-Windows-WWAN-SVC-Events/Operational",
+            "Microsoft-Windows-WWAN-UI-Events/Operational",
+            "Microsoft-Windows-WWAN-MM-Events/Operational",
+            
+            // Additional Device and Driver History
+            "Microsoft-Windows-DeviceAssociation/Operational",
+            "Microsoft-Windows-DeviceInstall/Operational",
+            "Microsoft-Windows-DriverFrameworks-UserMode/Diagnostic",
+            "Microsoft-Windows-PCW/Operational",
+            "Microsoft-Windows-EapHost/Operational",
+            "Microsoft-Windows-FilterManager/Operational",
+            
+            // Network Security and Authentication
+            "Microsoft-Windows-Dhcpv6-Client/Admin",
+            "Microsoft-Windows-WebAuthN/Operational",
+            "Microsoft-Windows-WFP/Operational",
+            "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall",
+            "Microsoft-Windows-NetworkSecurity/Operational",
             
             // Core System Services
             "Microsoft-Windows-WMI-Activity/Operational",
@@ -228,8 +256,6 @@ namespace HWIDChecker.Services
 
         public async Task CleanEventLogsAsync()
         {
-            OnStatusUpdate?.Invoke("Starting Event Log cleaning...\r\n");
-
             try
             {
                 // Get standard Windows logs first
@@ -263,18 +289,16 @@ namespace HWIDChecker.Services
                 {
                     try
                     {
-                        OnStatusUpdate?.Invoke($"Attempting to clear log: {logName}");
-
                         // First check if log exists and is enabled
                         var logInfoResult = await RunProcessAsync("wevtutil.exe", $"gli \"{logName}\"");
                         if (!string.IsNullOrEmpty(logInfoResult.StdErr))
                         {
-                            OnStatusUpdate?.Invoke($"Log {logName} does not exist on this system. Skipping.");
+                            OnStatusUpdate?.Invoke($"Skipped: {logName} (not found)");
                             continue;
                         }
                         if (logInfoResult.StdOut.Contains("enabled: false"))
                         {
-                            OnStatusUpdate?.Invoke($"Log {logName} is disabled on this system. Skipping.");
+                            OnStatusUpdate?.Invoke($"Skipped: {logName} (disabled)");
                             continue;
                         }
 
@@ -295,18 +319,19 @@ namespace HWIDChecker.Services
                     }
                 }
 
-                OnStatusUpdate?.Invoke($"\r\nCleared {clearedLogs} event logs.");
+                string summary = $"Summary: {clearedLogs} logs cleared";
                 if (failedLogs.Count > 0)
                 {
-                    OnStatusUpdate?.Invoke($"Failed to clear {failedLogs.Count} logs:");
+                    summary += $", {failedLogs.Count} failed";
+                    OnStatusUpdate?.Invoke(summary);
                     foreach (var (name, message) in failedLogs)
                     {
-                        OnStatusUpdate?.Invoke($"- {name}\r\n  Error: {message}");
+                        OnStatusUpdate?.Invoke($"Failed: {name} - {message}");
                     }
                 }
                 else
                 {
-                    OnStatusUpdate?.Invoke("All event logs cleared successfully.");
+                    OnStatusUpdate?.Invoke($"{summary} successfully");
                 }
             }
             catch (Exception ex)
