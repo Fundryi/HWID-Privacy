@@ -10,6 +10,92 @@ namespace HWIDChecker.Services
         public event Action<string> OnStatusUpdate;
         public event Action<string, string> OnError;
 
+        private async Task<bool> ClearLogWithAdvancedMethodsAsync(string logName)
+        {
+            try
+            {
+                // Try standard clearing first
+                var clearResult = await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"");
+                if (string.IsNullOrEmpty(clearResult.StdErr))
+                {
+                    OnStatusUpdate?.Invoke($"Successfully cleared log: {logName}");
+                    return true;
+                }
+
+                OnStatusUpdate?.Invoke($"Standard clearing failed for {logName}, attempting advanced methods...");
+
+                // Construct log file path (handle both / and - in log names)
+                string logFileName = logName.Replace("/", "%4").Replace("-", "_").Replace(" ", "_") + ".evtx";
+                string logPath = $@"{Environment.GetFolderPath(Environment.SpecialFolder.Windows)}\System32\Winevt\Logs\{logFileName}";
+
+                // Method 1: Take ownership and set permissions if file exists
+                if (System.IO.File.Exists(logPath))
+                {
+                    await RunProcessAsync("takeown.exe", $"/f \"{logPath}\" /A");
+                    await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r Administrators:(F) /T");
+                    await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r SYSTEM:(F) /T");
+                    await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r \"{Environment.UserName}\":(F) /T");
+                }
+
+                // Method 2: Try PowerShell Clear-EventLog with fallback
+                var psScript = $@"
+                    $log = '{logName}'
+                    try {{
+                        Clear-EventLog -LogName $log -ErrorAction Stop
+                    }} catch {{
+                        # Try WevtUtil if Clear-EventLog fails
+                        & wevtutil.exe cl $log
+                    }}
+                ";
+                await RunProcessAsync("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{psScript}\"");
+
+                // Method 3: Try export and clear approach
+                string tempFile = System.IO.Path.GetTempFileName();
+                try
+                {
+                    await RunProcessAsync("wevtutil.exe", $"epl \"{logName}\" \"{tempFile}\"");
+                    await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"");
+                }
+                finally
+                {
+                    if (System.IO.File.Exists(tempFile))
+                    {
+                        try { System.IO.File.Delete(tempFile); }
+                        catch { /* Ignore temp file cleanup errors */ }
+                    }
+                }
+
+                // Method 4: Force delete if file exists (last resort)
+                if (System.IO.File.Exists(logPath))
+                {
+                    try
+                    {
+                        System.IO.File.Delete(logPath);
+                        await RunProcessAsync("wevtutil.exe", "cl System"); // Force refresh
+                    }
+                    catch { /* Ignore delete errors */ }
+                }
+
+                // Verify if log was cleared
+                var verifyResult = await RunProcessAsync("wevtutil.exe", $"gli \"{logName}\"");
+                bool cleared = verifyResult.StdOut.Contains("recordCount: 0") || !System.IO.File.Exists(logPath);
+                
+                if (cleared)
+                {
+                    OnStatusUpdate?.Invoke($"Successfully cleared log: {logName} using advanced methods");
+                    return true;
+                }
+                
+                OnStatusUpdate?.Invoke($"Failed to clear log: {logName} after trying all methods");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                OnStatusUpdate?.Invoke($"Error clearing log: {logName}\r\nError: {ex.Message}");
+                return false;
+            }
+        }
+
         private readonly string[] StandardEventLogs = new[]
         {
             // Standard Windows Logs
@@ -179,86 +265,27 @@ namespace HWIDChecker.Services
                     {
                         OnStatusUpdate?.Invoke($"Attempting to clear log: {logName}");
 
-                        if (logName.Contains("Microsoft-Windows-LiveId"))
+                        // First check if log exists and is enabled
+                        var logInfoResult = await RunProcessAsync("wevtutil.exe", $"gli \"{logName}\"");
+                        if (!string.IsNullOrEmpty(logInfoResult.StdErr))
                         {
-                            OnStatusUpdate?.Invoke("Special handling for LiveId log...");
-                            var logPath = $@"{Environment.GetFolderPath(Environment.SpecialFolder.Windows)}\System32\Winevt\Logs\Microsoft-Windows-LiveIdOperational.evtx";
-                            OnStatusUpdate?.Invoke($"Attempting multiple methods to clear LiveId log...");
-
-                            try
-                            {
-                                // Method 1: Take ownership and set permissions
-                                await RunProcessAsync("takeown.exe", $"/f \"{logPath}\" /A");
-                                await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r Administrators:(F) /T");
-                                await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r SYSTEM:(F) /T");
-                                await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r \"{Environment.UserName}\":(F) /T");
-                                
-                                // Method 2: Try direct wevtutil commands using temp file
-                                string tempFile = System.IO.Path.GetTempFileName();
-                                try {
-                                    var exportResult = await RunProcessAsync("wevtutil.exe", $"epl \"{logName}\" \"{tempFile}\"");
-                                    await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"");
-                                }
-                                finally {
-                                    if (System.IO.File.Exists(tempFile)) {
-                                        try {
-                                            System.IO.File.Delete(tempFile);
-                                        }
-                                        catch {
-                                            // Ignore delete errors for temp file
-                                        }
-                                    }
-                                }
-                                
-                                // Method 3: Try to clear with PowerShell
-                                var psScript = $"Clear-EventLog -LogName \"{logName}\" -ErrorAction SilentlyContinue";
-                                await RunProcessAsync("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{psScript}\"");
-                                
-                                // Method 4: Try to force delete and recreate if file exists
-                                if (System.IO.File.Exists(logPath))
-                                {
-                                    try
-                                    {
-                                        System.IO.File.Delete(logPath);
-                                        // Force a refresh
-                                        await RunProcessAsync("wevtutil.exe", "cl System");
-                                    }
-                                    catch
-                                    {
-                                        // Ignore delete errors
-                                    }
-                                }
-
-                                // Consider it a success if we get here
-                                clearedLogs++;
-                                OnStatusUpdate?.Invoke($"Successfully cleared log: {logName}");
-                                continue; // Skip the normal clear attempt
-                            }
-                            catch (Exception ex)
-                            {
-                                OnStatusUpdate?.Invoke($"All special handling methods failed for LiveId log: {ex.Message}");
-                            }
+                            OnStatusUpdate?.Invoke($"Log {logName} does not exist on this system. Skipping.");
+                            continue;
+                        }
+                        if (logInfoResult.StdOut.Contains("enabled: false"))
+                        {
+                            OnStatusUpdate?.Invoke($"Log {logName} is disabled on this system. Skipping.");
+                            continue;
                         }
 
-                        // Normal log clearing for non-LiveId logs
-                        try
+                        // Try to clear using our advanced methods (which includes standard clearing first)
+                        if (await ClearLogWithAdvancedMethodsAsync(logName))
                         {
-                            var clearResult = await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"");
-                            if (string.IsNullOrEmpty(clearResult.StdErr))
-                            {
-                                clearedLogs++;
-                                OnStatusUpdate?.Invoke($"Successfully cleared log: {logName}");
-                            }
-                            else
-                            {
-                                failedLogs.Add((logName, clearResult.StdErr));
-                                OnStatusUpdate?.Invoke($"Failed to clear log: {logName}\r\nError: {clearResult.StdErr}");
-                            }
+                            clearedLogs++;
                         }
-                        catch (Exception ex)
+                        else
                         {
-                            failedLogs.Add((logName, ex.Message));
-                            OnStatusUpdate?.Invoke($"Error clearing log: {logName}\r\nError: {ex.Message}");
+                            failedLogs.Add((logName, "Failed to clear log after trying all available methods"));
                         }
                     }
                     catch (Exception ex)
