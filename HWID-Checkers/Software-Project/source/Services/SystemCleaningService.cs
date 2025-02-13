@@ -96,13 +96,17 @@ namespace HWIDChecker.Services
             }
         }
 
+        private IntPtr _devicesHandle = IntPtr.Zero;
+
         public async Task<List<DeviceDetail>> ScanForGhostDevicesAsync()
         {
             var devices = new List<DeviceDetail>();
             var setupClass = Guid.Empty;
-            var devicesHandle = SetupDiGetClassDevs(ref setupClass, IntPtr.Zero, IntPtr.Zero, (uint)DiGetClassFlags.DIGCF_ALLCLASSES);
+            
+            // Store the device info set handle as a class field
+            _devicesHandle = SetupDiGetClassDevs(ref setupClass, IntPtr.Zero, IntPtr.Zero, (uint)DiGetClassFlags.DIGCF_ALLCLASSES);
 
-            if (devicesHandle == IntPtr.Zero || devicesHandle.ToInt64() == -1)
+            if (_devicesHandle == IntPtr.Zero || _devicesHandle.ToInt64() == -1)
             {
                 throw new Exception("Failed to get device list");
             }
@@ -112,7 +116,7 @@ namespace HWIDChecker.Services
                 uint deviceIndex = 0;
                 var deviceInfoData = new SP_DEVINFO_DATA { cbSize = (uint)Marshal.SizeOf(typeof(SP_DEVINFO_DATA)) };
 
-                while (SetupDiEnumDeviceInfo(devicesHandle, deviceIndex, ref deviceInfoData))
+                while (SetupDiEnumDeviceInfo(_devicesHandle, deviceIndex, ref deviceInfoData))
                 {
                     var properties = new Dictionary<SetupDiGetDeviceRegistryPropertyEnum, string>();
                     var propertyArray = new[]
@@ -127,7 +131,7 @@ namespace HWIDChecker.Services
                     foreach (var prop in propertyArray)
                     {
                         var propBuffer = new byte[1024];
-                        if (SetupDiGetDeviceRegistryProperty(devicesHandle, ref deviceInfoData, (uint)prop,
+                        if (SetupDiGetDeviceRegistryProperty(_devicesHandle, ref deviceInfoData, (uint)prop,
                             out uint propType, propBuffer, (uint)propBuffer.Length, out uint requiredSize))
                         {
                             if (prop == SetupDiGetDeviceRegistryPropertyEnum.SPDRP_INSTALL_STATE)
@@ -154,20 +158,7 @@ namespace HWIDChecker.Services
 
                     if (isGhostDevice)
                     {
-                        var deviceName = "True"; // Match old script's behavior
-                        var deviceDesc = properties.GetValueOrDefault(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_DEVICEDESC) ??
-                                       properties.GetValueOrDefault(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_FRIENDLYNAME) ??
-                                       "Unknown Device";
-
-                        var hardwareIds = new List<string>();
-                        if (properties.TryGetValue(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_HARDWAREID, out var hwId))
-                        {
-                            // Split by null character and combine with standard format
-                            hardwareIds.AddRange(hwId.Split('\0', StringSplitOptions.RemoveEmptyEntries));
-                        }
-
-                        var deviceClass = properties.GetValueOrDefault(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_CLASS) ?? "";
-
+                        // Create an exact copy of the device info data for when we remove it
                         var deviceInfoCopy = new SP_DEVINFO_DATA
                         {
                             cbSize = deviceInfoData.cbSize,
@@ -176,88 +167,77 @@ namespace HWIDChecker.Services
                             reserved = deviceInfoData.reserved
                         };
 
+                        var deviceName = "True"; // Match old script's behavior
+                        var deviceDesc = properties.GetValueOrDefault(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_DEVICEDESC) ??
+                                       properties.GetValueOrDefault(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_FRIENDLYNAME) ??
+                                       "Unknown Device";
+
+                        var hardwareIds = new List<string>();
+                        if (properties.TryGetValue(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_HARDWAREID, out var hwId))
+                        {
+                            hardwareIds.AddRange(hwId.Split('\0', StringSplitOptions.RemoveEmptyEntries));
+                        }
+
+                        var deviceClass = properties.GetValueOrDefault(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_CLASS) ?? "";
+
                         devices.Add(new DeviceDetail(
                             deviceName,
                             deviceDesc,
-                            string.Join("", hardwareIds), // Join hardware IDs without separators to match old script
+                            string.Join("", hardwareIds),
                             deviceClass,
                             deviceInfoCopy));
                     }
 
                     deviceIndex++;
                 }
-            }
-            finally
-            {
-                // Cleanup will be handled by Windows
-            }
 
-            return devices;
+                return devices;
+            }
+            catch
+            {
+                if (_devicesHandle != IntPtr.Zero && _devicesHandle.ToInt64() != -1)
+                {
+                    SetupDiDestroyDeviceInfoList(_devicesHandle);
+                    _devicesHandle = IntPtr.Zero;
+                }
+                throw;
+            }
         }
 
         public async Task RemoveGhostDevicesAsync(List<DeviceDetail> devices)
         {
             if (devices == null || devices.Count == 0) return;
 
-            OnStatusUpdate?.Invoke($"\r\nAttempting to remove {devices.Count} ghost device(s)...\r\n");
-            int removedCount = 0;
-
-            var setupClass = Guid.Empty;
-            var devicesHandle = SetupDiGetClassDevs(ref setupClass, IntPtr.Zero, IntPtr.Zero, (uint)DiGetClassFlags.DIGCF_ALLCLASSES);
-
-            if (devicesHandle == IntPtr.Zero || devicesHandle.ToInt64() == -1)
-            {
-                throw new Exception("Failed to get device list for removal");
-            }
-
             try
             {
-                for (int i = 0; i < devices.Count; i++)
+                // Make sure we have a valid handle from scanning
+                if (_devicesHandle == IntPtr.Zero || _devicesHandle.ToInt64() == -1)
                 {
-                    var device = devices[i];
+                    throw new Exception("Invalid device list handle. Please scan for devices first.");
+                }
+
+                OnStatusUpdate?.Invoke($"\r\nAttempting to remove {devices.Count} ghost device(s)...\r\n");
+                int removedCount = 0;
+
+                foreach (var device in devices)
+                {
                     try
                     {
                         OnStatusUpdate?.Invoke($"Removing device: {device.Description} ({device.Class})");
 
-                        // Create a new SP_DEVINFO_DATA and populate it with the device's data
-                        var devInfoData = new SP_DEVINFO_DATA();
-                        devInfoData.cbSize = (uint)Marshal.SizeOf(typeof(SP_DEVINFO_DATA));
-
-                        // Get the device's instance ID first
-                        var instanceIdBuffer = new byte[1024];
-                        uint requiredSize = 0;
-                        var cr_buffer = new byte[1024];
+                        // Use the exact same device info data we stored during scanning
+                        var devInfoData = device.DeviceInfoData;
                         
-                        if (SetupDiGetDeviceInstanceId(devicesHandle, ref device.DeviceInfoData, instanceIdBuffer,
-                            (uint)instanceIdBuffer.Length, out requiredSize))
+                        // Attempt to remove the device directly
+                        if (SetupDiRemoveDevice(_devicesHandle, ref devInfoData))
                         {
-                            var instanceId = Encoding.Unicode.GetString(instanceIdBuffer, 0, (int)requiredSize).Trim('\0');
-                            
-                            // Now open the device with its instance ID
-                            if (SetupDiOpenDeviceInfo(devicesHandle, instanceId, IntPtr.Zero, 0, ref devInfoData))
-                            {
-                                // Attempt to remove the device
-                                if (SetupDiRemoveDevice(devicesHandle, ref devInfoData))
-                                {
-                                    removedCount++;
-                                    OnStatusUpdate?.Invoke($"Successfully removed: {device.Description}");
-                                }
-                                else
-                                {
-                                    var error = Marshal.GetLastWin32Error();
-                                    OnStatusUpdate?.Invoke($"Failed to remove: {device.Description}. Error code: {error}");
-                                }
-                            }
-                            else
-                            {
-                                var error = Marshal.GetLastWin32Error();
-                                OnStatusUpdate?.Invoke($"Failed to open device info: {device.Description}. Error code: {error}");
-                            }
+                            removedCount++;
+                            OnStatusUpdate?.Invoke($"Successfully removed: {device.Description}");
                         }
                         else
                         {
                             var error = Marshal.GetLastWin32Error();
-                            OnStatusUpdate?.Invoke($"Failed to get device instance ID: {device.Description}. Error code: {error}");
+                            OnStatusUpdate?.Invoke($"Failed to remove: {device.Description}. Error code: {error}");
                         }
                     }
                     catch (Exception ex)
@@ -265,19 +245,21 @@ namespace HWIDChecker.Services
                         OnStatusUpdate?.Invoke($"Error removing {device.Description}: {ex.Message}");
                     }
                 }
+
+                OnStatusUpdate?.Invoke($"\r\nTotal devices removed: {removedCount}");
+                if (removedCount < devices.Count)
+                {
+                    OnStatusUpdate?.Invoke($"Failed to remove {devices.Count - removedCount} device(s)");
+                }
             }
             finally
             {
-                if (devicesHandle != IntPtr.Zero && devicesHandle.ToInt64() != -1)
+                // Clean up the device info set after we're done with removal
+                if (_devicesHandle != IntPtr.Zero && _devicesHandle.ToInt64() != -1)
                 {
-                    SetupDiDestroyDeviceInfoList(devicesHandle);
+                    SetupDiDestroyDeviceInfoList(_devicesHandle);
+                    _devicesHandle = IntPtr.Zero;
                 }
-            }
-
-            OnStatusUpdate?.Invoke($"\r\nTotal devices removed: {removedCount}");
-            if (removedCount < devices.Count)
-            {
-                OnStatusUpdate?.Invoke($"Failed to remove {devices.Count - removedCount} device(s)");
             }
         }
 
