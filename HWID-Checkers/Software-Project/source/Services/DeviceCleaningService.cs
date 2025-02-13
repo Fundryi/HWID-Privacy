@@ -140,8 +140,6 @@ namespace HWIDChecker.Services
                 {
                     try
                     {
-                        OnStatusUpdate?.Invoke($"Removing device: {device.Description} ({device.Class})");
-
                         // Use the exact same device info data we stored during scanning
                         var devInfoData = device.DeviceInfoData;
                         
