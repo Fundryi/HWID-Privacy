@@ -11,6 +11,7 @@ namespace HWIDChecker.UI.Forms
     {
         private TextBox outputTextBox;
         private Button closeButton;
+        private Button recleanButton;
         private SystemCleaningService cleaningService;
         private List<SystemCleaningService.DeviceDetail> ghostDevices;
         private bool isProcessing;
@@ -75,14 +76,23 @@ namespace HWIDChecker.UI.Forms
                 ForeColor = Color.Lime,
                 Font = new Font("Consolas", 9.75f, FontStyle.Regular)
             };
+recleanButton = new Button
+{
+    Text = "Reclean",
+    Dock = DockStyle.Bottom,
+    Height = 30,
+    Enabled = false
+};
+recleanButton.Click += (s, e) => StartCleaningProcess();
 
-            closeButton = new Button
-            {
-                Text = "Close",
-                Dock = DockStyle.Bottom,
-                Height = 30,
-                Enabled = false
-            };
+closeButton = new Button
+{
+    Text = "Close",
+    Dock = DockStyle.Bottom,
+    Height = 30,
+    Enabled = false
+};
+closeButton.Click += (s, e) =>
             closeButton.Click += (s, e) => 
             {
                 if (isProcessing)
@@ -105,6 +115,7 @@ namespace HWIDChecker.UI.Forms
             panel.Controls.Add(outputTextBox);
 
             this.Controls.Add(panel);
+            this.Controls.Add(recleanButton);
             this.Controls.Add(closeButton);
 
             this.Load += CleanDevicesForm_Load;
@@ -128,7 +139,9 @@ namespace HWIDChecker.UI.Forms
             try
             {
                 isProcessing = true;
+                recleanButton.Enabled = false;
                 closeButton.Enabled = false;
+                outputTextBox.Clear();
 
                 // First clean event logs
                 await cleaningService.CleanLogsAsync();
@@ -183,6 +196,7 @@ namespace HWIDChecker.UI.Forms
             finally
             {
                 isProcessing = false;
+                recleanButton.Enabled = true;
                 closeButton.Enabled = true;
             }
         }
