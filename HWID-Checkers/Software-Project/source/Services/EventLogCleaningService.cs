@@ -12,10 +12,34 @@ namespace HWIDChecker.Services
 
         private readonly string[] StandardEventLogs = new[]
         {
+            // Standard Windows Logs
             "Windows PowerShell",
             "System",
             "Security",
             "Application",
+            
+            // Storage and Device Related Logs
+            "Microsoft-Windows-Storage-Storport/Operational",
+            "Microsoft-Windows-Storage-ClassPnP/Operational",
+            "Microsoft-Windows-Storage-Partition/Diagnostic",
+            "Microsoft-Windows-StorageSpaces-Driver/Operational",
+            "Microsoft-Windows-StorageVolume/Operational",
+            "Microsoft-Windows-Ntfs/Operational",
+            
+            // Device Management Logs
+            "Microsoft-Windows-DeviceSetupManager/Admin",
+            "Microsoft-Windows-DeviceSetupManager/Operational",
+            "Microsoft-Windows-Kernel-PnP/Device Management",
+            "Microsoft-Windows-Kernel-PnP/Configuration",
+            
+            // System Configuration and State
+            "Microsoft-Windows-StateRepository/Operational",
+            "Microsoft-Windows-CodeIntegrity/Operational",
+            "Microsoft-Windows-Kernel-ShimEngine/Operational",
+            "Microsoft-Windows-Kernel-EventTracing/Admin",
+            "Microsoft-Windows-GroupPolicy/Operational",
+            
+            // Core System Services
             "Microsoft-Windows-WMI-Activity/Operational",
             "Microsoft-Windows-Time-Service/Operational",
             "Microsoft-Windows-Store/Operational",
@@ -27,7 +51,8 @@ namespace HWIDChecker.Services
             "Microsoft-Windows-Kernel-Cache/Operational",
             "Microsoft-Windows-Diagnosis-PCW/Operational",
             "Microsoft-Windows-AppModel-Runtime/Admin",
-            "Microsoft-Windows-Application-Experience/Program-Telemetry"
+            "Microsoft-Windows-Application-Experience/Program-Telemetry",
+            "Microsoft-Windows-AppxPackaging/Operational"
         };
 
         private record ProcessResult(string StdOut, string StdErr);
