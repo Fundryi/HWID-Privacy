@@ -4,24 +4,33 @@
 
 ## Table of Contents
 
-- [Building](#building-the-project)
-- [Requirements](#requirements)
-- [Features](#features)
-- [Usage](#usage-instructions)
-- [Project Structure](#project-structure)
-- [File Formats](#file-formats)
+- [HWID Checker Project](#hwid-checker-project)
+  - [Table of Contents](#table-of-contents)
+  - [Building the Project](#building-the-project)
+  - [Requirements](#requirements)
+  - [Features](#features)
+    - [Core Functionality](#core-functionality)
+    - [Hardware Detection](#hardware-detection)
+    - [System Services](#system-services)
+  - [Usage Instructions](#usage-instructions)
+    - [GUI Version](#gui-version)
+    - [Command Line](#command-line)
+  - [Project Structure](#project-structure)
+  - [File Formats](#file-formats)
+    - [Export Files (TXT)](#export-files-txt)
+    - [Comparison Results](#comparison-results)
 
 ## Building the Project
 
 ```bash
-dotnet publish "HWID-Checkers/Software-Project/source/HWIDChecker.csproj" -c Releas
+dotnet publish "HWID-Checkers/Software-Project/source/HWIDChecker.csproj" -c Release
 ```
 
 This will:
 
 - Build the project in Release configuration
 - Create a single-file executable
-- Copy published files to `HWID-Checkers/Software-Project/source/bin/RELEASE/win-x64/publish`
+- Copy published files to `source/bin/RELEASE/win-x64/publish`
 
 ## Requirements
 
@@ -35,32 +44,47 @@ This will:
 
 - Hardware ID validation for Windows 10/11
 - Cross-version compatibility checks
-- BAT script interfaces for quick checks:
-  - `HWID CHECK W10.bat`: Windows 10 specific validation
-  - `HWID CHECK W11.bat`: Windows 11 specific validation
+- Comprehensive hardware component detection
+- Real-time validation and comparison
 
 ### Hardware Detection
 
-- 20+ hardware components monitored
+- Detection of 20+ hardware components including:
+  - CPU information
+  - GPU details
+  - Storage devices
+  - Network adapters
+  - BIOS information
+  - TPM status
+  - USB devices
+  - System information
+  - Monitor details
+  - RAM configuration
+  - Motherboard information
 - Real-time refresh capability
 - WMI-based data collection
 
-### Export System
+### System Services
 
-- Generates timestamped TXT files
-- Automatic file management (retains last 10 exports)
-- Standardized format for machine comparison
+- Hardware information management
+- Component comparison service
+- File export functionality
+- System cleaning utilities
+- Device management
+- Event log maintenance
 
 ## Usage Instructions
 
 ### GUI Version
 
-1. Run `HWIDChecker.exe`
-2. Click "Scan Hardware"
-3. Use Export/Compare buttons as needed
+1. Run `HWIDChecker.exe` as Administrator
+2. Click "Scan Hardware" to detect components
+3. Use Export/Compare features as needed
+4. Optional: Use cleaning tools for system maintenance
 
 ### Command Line
 
+Located in HWID-Checkers/Bats/:
 ```bat
 :: Windows 10 check
 HWID CHECK W10.bat
@@ -72,17 +96,37 @@ HWID CHECK W11.bat
 ## Project Structure
 
 ```
-HWID-CHECKER-Project/
-├── HWID CHECK BATS/        # Command-line validation scripts
-│   ├── HWID CHECK W10.bat
-│   └── HWID CHECK W11.bat
+HWID-Checkers/Software-Project/
 ├── source/
-│   ├── Hardware/          # Hardware info classes (CPU, GPU, etc)
-│   ├── Services/          # Comparison and export services
-│   ├── UI/                # Windows Forms components
-│   ├── Utils/             # Helper classes and extensions
-│   └── HWIDChecker.csproj # Project configuration
-└── HWIDChecker.exe        # Compiled executable
+│   ├── Hardware/              # Hardware component implementations
+│   │   ├── ArpInfo.cs
+│   │   ├── BiosInfo.cs
+│   │   ├── CpuInfo.cs
+│   │   ├── DiskDriveInfo.cs
+│   │   ├── GpuInfo.cs
+│   │   ├── MonitorInfo.cs
+│   │   ├── MotherboardInfo.cs
+│   │   ├── NetworkInfo.cs
+│   │   ├── RamInfo.cs
+│   │   ├── SystemInfo.cs
+│   │   ├── TpmInfo.cs
+│   │   └── UsbInfo.cs
+│   ├── Services/             # Core services
+│   │   ├── Interfaces/       # Service contracts
+│   │   ├── Models/          # Data models
+│   │   ├── Strategies/      # Implementation strategies
+│   │   └── Win32/          # Native Windows API integration
+│   ├── UI/                  # User interface components
+│   │   ├── Components/      # Reusable UI elements
+│   │   ├── DataHandlers/    # UI data management
+│   │   └── Forms/          # Windows Forms
+│   └── Utils/              # Helper utilities
+├── ComparisonSystem-Architecture.md  # System architecture documentation
+└── README.md                         # Project documentation
+
+../Bats/                    # Batch script utilities
+    ├── HWID CHECK W10.bat  # Windows 10 validation
+    └── HWID CHECK W11.bat  # Windows 11 validation
 ```
 
 ## File Formats
@@ -90,10 +134,11 @@ HWID-CHECKER-Project/
 ### Export Files (TXT)
 
 - Header with system metadata
-- Section for each hardware component:
+- Sections for each hardware component:
   - Component name
   - Manufacturer
   - Hardware IDs
+  - Component-specific details
   - Detection timestamp
 
 ### Comparison Results
@@ -101,12 +146,4 @@ HWID-CHECKER-Project/
 - JSON-based diff format
 - Machine-readable change log
 - Visual highlighting of modifications
-
-```bat
-:: Sample BAT file output
-[HWID Check] Windows 11 Validation Report
-[STATUS] PASSED - All hardware components meet requirements
-[DETAILS] 18/18 validation checks successful
-```
-
-.
+- Detailed component comparisons
