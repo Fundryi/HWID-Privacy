@@ -11,7 +11,9 @@ namespace HWIDChecker.Services
     public class DeviceCleaningService
     {
         public event Action<string> OnStatusUpdate;
+#pragma warning disable CS0067 // The event is never used
         public event Action<string, string> OnError;
+#pragma warning restore CS0067
 
         private IntPtr _devicesHandle = IntPtr.Zero;
 

@@ -13,7 +13,7 @@ namespace HWIDChecker.UI.Forms
         private Button closeButton;
         private Button recleanButton;
         private SystemCleaningService cleaningService;
-        private List<SystemCleaningService.DeviceDetail> ghostDevices;
+        private List<SystemCleaningService.DeviceDetail> ghostDevices = null;
         private bool isProcessing;
 
         public CleanDevicesForm()
