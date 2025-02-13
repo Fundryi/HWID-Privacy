@@ -25,6 +25,10 @@
 ```bash
 dotnet publish "HWID-Checkers/Software-Project/source/HWIDChecker.csproj" -c Release
 ```
+OR
+```bash
+dotnet publish HWID-CHECKER.sln -c Release
+```
 
 This will:
 
