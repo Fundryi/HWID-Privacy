@@ -99,12 +99,17 @@ namespace HWIDChecker.Services
 
                         var deviceClass = properties.GetValueOrDefault(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_CLASS) ?? "";
 
-                        devices.Add(new DeviceDetail(
-                            deviceName,
-                            deviceDesc,
-                            string.Join("", hardwareIds),
-                            deviceClass,
-                            deviceInfoCopy));
+                        // Ignore Microsoft Streaming Service Proxy which is always enabled on Windows
+                        var hardwareId = string.Join("", hardwareIds);
+                        if (hardwareId != @"SW\{96E080C7-143C-11D1-B40F-00A0C9223196}")
+                        {
+                            devices.Add(new DeviceDetail(
+                                deviceName,
+                                deviceDesc,
+                                hardwareId,
+                                deviceClass,
+                                deviceInfoCopy));
+                        }
                     }
 
                     deviceIndex++;
