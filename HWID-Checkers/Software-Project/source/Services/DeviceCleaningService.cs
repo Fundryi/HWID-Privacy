@@ -99,9 +99,23 @@ namespace HWIDChecker.Services
 
                         var deviceClass = properties.GetValueOrDefault(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_CLASS) ?? "";
 
-                        // Ignore Microsoft Streaming Service Proxy which is always enabled on Windows
+                        // Default Windows devices to ignore
+                        var ignoredDevices = new HashSet<string>
+                        {
+                            @"SW\{96E080C7-143C-11D1-B40F-00A0C9223196}", // Microsoft Streaming Service Proxy
+                            "ms_pppoeminiport",      // WAN Miniport (PPPOE)
+                            "ms_pptpminiport",       // WAN Miniport (PPTP)
+                            "ms_agilevpnminiport",   // WAN Miniport (IKEv2)
+                            "ms_ndiswanbh",          // WAN Miniport (Network Monitor)
+                            "ms_ndiswanip",          // WAN Miniport (IP)
+                            "ms_sstpminiport",       // WAN Miniport (SSTP)
+                            "ms_ndiswanipv6",        // WAN Miniport (IPv6)
+                            "ms_l2tpminiport",       // WAN Miniport (L2TP)
+                            "MMDEVAPI\\AudioEndpoints" // Audio Endpoint
+                        };
+
                         var hardwareId = string.Join("", hardwareIds);
-                        if (hardwareId != @"SW\{96E080C7-143C-11D1-B40F-00A0C9223196}")
+                        if (!ignoredDevices.Contains(hardwareId))
                         {
                             devices.Add(new DeviceDetail(
                                 deviceName,
