@@ -4,19 +4,27 @@
 
 ## Table of Contents
 
-1. [Hardware Categories & Evasion Strategies](#hardware-categories--evasion-strategies)
-   1. [Motherboard](#1-motherboard)
-   2. [Storage](#2-storage)
-   3. [Network Interface Card (NIC)](#3-network-interface-card-nic)
-   4. [GPU](#4-gpu)
-   5. [RAM](#5-ram)
-   6. [USB Peripherals](#6-usb-peripherals)
-   7. [EDID / Monitor Spoofing](#7-edid--monitor-spoofing)
-   8. [Router (ARP Table Isolation)](#8-router-arp-table-isolation)
-   9. [TPM](#9-tpm)
-2. [HWID Checker References](#hwid-checker-references)
-3. [Contribution & Updates](#contribution--updates)
-4. [Credit](#credit)
+- [Hardware Identification (HWID) Privacy Guide](#hardware-identification-hwid-privacy-guide)
+  - [Table of Contents](#table-of-contents)
+  - [Hardware Categories \& Evasion Strategies](#hardware-categories--evasion-strategies)
+    - [1. **Motherboard**](#1-motherboard)
+      - [Serial Spoofing](#serial-spoofing)
+      - [RGB Control/USB Serials](#rgb-controlusb-serials)
+    - [2. **Storage**](#2-storage)
+      - [NVMe SSDs (M.2)](#nvme-ssds-m2)
+      - [SATA SSDs (2.5")](#sata-ssds-25)
+      - [Hardware RAID](#hardware-raid)
+    - [3. **Network Interface Card (NIC)**](#3-network-interface-card-nic)
+      - [MAC Address Spoofing](#mac-address-spoofing)
+    - [4. **GPU**](#4-gpu)
+    - [5. **RAM**](#5-ram)
+    - [6. **USB Peripherals**](#6-usb-peripherals)
+    - [7. **EDID / Monitor Spoofing**](#7-edid--monitor-spoofing)
+    - [8. **Router (ARP Table Isolation)**](#8-router-arp-table-isolation)
+    - [9. **TPM**](#9-tpm)
+  - [HWID Checker References](#hwid-checker-references)
+  - [Contribution \& Updates](#contribution--updates)
+    - [Credits](#credits)
 
 ---
 
@@ -162,6 +170,7 @@
 
 ## HWID Checker References
 
+- **UNIVERSAL**: [HWID Checker .exe](/HWIDChecker.exe)
 - **Windows 10**: [HWID Checker Script](/HWID-Checkers/Bats/HWID%20CHECK%20W10.bat)
 - **Windows 11**: [HWID Checker Script](/HWID-Checkers/Bats/HWID%20CHECK%20W11.bat)
 
