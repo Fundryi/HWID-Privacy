@@ -190,7 +190,7 @@
 
 - Storage guide/info: [Priventive.de](https://priventive.de/)
 - Network guide/info: `fA`, and "`the collective hive mind of the internet`"
-- EDID guide/info: `fA`
+- EDID guide/info: `fA` (he did not invent the wheel, only gave me the info)
 - The broad base guide/structure was written by "`IthaLove`", [Old Guide Link](https://docs.google.com/document/u/0/d/e/2PACX-1vSjtQF1bSUxN57NXsYKS7haiPvYD68UXg77qinZ4ctcwx7073p9Jbp4W55LdP7vMgmjhZ12DsNHYwft/pub?pli=1)
 - `Fundryi` for pasting/collecting this info and putting it out for everyone in one place (☭ ͜ʖ ☭)
 
