@@ -102,6 +102,7 @@
 - **NVIDIA**: UUID accessible via `nvidia-smi`.
   - **No stable public spoofing guide** is widely known. Advanced hooking at the driver level may exist, but it's risky and can be flagged.
     - (Just don't even think about it; get AMD if you cheat, unless you're ready to spend money.)
+    - nVidia GPU UUID are NOT unique, but still can be used to track you in some ways.
 - **AMD**: No publicly documented UUID. Generally seen as safer for HWID privacy.
 
 ---
@@ -109,7 +110,9 @@
 ### 5. **RAM**
 
 - **Null Serials**:
-  - Corsair/GEIL modules default to `00000000`.
+  - Corsair DDR4/DDR5
+  - GEIL DDR4/DDR5DDR4/DDR5
+  - Trident Z G.Skill DDR4/DDR5
 
 ---
 
@@ -132,6 +135,7 @@
   - **Fuser** or **Dr.HDMI** ([4K version](https://www.hdfury.eu/shop/drhdmi4k/)).
   - EDID can be dumped, edited in a hex tool, and re-flashed via these devices.
 - **Result**: The monitor appears as a different device, reducing traceability.
+- Using a Fuser on Faceit is not recommended, even with EDID spoofing.
 
 ---
 
