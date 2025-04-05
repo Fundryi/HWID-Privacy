@@ -162,8 +162,10 @@
 
 ### 9. **TPM**
 
-- **Warning**: dTPM is flagged on certain anti-cheats (Faceit, Vanguard).
-- **Current Recommendation**: Use fTPM for Faceit/VGK if available.
+- **Warning**: dTPM is flagged on certain anti-cheats(FaceIT).
+- **Current Recommendation**: Use fTPM for Faceit/VGK if available, VGK is forcing fTPM since 04.04.25(if you are flagged).
+- How to spoof fTPM (Proof of Concept):
+  - [fTPM Spoof by cycript](https://github.com/cycript/FTPM_POC)
 - **dTPM Steps** (if you still try it):
   - Buy a TPM module (online/eBay).
   - Attach it to your motherboard's TPM header.
