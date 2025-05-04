@@ -3,6 +3,7 @@ using System.Windows.Forms;
 using System.Drawing;
 using System.Collections.Generic;
 using HWIDChecker.Services;
+using HWIDChecker.Services.Models;
 using System.Threading.Tasks;
 
 namespace HWIDChecker.UI.Forms
@@ -12,14 +13,17 @@ namespace HWIDChecker.UI.Forms
         private TextBox outputTextBox;
         private Button closeButton;
         private Button recleanButton;
+        private Button whitelistButton;
         private SystemCleaningService cleaningService;
-        private List<SystemCleaningService.DeviceDetail> ghostDevices = null;
+        private DeviceWhitelistService whitelistService;
+        private List<DeviceDetail> ghostDevices = null;
         private bool isProcessing;
 
         public CleanDevicesForm()
         {
             InitializeComponents();
             this.cleaningService = new SystemCleaningService();
+            this.whitelistService = new DeviceWhitelistService();
             this.cleaningService.OnStatusUpdate += HandleStatusUpdate;
             this.cleaningService.OnError += HandleError;
         }
@@ -76,14 +80,23 @@ namespace HWIDChecker.UI.Forms
                 ForeColor = Color.Lime,
                 Font = new Font("Consolas", 9.75f, FontStyle.Regular)
             };
-recleanButton = new Button
-{
-    Text = "Reclean",
-    Dock = DockStyle.Bottom,
-    Height = 30,
-    Enabled = false
-};
-recleanButton.Click += (s, e) => StartCleaningProcess();
+            whitelistButton = new Button
+            {
+                Text = "Manage Whitelist",
+                Dock = DockStyle.Bottom,
+                Height = 30,
+                Enabled = false
+            };
+            whitelistButton.Click += WhitelistButton_Click;
+
+            recleanButton = new Button
+            {
+                Text = "Reclean",
+                Dock = DockStyle.Bottom,
+                Height = 30,
+                Enabled = false
+            };
+            recleanButton.Click += (s, e) => StartCleaningProcess();
 
 closeButton = new Button
 {
@@ -92,12 +105,11 @@ closeButton = new Button
     Height = 30,
     Enabled = false
 };
-closeButton.Click += (s, e) =>
-            closeButton.Click += (s, e) => 
+            closeButton.Click += (s, e) =>
             {
                 if (isProcessing)
                 {
-                    if (MessageBox.Show("Operation in progress. Are you sure you want to close?", 
+                    if (MessageBox.Show("Operation in progress. Are you sure you want to close?",
                         "Confirm Exit", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                     {
                         return;
@@ -115,6 +127,7 @@ closeButton.Click += (s, e) =>
             panel.Controls.Add(outputTextBox);
 
             this.Controls.Add(panel);
+            this.Controls.Add(whitelistButton);
             this.Controls.Add(recleanButton);
             this.Controls.Add(closeButton);
 
@@ -140,40 +153,65 @@ closeButton.Click += (s, e) =>
             {
                 isProcessing = true;
                 recleanButton.Enabled = false;
+                whitelistButton.Enabled = false;
                 closeButton.Enabled = false;
                 outputTextBox.Clear();
+                ghostDevices = null;
 
                 // First clean event logs
                 await cleaningService.CleanLogsAsync();
 
                 // Then scan for ghost devices
                 HandleStatusUpdate("\r\nScanning for non-present (ghost) devices...\r\n");
-                var devices = await cleaningService.ScanForGhostDevicesAsync();
+                ghostDevices = await cleaningService.ScanForGhostDevicesAsync();
 
-                if (devices.Count > 0)
+                if (ghostDevices.Count > 0)
                 {
+                    // Filter out whitelisted devices
+                    var nonWhitelistedDevices = new List<DeviceDetail>();
+                    foreach (var device in ghostDevices)
+                    {
+                        if (!whitelistService.IsDeviceWhitelisted(device))
+                        {
+                            nonWhitelistedDevices.Add(device);
+                        }
+                    }
+
                     HandleStatusUpdate("The following non-present (ghost) devices were found:");
-                    foreach (var device in devices)
+                    foreach (var device in ghostDevices)
                     {
                         HandleStatusUpdate("----------------------------------------");
                         HandleStatusUpdate($"Device Name       : {device.Name}");
                         HandleStatusUpdate($"Device Description: {device.Description}");
                         HandleStatusUpdate($"Hardware ID       : {device.HardwareId}");
                         HandleStatusUpdate($"Class             : {device.Class}");
+                        if (whitelistService.IsDeviceWhitelisted(device))
+                        {
+                            HandleStatusUpdate("Status            : Whitelisted (will not be removed)");
+                        }
                     }
                     HandleStatusUpdate("----------------------------------------");
-                    HandleStatusUpdate($"Total non-present devices found: {devices.Count}");
+                    HandleStatusUpdate($"Total non-present devices found: {ghostDevices.Count}");
+                    HandleStatusUpdate($"Whitelisted devices: {ghostDevices.Count - nonWhitelistedDevices.Count}");
+                    HandleStatusUpdate($"Devices that can be removed: {nonWhitelistedDevices.Count}");
 
-                    var result = MessageBox.Show(
-                        $"Do you want to remove these {devices.Count} ghost devices?\n\n" +
-                        "Warning: Device removal cannot be undone.",
-                        "Confirm Device Removal",
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Warning);
-
-                    if (result == DialogResult.Yes)
+                    if (nonWhitelistedDevices.Count > 0)
                     {
-                        await cleaningService.RemoveGhostDevicesAsync(devices);
+                        var result = MessageBox.Show(
+                            $"Do you want to remove {nonWhitelistedDevices.Count} ghost devices?\n\n" +
+                            "Warning: Device removal cannot be undone.",
+                            "Confirm Device Removal",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Warning);
+
+                        if (result == DialogResult.Yes)
+                        {
+                            await cleaningService.RemoveGhostDevicesAsync(nonWhitelistedDevices);
+                        }
+                        else
+                        {
+                            HandleStatusUpdate("\r\nOperation cancelled. No devices were removed.");
+                        }
                     }
                     else
                     {
@@ -197,6 +235,7 @@ closeButton.Click += (s, e) =>
             {
                 isProcessing = false;
                 recleanButton.Enabled = true;
+                whitelistButton.Enabled = ghostDevices != null && ghostDevices.Count > 0;
                 closeButton.Enabled = true;
             }
         }
@@ -206,6 +245,28 @@ closeButton.Click += (s, e) =>
             var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
             var principal = new System.Security.Principal.WindowsPrincipal(identity);
             return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+        }
+
+        private void WhitelistButton_Click(object sender, EventArgs e)
+        {
+            if (ghostDevices != null && ghostDevices.Count > 0)
+            {
+                using (var whitelistForm = new WhitelistDevicesForm(ghostDevices))
+                {
+                    if (whitelistForm.ShowDialog() == DialogResult.OK)
+                    {
+                        HandleStatusUpdate("\r\nDevice whitelist has been updated.");
+                    }
+                }
+            }
+            else
+            {
+                MessageBox.Show(
+                    "No ghost devices found to whitelist. Please scan for devices first.",
+                    "No Devices Found",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
