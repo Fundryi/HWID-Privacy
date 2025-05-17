@@ -22,6 +22,8 @@
     - [7. **EDID / Monitor Spoofing**](#7-edid--monitor-spoofing)
     - [8. **Router (ARP Table Isolation)**](#8-router-arp-table-isolation)
     - [9. **TPM**](#9-tpm)
+      - [✅ fTPM Spoofing](#-ftpm-spoofing)
+      - [⚠️ dTPM (Not Recommended)](#️-dtpm-not-recommended)
   - [HWID Checker References](#hwid-checker-references)
   - [Contribution \& Updates](#contribution--updates)
     - [Credits](#credits)
@@ -161,16 +163,44 @@
 ---
 
 ### 9. **TPM**
+- **Warning**: dTPM is flagged by some anti-cheats (e.g., FaceIT).
+- **Current Recommendation**: Use **fTPM** for FaceIT/VGK. 
+  - Since 04.04.25, VGK enforces **fTPM** if you're flagged, dTPM won't work there anymore.
 
-- **Warning**: dTPM is flagged on certain anti-cheats(FaceIT).
-- **Current Recommendation**: Use fTPM for Faceit/VGK if available, VGK is forcing fTPM since 04.04.25(if you are flagged).
-- How to spoof fTPM (Proof of Concept):
-  - [fTPM Spoof by cycript](https://github.com/cycript/FTPM_POC)
-- **dTPM Steps** (if you still try it):
-  - Buy a TPM module (online/eBay).
-  - Attach it to your motherboard's TPM header.
-  - Disable onboard fTPM in BIOS, enable the discrete module.
-  - Reinstall Windows.
+#### ✅ fTPM Spoofing
+- **Concept** (complicated and might work on AMD):
+  - [fTPM Spoof PoC by cycript](https://github.com/cycript/FTPM_POC)
+- **Simpler Working Method**:
+  - **Requirements**:
+    - Intel platform
+    - Motherboard with:
+      - Dedicated USB Flash port (required)
+      - BIOS Flash Button
+        - Tested: MSI Z790
+        - Should work with all Intel boards since the 11th generation release, when the EK went offline.
+<details>
+  <summary>Intel Forum Confirmation</summary>
+
+  ![Intel Forum](./Files/fTPM/EK%20OFFLINE%20INTEL.png)
+
+</details>
+  &#8203;
+
+- **How it works**:
+  - Look for your manufacturer’s mobo manual for details
+  - Download and put the BIOS file on the stick and plug it into the correct USB slot
+    - Each manufacturer has their own way of flashing, many have YouTube videos with examples, please watch them or read their manuals to not mess it up :)
+  - Click the Flash Button and let it rewrite mobo sectors
+  - This regenerates the fTPM seed
+  - Results in a *new, unique fTPM serial* signed by EK
+- **Note: Doesn't work on AMD boards**
+
+#### ⚠️ dTPM (Not Recommended)
+- Buy a TPM module (e.g., from eBay)
+- Plug into your motherboard’s TPM header
+- In BIOS:
+  - Disable fTPM
+  - Enable dTPM
 
 ---
 
@@ -197,7 +227,7 @@
 - Storage guide/info: [Priventive.de](https://priventive.de/)
 - Network guide/info: `fA`, and "`the collective hive mind of the internet`"
 - EDID guide/info: `fA` (he did not invent the wheel, only gave me the info)
-- The broad base guide/structure was written by "`IthaLove`", [Old Guide Link](https://docs.google.com/document/u/0/d/e/2PACX-1vSjtQF1bSUxN57NXsYKS7haiPvYD68UXg77qinZ4ctcwx7073p9Jbp4W55LdP7vMgmjhZ12DsNHYwft/pub?pli=1)
+- The broad base guide/structure was written by a "`French`", [Old Guide Link](https://docs.google.com/document/u/0/d/e/2PACX-1vSjtQF1bSUxN57NXsYKS7haiPvYD68UXg77qinZ4ctcwx7073p9Jbp4W55LdP7vMgmjhZ12DsNHYwft/pub?pli=1)
 - `Fundryi` for pasting/collecting this info and putting it out for everyone in one place (☭ ͜ʖ ☭)
 
 meow
