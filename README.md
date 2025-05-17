@@ -168,13 +168,13 @@
   - Since 04.04.25, VGK enforces **fTPM** if you're flagged, dTPM won't work there anymore.
 
 #### ✅ fTPM Spoofing
-- **Concept** (complicated and might work on AMD):
+- **Concept** (complicated but even might on AMD):
   - [fTPM Spoof PoC by cycript](https://github.com/cycript/FTPM_POC)
 - **Simpler Working Method**:
   - **Requirements**:
     - Intel platform
     - Motherboard with:
-      - Dedicated USB Flash port (required)
+      - Dedicated USB Flash port
       - BIOS Flash Button
         - Tested: MSI Z790
         - Should work with all Intel boards since the 11th generation release, when the EK went offline.
@@ -206,7 +206,7 @@
 
 ## HWID Checker References
 
-- **UNIVERSAL**: [HWID Checker .exe](/HWIDChecker.exe)
+- **UNIVERSAL**: [HWIDChecker.exe](/HWIDChecker.exe)
 - **Windows 10**: [HWID Checker Script](/HWID-Checkers/Bats/HWID%20CHECK%20W10.bat)
 - **Windows 11**: [HWID Checker Script](/HWID-Checkers/Bats/HWID%20CHECK%20W11.bat)
 
