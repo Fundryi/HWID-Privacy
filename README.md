@@ -168,7 +168,7 @@
   - Since 04.04.25, VGK enforces **fTPM** if you're flagged, dTPM won't work there anymore.
 
 #### ✅ fTPM Spoofing
-- **Concept** (complicated but even might on AMD):
+- **Concept** (more complicated but might even more on AMD):
   - [fTPM Spoof PoC by cycript](https://github.com/cycript/FTPM_POC)
 - **Simpler Working Method**:
   - **Requirements**:
