@@ -36,16 +36,12 @@
 
 #### Serial Spoofing
 
-- **Tool**: **DMIEdit** (for AMI BIOS).
-- **Steps**:
-  - Change only 2–5 digits of your original serial.
-  - Avoid odd patterns (e.g., `SPOOFER-XXXX`).
-    - **Example**:
-      - Original: `08ZU9T1_NAVX2ZXV4F`
-      - Changed: `08ZU9T1_NABX12XZ4A`
-    - The prefix is usually part of a broader ID scheme. Make only reasonable adjustments.
-  - Reflash the BIOS.
-  - Clear CMOS when done.
+- **Complete Guide**: [Motherboard Spoofing Guide](/Files/MOBO-Spoofing/MOBO-Spoofing.md)
+- **Key Points**:
+  - Use **DMIEdit** (for AMI BIOS)
+  - Change only 2–5 digits of original serial
+  - Avoid odd patterns (e.g., `SPOOFER-XXXX`)
+  - Reflash BIOS and clear CMOS after changes
 
 #### RGB Control/USB Serials
 
