@@ -50,23 +50,25 @@ namespace HWIDChecker.Services
                 // Get current executable's SHA1 hash
                 var localFileSha = GetLocalFileSha();
                 
-                // Debug information (enabled for troubleshooting)
+                // Debug information (disabled for production - uncomment to troubleshoot)
+                /*
                 var message = $"Update Check Details (SHA1 Comparison):\n\n" +
                              $"Local File SHA1: {localFileSha}\n" +
                              $"GitHub File SHA1: {githubFileSha}\n" +
                              $"Hashes Match: {localFileSha.Equals(githubFileSha, StringComparison.OrdinalIgnoreCase)}\n\n";
+                */
                 
                 // Compare SHA1 hashes - if different, update is available
                 if (!localFileSha.Equals(githubFileSha, StringComparison.OrdinalIgnoreCase))
                 {
-                    message += "Result: Update available (SHA1 hashes differ)!";
-                    MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    // message += "Result: Update available (SHA1 hashes differ)!";
+                    // MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return await PerformUpdateAsync(githubFileSha);
                 }
                 else
                 {
-                    message += "Result: No update needed (SHA1 hashes match)";
-                    MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    // message += "Result: No update needed (SHA1 hashes match)";
+                    // MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return UpdateResult.NoUpdateAvailable;
                 }
             }
@@ -86,10 +88,20 @@ namespace HWIDChecker.Services
                 var response = await httpClient.GetAsync(GITHUB_RAW_URL);
                 response.EnsureSuccessStatusCode();
                 
+                // Debug: Check file size and last-modified header
+                var contentLength = response.Content.Headers.ContentLength;
+                var lastModified = response.Content.Headers.LastModified;
+                
                 using var contentStream = await response.Content.ReadAsStreamAsync();
                 using var sha1 = SHA1.Create();
                 var hash = sha1.ComputeHash(contentStream);
-                return Convert.ToHexString(hash).ToLowerInvariant();
+                var hashString = Convert.ToHexString(hash).ToLowerInvariant();
+                
+                // Debug output (temporary)
+                MessageBox.Show($"GitHub File Debug:\nSize: {contentLength} bytes\nLast Modified: {lastModified}\nSHA1: {hashString}",
+                              "GitHub File Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                
+                return hashString;
             }
             catch (Exception ex)
             {
@@ -103,10 +115,17 @@ namespace HWIDChecker.Services
             {
                 if (File.Exists(currentExecutablePath))
                 {
+                    var fileInfo = new FileInfo(currentExecutablePath);
                     using var sha1 = SHA1.Create();
                     using var stream = File.OpenRead(currentExecutablePath);
                     var hash = sha1.ComputeHash(stream);
-                    return Convert.ToHexString(hash).ToLowerInvariant();
+                    var hashString = Convert.ToHexString(hash).ToLowerInvariant();
+                    
+                    // Debug output (temporary)
+                    MessageBox.Show($"Local File Debug:\nPath: {currentExecutablePath}\nSize: {fileInfo.Length} bytes\nLast Modified: {fileInfo.LastWriteTime}\nSHA1: {hashString}",
+                                  "Local File Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    
+                    return hashString;
                 }
                 
                 return string.Empty;
