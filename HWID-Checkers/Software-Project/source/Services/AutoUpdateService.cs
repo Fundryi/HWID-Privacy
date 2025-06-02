@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -18,7 +19,7 @@ namespace HWIDChecker.Services
 
     public class AutoUpdateService
     {
-        private const string GITHUB_API_COMMITS_URL = "https://api.github.com/repos/Fundryi/HWID-Privacy/commits";
+        private const string GITHUB_API_CONTENTS_URL = "https://api.github.com/repos/Fundryi/HWID-Privacy/contents/HWIDChecker.exe";
         private const string GITHUB_RAW_URL = "https://github.com/Fundryi/HWID-Privacy/raw/main/HWIDChecker.exe";
         
         private readonly HttpClient httpClient;
@@ -39,35 +40,34 @@ namespace HWIDChecker.Services
         {
             try
             {
-                // Get the latest commit info that modified HWIDChecker.exe
-                var latestCommitInfo = await GetLatestCommitForFileAsync();
-                if (latestCommitInfo == null)
+                // Get the GitHub file SHA hash
+                var githubFileSha = await GetGitHubFileShaAsync();
+                if (string.IsNullOrEmpty(githubFileSha))
                 {
                     return UpdateResult.NoUpdateAvailable;
                 }
 
-                // Get current executable's last write time
-                var currentFileTime = GetCurrentExecutableTime();
+                // Get current executable's SHA hash
+                var localFileSha = GetLocalFileSha();
                 
                 // Debug information (disabled for production - uncomment to troubleshoot)
                 /*
-                var message = $"Update Check Details:\n\n" +
-                             $"Local File Time: {currentFileTime:yyyy-MM-dd HH:mm:ss} UTC (Kind: {currentFileTime.Kind})\n" +
-                             $"GitHub Commit Time: {latestCommitInfo.CommitDate:yyyy-MM-dd HH:mm:ss} UTC (Kind: {latestCommitInfo.CommitDate.Kind})\n" +
-                             $"GitHub Commit SHA: {latestCommitInfo.Sha[..8]}...\n" +
-                             $"Time Difference: {(latestCommitInfo.CommitDate - currentFileTime).TotalMinutes:F1} minutes\n\n";
+                var message = $"Update Check Details (Hash Comparison):\n\n" +
+                             $"Local File SHA: {localFileSha}\n" +
+                             $"GitHub File SHA: {githubFileSha}\n" +
+                             $"Hashes Match: {localFileSha.Equals(githubFileSha, StringComparison.OrdinalIgnoreCase)}\n\n";
                 */
                 
-                // Compare times - if GitHub has a newer commit for the exe file, update
-                if (latestCommitInfo.CommitDate > currentFileTime)
+                // Compare hashes - if different, update is available
+                if (!localFileSha.Equals(githubFileSha, StringComparison.OrdinalIgnoreCase))
                 {
-                    // message += "Result: Update available!";
+                    // message += "Result: Update available (hashes differ)!";
                     // MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return await PerformUpdateAsync(latestCommitInfo.Sha, latestCommitInfo.CommitDate);
+                    return await PerformUpdateAsync(githubFileSha);
                 }
                 else
                 {
-                    // message += "Result: No update needed (local version is same or newer)";
+                    // message += "Result: No update needed (hashes match)";
                     // MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return UpdateResult.NoUpdateAvailable;
                 }
@@ -80,80 +80,48 @@ namespace HWIDChecker.Services
             }
         }
 
-        private async Task<CommitInfo> GetLatestCommitForFileAsync()
+        private async Task<string> GetGitHubFileShaAsync()
         {
             try
             {
-                // Get commits that modified HWIDChecker.exe
-                var url = $"{GITHUB_API_COMMITS_URL}?path=HWIDChecker.exe&per_page=1";
-                var response = await httpClient.GetStringAsync(url);
+                // Get file info from GitHub Contents API (no auth required for public repos)
+                var response = await httpClient.GetStringAsync(GITHUB_API_CONTENTS_URL);
                 using var document = JsonDocument.Parse(response);
                 
-                if (document.RootElement.GetArrayLength() > 0)
+                if (document.RootElement.TryGetProperty("sha", out var shaElement))
                 {
-                    var latestCommit = document.RootElement[0];
-                    
-                    if (latestCommit.TryGetProperty("sha", out var shaElement) &&
-                        latestCommit.TryGetProperty("commit", out var commitElement) &&
-                        commitElement.TryGetProperty("committer", out var committerElement) &&
-                        committerElement.TryGetProperty("date", out var dateElement))
-                    {
-                        var sha = shaElement.GetString();
-                        var dateString = dateElement.GetString();
-                        
-                        if (sha != null && dateString != null)
-                        {
-                            // Parse as UTC explicitly to avoid timezone issues
-                            if (DateTime.TryParse(dateString, null, System.Globalization.DateTimeStyles.RoundtripKind, out var commitDate))
-                            {
-                                // Ensure the datetime is treated as UTC
-                                if (commitDate.Kind != DateTimeKind.Utc)
-                                {
-                                    commitDate = DateTime.SpecifyKind(commitDate, DateTimeKind.Utc);
-                                }
-                                
-                                return new CommitInfo
-                                {
-                                    Sha = sha,
-                                    CommitDate = commitDate
-                                };
-                            }
-                        }
-                    }
+                    return shaElement.GetString() ?? string.Empty;
                 }
                 
-                return null;
+                return string.Empty;
             }
             catch (Exception ex)
             {
-                throw new Exception($"Failed to get latest commit info for HWIDChecker.exe: {ex.Message}");
+                throw new Exception($"Failed to get GitHub file SHA for HWIDChecker.exe: {ex.Message}");
             }
         }
 
-        private DateTime GetCurrentExecutableTime()
+        private string GetLocalFileSha()
         {
             try
             {
                 if (File.Exists(currentExecutablePath))
                 {
-                    return File.GetLastWriteTimeUtc(currentExecutablePath);
+                    using var sha1 = SHA1.Create();
+                    using var stream = File.OpenRead(currentExecutablePath);
+                    var hash = sha1.ComputeHash(stream);
+                    return Convert.ToHexString(hash).ToLowerInvariant();
                 }
                 
-                return DateTime.MinValue;
+                return string.Empty;
             }
             catch
             {
-                return DateTime.MinValue;
+                return string.Empty;
             }
         }
 
-        private class CommitInfo
-        {
-            public string Sha { get; set; } = string.Empty;
-            public DateTime CommitDate { get; set; }
-        }
-
-        private async Task<UpdateResult> PerformUpdateAsync(string newCommitSha, DateTime commitDate)
+        private async Task<UpdateResult> PerformUpdateAsync(string newFileSha)
         {
             try
             {
