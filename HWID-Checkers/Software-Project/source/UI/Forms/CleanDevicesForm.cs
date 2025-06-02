@@ -62,7 +62,7 @@ namespace HWIDChecker.UI.Forms
 
         private void InitializeComponents()
         {
-            this.Text = "System Cleaning";
+            this.Text = "Device Cleaning";
             this.Width = 800;
             this.Height = 600;
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -158,11 +158,8 @@ closeButton = new Button
                 outputTextBox.Clear();
                 ghostDevices = null;
 
-                // First clean event logs
-                await cleaningService.CleanLogsAsync();
-
-                // Then scan for ghost devices
-                HandleStatusUpdate("\r\nScanning for non-present (ghost) devices...\r\n");
+                // Scan for ghost devices
+                HandleStatusUpdate("Scanning for non-present (ghost) devices...\r\n");
                 ghostDevices = await cleaningService.ScanForGhostDevicesAsync();
 
                 if (ghostDevices.Count > 0)
@@ -223,7 +220,7 @@ closeButton = new Button
                     HandleStatusUpdate("No non-present devices were found.");
                 }
 
-                HandleStatusUpdate("\r\nSystem cleaning process completed.");
+                HandleStatusUpdate("\r\nDevice cleaning process completed.");
             }
             catch (Exception ex)
             {

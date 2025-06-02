@@ -26,70 +26,10 @@ namespace HWIDChecker.UI.Forms
         {
             layout.RefreshButton.Click += async (s, e) => await loadHardwareInfo();
             layout.ExportButton.Click += ExportButton_Click;
-            layout.CleanButton.Click += CleanButton_Click;
-            layout.CompareButton.Click += CompareButton_Click;
+            layout.CleanDevicesButton.Click += CleanDevicesButton_Click;
+            layout.CleanLogsButton.Click += CleanLogsButton_Click;
         }
 
-        private void CompareButton_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                var exportFiles = Directory.GetFiles(Application.StartupPath, "HWID-EXPORT-*.txt")
-                    .OrderByDescending(f => f)
-                    .ToList();
-
-                if (exportFiles.Count == 0)
-                {
-                    MessageBox.Show("No exported configurations found. Please export your current configuration first.",
-                        "Compare", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
-                }
-
-                var compareForm = CompareForm.CreateCompareWithCurrent(layout.OutputTextBox.Text, exportFiles);
-                if (compareForm != null)
-                {
-                    // Get the screen that contains the main form
-                    Screen screen = Screen.FromControl(mainForm);
-                    var screenBounds = screen.WorkingArea;
-
-                    // Initialize form properties before showing
-                    compareForm.StartPosition = FormStartPosition.Manual;
-                    compareForm.Opacity = 0;
-                    compareForm.Location = new Point(
-                        screenBounds.Left + ((screenBounds.Width - compareForm.Width) / 2),
-                        screenBounds.Top + ((screenBounds.Height - compareForm.Height) / 2)
-                    );
-
-                    // Setup form closing handler before showing
-                    compareForm.FormClosed += (s, args) => mainForm.Show();
-
-                    // Hide main form and show compare form
-                    mainForm.Hide();
-                    compareForm.Show();
-
-                    // Create smooth fade-in effect
-                    var fadeTimer = new System.Windows.Forms.Timer { Interval = 10 };
-                    fadeTimer.Tick += (s, e) =>
-                    {
-                        if (compareForm.Opacity < 1)
-                        {
-                            compareForm.Opacity += 0.1;
-                        }
-                        else
-                        {
-                            fadeTimer.Stop();
-                            fadeTimer.Dispose();
-                        }
-                    };
-                    fadeTimer.Start();
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error opening compare window: {ex.Message}",
-                    "Compare Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
 
         private void ExportButton_Click(object sender, EventArgs e)
         {
@@ -106,10 +46,16 @@ namespace HWIDChecker.UI.Forms
             }
         }
 
-        private void CleanButton_Click(object sender, EventArgs e)
+        private void CleanDevicesButton_Click(object sender, EventArgs e)
         {
             var cleanForm = new CleanDevicesForm();
             cleanForm.ShowDialog(mainForm);
+        }
+
+        private void CleanLogsButton_Click(object sender, EventArgs e)
+        {
+            var cleanLogsForm = new CleanLogsForm();
+            cleanLogsForm.ShowDialog(mainForm);
         }
 
         private bool IsAdministrator()
