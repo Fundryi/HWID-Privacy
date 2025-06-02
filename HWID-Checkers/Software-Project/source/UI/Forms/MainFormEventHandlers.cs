@@ -5,6 +5,7 @@ using HWIDChecker.Forms;
 using HWIDChecker.Services;
 using HWIDChecker.UI.Components;
 using HWIDChecker.Hardware;
+using static HWIDChecker.Services.UpdateResult;
 
 namespace HWIDChecker.UI.Forms
 {
@@ -73,14 +74,27 @@ namespace HWIDChecker.UI.Forms
 
             try
             {
-                var updateAvailable = await autoUpdateService.CheckForUpdatesAsync();
+                var updateResult = await autoUpdateService.CheckForUpdatesAsync();
                 
-                if (!updateAvailable)
+                switch (updateResult)
                 {
-                    MessageBox.Show("You are already running the latest version.", "No Updates Available",
-                                   MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    case UpdateResult.NoUpdateAvailable:
+                        MessageBox.Show("You are already running the latest version.", "No Updates Available",
+                                       MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        break;
+                        
+                    case UpdateResult.UserDeclined:
+                        // User chose not to update - don't show any message
+                        break;
+                        
+                    case UpdateResult.UpdateCompleted:
+                        // App will restart automatically - this case shouldn't be reached
+                        break;
+                        
+                    case UpdateResult.Error:
+                        // Error message already shown in AutoUpdateService
+                        break;
                 }
-                // If update was available and downloaded, the app will restart automatically
             }
             catch (Exception ex)
             {
