@@ -170,11 +170,11 @@ namespace HWIDChecker.Services
                     return UpdateResult.UserDeclined;
                 }
 
-                // Show progress
+                // Show progress form with progress bar
                 var progressForm = new Form
                 {
-                    Text = "Updating...",
-                    Size = new System.Drawing.Size(300, 100),
+                    Text = "Updating HWID Checker",
+                    Size = new System.Drawing.Size(400, 150),
                     StartPosition = FormStartPosition.CenterScreen,
                     FormBorderStyle = FormBorderStyle.FixedDialog,
                     MaximizeBox = false,
@@ -183,33 +183,89 @@ namespace HWIDChecker.Services
 
                 var progressLabel = new Label
                 {
-                    Text = "Downloading update...",
-                    Dock = DockStyle.Fill,
-                    TextAlign = System.Drawing.ContentAlignment.MiddleCenter
+                    Text = "Preparing download...",
+                    Location = new System.Drawing.Point(10, 20),
+                    Size = new System.Drawing.Size(360, 20),
+                    TextAlign = System.Drawing.ContentAlignment.MiddleLeft
                 };
 
-                progressForm.Controls.Add(progressLabel);
+                var progressBar = new ProgressBar
+                {
+                    Location = new System.Drawing.Point(10, 50),
+                    Size = new System.Drawing.Size(360, 25),
+                    Style = ProgressBarStyle.Continuous,
+                    Minimum = 0,
+                    Maximum = 100,
+                    Value = 0
+                };
+
+                var detailLabel = new Label
+                {
+                    Text = "",
+                    Location = new System.Drawing.Point(10, 85),
+                    Size = new System.Drawing.Size(360, 20),
+                    TextAlign = System.Drawing.ContentAlignment.MiddleLeft,
+                    Font = new System.Drawing.Font("Segoe UI", 8)
+                };
+
+                progressForm.Controls.AddRange(new Control[] { progressLabel, progressBar, detailLabel });
                 progressForm.Show();
                 Application.DoEvents();
 
-                // Download the new executable
+                // Download the new executable with progress tracking
                 var tempPath = Path.Combine(Path.GetTempPath(), "HWIDChecker_update.exe");
                 
                 progressLabel.Text = "Downloading new version...";
+                progressBar.Value = 0;
                 Application.DoEvents();
                 
-                using (var response = await httpClient.GetAsync(GITHUB_RAW_URL))
+                using (var response = await httpClient.GetAsync(GITHUB_RAW_URL, HttpCompletionOption.ResponseHeadersRead))
                 {
                     response.EnsureSuccessStatusCode();
                     
+                    var totalBytes = response.Content.Headers.ContentLength ?? 0;
+                    var downloadedBytes = 0L;
+                    
+                    using (var contentStream = await response.Content.ReadAsStreamAsync())
                     using (var fileStream = new FileStream(tempPath, FileMode.Create))
                     {
-                        await response.Content.CopyToAsync(fileStream);
+                        var buffer = new byte[8192];
+                        int bytesRead;
+                        
+                        while ((bytesRead = await contentStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                        {
+                            await fileStream.WriteAsync(buffer, 0, bytesRead);
+                            downloadedBytes += bytesRead;
+                            
+                            if (totalBytes > 0)
+                            {
+                                var progressPercentage = (int)((downloadedBytes * 100) / totalBytes);
+                                progressBar.Value = Math.Min(progressPercentage, 100);
+                                
+                                var downloadedMB = downloadedBytes / 1024.0 / 1024.0;
+                                var totalMB = totalBytes / 1024.0 / 1024.0;
+                                detailLabel.Text = $"{downloadedMB:F1} MB / {totalMB:F1} MB ({progressPercentage}%)";
+                            }
+                            else
+                            {
+                                // If content length is unknown, show a spinning progress
+                                progressBar.Style = ProgressBarStyle.Marquee;
+                                var downloadedMB = downloadedBytes / 1024.0 / 1024.0;
+                                detailLabel.Text = $"Downloaded: {downloadedMB:F1} MB";
+                            }
+                            
+                            Application.DoEvents();
+                        }
                     }
                 }
 
+                progressBar.Value = 100;
                 progressLabel.Text = "Preparing to restart...";
+                detailLabel.Text = "Download completed successfully";
                 Application.DoEvents();
+                
+                // Small delay to show completion
+                await Task.Delay(500);
 
                 // Create batch file for replacement and restart
                 var batchPath = Path.Combine(Path.GetTempPath(), "update_hwid_checker.bat");
