@@ -14,12 +14,15 @@ namespace HWIDChecker.UI.Forms
         private readonly MainFormLayout layout;
         private readonly FileExportService fileExportService;
         private readonly HardwareInfoManager hardwareInfoManager;
-        public MainFormEventHandlers(MainForm mainForm, MainFormLayout layout, FileExportService fileExportService, HardwareInfoManager hardwareInfoManager)
+        private readonly AutoUpdateService autoUpdateService;
+        
+        public MainFormEventHandlers(MainForm mainForm, MainFormLayout layout, FileExportService fileExportService, HardwareInfoManager hardwareInfoManager, AutoUpdateService autoUpdateService)
         {
             this.mainForm = mainForm;
             this.layout = layout;
             this.fileExportService = fileExportService;
             this.hardwareInfoManager = hardwareInfoManager;
+            this.autoUpdateService = autoUpdateService;
         }
 
         public void InitializeEventHandlers(Func<Task> loadHardwareInfo)
@@ -28,6 +31,7 @@ namespace HWIDChecker.UI.Forms
             layout.ExportButton.Click += ExportButton_Click;
             layout.CleanDevicesButton.Click += CleanDevicesButton_Click;
             layout.CleanLogsButton.Click += CleanLogsButton_Click;
+            layout.CheckUpdatesButton.Click += CheckUpdatesButton_Click;
         }
 
 
@@ -56,6 +60,41 @@ namespace HWIDChecker.UI.Forms
         {
             var cleanLogsForm = new CleanLogsForm();
             cleanLogsForm.ShowDialog(mainForm);
+        }
+
+        private async void CheckUpdatesButton_Click(object sender, EventArgs e)
+        {
+            var button = sender as Button;
+            if (button != null)
+            {
+                button.Enabled = false;
+                button.Text = "Checking...";
+            }
+
+            try
+            {
+                var updateAvailable = await autoUpdateService.CheckForUpdatesAsync();
+                
+                if (!updateAvailable)
+                {
+                    MessageBox.Show("You are already running the latest version.", "No Updates Available",
+                                   MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                // If update was available and downloaded, the app will restart automatically
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error checking for updates: {ex.Message}", "Update Check Failed",
+                               MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                if (button != null)
+                {
+                    button.Enabled = true;
+                    button.Text = "Check Updates";
+                }
+            }
         }
 
         private bool IsAdministrator()

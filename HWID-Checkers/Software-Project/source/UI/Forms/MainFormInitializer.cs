@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using HWIDChecker.Hardware;
 using HWIDChecker.Services;
@@ -13,6 +14,7 @@ namespace HWIDChecker.UI.Forms
         private readonly MainFormLoader loader;
         private readonly MainFormEventHandlers eventHandlers;
         private readonly HardwareInfoManager hardwareInfoManager;
+        private readonly AutoUpdateService autoUpdateService;
 
         public MainFormInitializer(MainForm mainForm)
         {
@@ -22,8 +24,9 @@ namespace HWIDChecker.UI.Forms
             this.hardwareInfoManager = new HardwareInfoManager();
             var fileExportService = new FileExportService(Application.StartupPath);
 
+            this.autoUpdateService = new AutoUpdateService();
             this.loader = new MainFormLoader(mainForm, layout, hardwareInfoManager);
-            this.eventHandlers = new MainFormEventHandlers(mainForm, layout, fileExportService, hardwareInfoManager);
+            this.eventHandlers = new MainFormEventHandlers(mainForm, layout, fileExportService, hardwareInfoManager, autoUpdateService);
         }
 
         public void Initialize()
