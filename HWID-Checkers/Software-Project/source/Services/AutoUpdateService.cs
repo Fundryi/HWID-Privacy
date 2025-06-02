@@ -40,35 +40,33 @@ namespace HWIDChecker.Services
         {
             try
             {
-                // Get the GitHub file SHA hash
-                var githubFileSha = await GetGitHubFileShaAsync();
+                // Get the GitHub file SHA1 hash by downloading content
+                var githubFileSha = await GetGitHubFileSha1Async();
                 if (string.IsNullOrEmpty(githubFileSha))
                 {
                     return UpdateResult.NoUpdateAvailable;
                 }
 
-                // Get current executable's SHA hash
+                // Get current executable's SHA1 hash
                 var localFileSha = GetLocalFileSha();
                 
-                // Debug information (disabled for production - uncomment to troubleshoot)
-                /*
-                var message = $"Update Check Details (Hash Comparison):\n\n" +
-                             $"Local File SHA: {localFileSha}\n" +
-                             $"GitHub File SHA: {githubFileSha}\n" +
+                // Debug information (enabled for troubleshooting)
+                var message = $"Update Check Details (SHA1 Comparison):\n\n" +
+                             $"Local File SHA1: {localFileSha}\n" +
+                             $"GitHub File SHA1: {githubFileSha}\n" +
                              $"Hashes Match: {localFileSha.Equals(githubFileSha, StringComparison.OrdinalIgnoreCase)}\n\n";
-                */
                 
-                // Compare hashes - if different, update is available
+                // Compare SHA1 hashes - if different, update is available
                 if (!localFileSha.Equals(githubFileSha, StringComparison.OrdinalIgnoreCase))
                 {
-                    // message += "Result: Update available (hashes differ)!";
-                    // MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    message += "Result: Update available (SHA1 hashes differ)!";
+                    MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return await PerformUpdateAsync(githubFileSha);
                 }
                 else
                 {
-                    // message += "Result: No update needed (hashes match)";
-                    // MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    message += "Result: No update needed (SHA1 hashes match)";
+                    MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return UpdateResult.NoUpdateAvailable;
                 }
             }
@@ -80,24 +78,22 @@ namespace HWIDChecker.Services
             }
         }
 
-        private async Task<string> GetGitHubFileShaAsync()
+        private async Task<string> GetGitHubFileSha1Async()
         {
             try
             {
-                // Get file info from GitHub Contents API (no auth required for public repos)
-                var response = await httpClient.GetStringAsync(GITHUB_API_CONTENTS_URL);
-                using var document = JsonDocument.Parse(response);
+                // Download the file content from GitHub and compute SHA1 hash
+                var response = await httpClient.GetAsync(GITHUB_RAW_URL);
+                response.EnsureSuccessStatusCode();
                 
-                if (document.RootElement.TryGetProperty("sha", out var shaElement))
-                {
-                    return shaElement.GetString() ?? string.Empty;
-                }
-                
-                return string.Empty;
+                using var contentStream = await response.Content.ReadAsStreamAsync();
+                using var sha1 = SHA1.Create();
+                var hash = sha1.ComputeHash(contentStream);
+                return Convert.ToHexString(hash).ToLowerInvariant();
             }
             catch (Exception ex)
             {
-                throw new Exception($"Failed to get GitHub file SHA for HWIDChecker.exe: {ex.Message}");
+                throw new Exception($"Failed to get GitHub file SHA1 for HWIDChecker.exe: {ex.Message}");
             }
         }
 
