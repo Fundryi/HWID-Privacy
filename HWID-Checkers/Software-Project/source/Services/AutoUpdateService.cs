@@ -72,7 +72,7 @@ namespace HWIDChecker.Services
             }
         }
 
-        private async Task<CommitInfo?> GetLatestCommitForFileAsync()
+        private async Task<CommitInfo> GetLatestCommitForFileAsync()
         {
             try
             {
