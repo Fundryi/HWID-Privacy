@@ -31,6 +31,15 @@ namespace HWIDChecker.Services
             httpClient = new HttpClient();
             httpClient.DefaultRequestHeaders.Add("User-Agent", "HWID-Checker-AutoUpdater");
             
+            // Add cache-busting headers to ensure fresh content
+            httpClient.DefaultRequestHeaders.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue
+            {
+                NoCache = true,
+                NoStore = true,
+                MustRevalidate = true
+            };
+            httpClient.DefaultRequestHeaders.Add("Pragma", "no-cache");
+            
             currentDirectory = Application.StartupPath;
             currentExecutablePath = Process.GetCurrentProcess().MainModule?.FileName ??
                                    Path.Combine(currentDirectory, "HWIDChecker.exe");
@@ -84,8 +93,11 @@ namespace HWIDChecker.Services
         {
             try
             {
+                // Add timestamp to URL to bypass caching
+                var cacheBustingUrl = $"{GITHUB_RAW_URL}?cb={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+                
                 // Download the file content from GitHub and compute SHA1 hash
-                var response = await httpClient.GetAsync(GITHUB_RAW_URL);
+                var response = await httpClient.GetAsync(cacheBustingUrl);
                 response.EnsureSuccessStatusCode();
                 
                 using var contentStream = await response.Content.ReadAsStreamAsync();
@@ -185,7 +197,9 @@ namespace HWIDChecker.Services
                 progressBar.Value = 0;
                 Application.DoEvents();
                 
-                using (var response = await httpClient.GetAsync(GITHUB_RAW_URL, HttpCompletionOption.ResponseHeadersRead))
+                // Use cache-busting URL for download as well
+                var cacheBustingUrl = $"{GITHUB_RAW_URL}?cb={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+                using (var response = await httpClient.GetAsync(cacheBustingUrl, HttpCompletionOption.ResponseHeadersRead))
                 {
                     response.EnsureSuccessStatusCode();
                     
