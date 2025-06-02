@@ -10,8 +10,8 @@ namespace HWIDChecker.UI.Forms
         public TextBox OutputTextBox { get; private set; }
         public Button RefreshButton { get; private set; }
         public Button ExportButton { get; private set; }
-        public Button CleanButton { get; private set; }
-        public Button CompareButton { get; private set; }
+        public Button CleanDevicesButton { get; private set; }
+        public Button CleanLogsButton { get; private set; }
         public Label LoadingLabel { get; private set; }
 
         [DllImport("user32.dll")]
@@ -119,23 +119,23 @@ namespace HWIDChecker.UI.Forms
             };
             Buttons.ApplyStyle(ExportButton);
 
-            CleanButton = new Button
+            CleanDevicesButton = new Button
             {
-                Text = "Clean Log/Devices",
+                Text = "Clean Devices",
                 Height = 20,
                 AutoSize = true,
-                MinimumSize = new Size(120, 35)
+                MinimumSize = new Size(100, 35)
             };
-            Buttons.ApplyStyle(CleanButton);
+            Buttons.ApplyStyle(CleanDevicesButton);
 
-            CompareButton = new Button
+            CleanLogsButton = new Button
             {
-                Text = "Compare",
+                Text = "Clean Logs",
                 Height = 20,
                 AutoSize = true,
-                MinimumSize = new Size(120, 35)
+                MinimumSize = new Size(100, 35)
             };
-            Buttons.ApplyStyle(CompareButton);
+            Buttons.ApplyStyle(CleanLogsButton);
         }
 
         private FlowLayoutPanel CreateButtonPanel(int formWidth)
@@ -163,13 +163,13 @@ namespace HWIDChecker.UI.Forms
             // Set consistent margins for all buttons
             RefreshButton.Margin = new Padding(5, 5, 5, 5);
             ExportButton.Margin = new Padding(5, 5, 5, 5);
-            CleanButton.Margin = new Padding(5, 5, 5, 5);
-            CompareButton.Margin = new Padding(5, 5, 5, 5);
+            CleanDevicesButton.Margin = new Padding(5, 5, 5, 5);
+            CleanLogsButton.Margin = new Padding(5, 5, 5, 5);
 
-            centeredButtonPanel.Controls.AddRange(new Control[] { RefreshButton, ExportButton, CleanButton, CompareButton });
+            centeredButtonPanel.Controls.AddRange(new Control[] { RefreshButton, ExportButton, CleanDevicesButton, CleanLogsButton });
 
             // Calculate center position for buttons
-            int totalCenteredWidth = RefreshButton.Width + ExportButton.Width + CleanButton.Width + CompareButton.Width + 30;
+            int totalCenteredWidth = RefreshButton.Width + ExportButton.Width + CleanDevicesButton.Width + CleanLogsButton.Width + 30;
             int startX = (buttonPanel.Width - totalCenteredWidth) / 2;
             centeredButtonPanel.Margin = new Padding(Math.Max(0, startX), 10, 0, 10);
 
