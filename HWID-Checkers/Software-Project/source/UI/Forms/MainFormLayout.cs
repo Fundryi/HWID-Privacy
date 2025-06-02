@@ -12,6 +12,7 @@ namespace HWIDChecker.UI.Forms
         public Button ExportButton { get; private set; }
         public Button CleanDevicesButton { get; private set; }
         public Button CleanLogsButton { get; private set; }
+        public Button CheckUpdatesButton { get; private set; }
         public Label LoadingLabel { get; private set; }
 
         [DllImport("user32.dll")]
@@ -136,6 +137,15 @@ namespace HWIDChecker.UI.Forms
                 MinimumSize = new Size(100, 35)
             };
             Buttons.ApplyStyle(CleanLogsButton);
+
+            CheckUpdatesButton = new Button
+            {
+                Text = "Check Updates",
+                Height = 20,
+                AutoSize = true,
+                MinimumSize = new Size(110, 35)
+            };
+            Buttons.ApplyStyle(CheckUpdatesButton);
         }
 
         private FlowLayoutPanel CreateButtonPanel(int formWidth)
@@ -165,11 +175,12 @@ namespace HWIDChecker.UI.Forms
             ExportButton.Margin = new Padding(5, 5, 5, 5);
             CleanDevicesButton.Margin = new Padding(5, 5, 5, 5);
             CleanLogsButton.Margin = new Padding(5, 5, 5, 5);
+            CheckUpdatesButton.Margin = new Padding(5, 5, 5, 5);
 
-            centeredButtonPanel.Controls.AddRange(new Control[] { RefreshButton, ExportButton, CleanDevicesButton, CleanLogsButton });
+            centeredButtonPanel.Controls.AddRange(new Control[] { RefreshButton, ExportButton, CleanDevicesButton, CleanLogsButton, CheckUpdatesButton });
 
             // Calculate center position for buttons
-            int totalCenteredWidth = RefreshButton.Width + ExportButton.Width + CleanDevicesButton.Width + CleanLogsButton.Width + 30;
+            int totalCenteredWidth = RefreshButton.Width + ExportButton.Width + CleanDevicesButton.Width + CleanLogsButton.Width + CheckUpdatesButton.Width + 35;
             int startX = (buttonPanel.Width - totalCenteredWidth) / 2;
             centeredButtonPanel.Margin = new Padding(Math.Max(0, startX), 10, 0, 10);
 
