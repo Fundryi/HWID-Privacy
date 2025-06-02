@@ -194,14 +194,25 @@ closeButton = new Button
 
                     if (nonWhitelistedDevices.Count > 0)
                     {
-                        var result = MessageBox.Show(
-                            $"Do you want to remove {nonWhitelistedDevices.Count} ghost devices?\n\n" +
-                            "Warning: Device removal cannot be undone.",
-                            "Confirm Device Removal",
-                            MessageBoxButtons.YesNo,
-                            MessageBoxIcon.Warning);
+                        var result = DeviceRemovalConfirmationForm.ShowConfirmation(this, nonWhitelistedDevices.Count);
 
-                        if (result == DialogResult.Yes)
+                        if (result == DeviceRemovalConfirmationForm.ConfirmationResult.YesAutoClose)
+                        {
+                            await cleaningService.RemoveGhostDevicesAsync(nonWhitelistedDevices);
+                            HandleStatusUpdate("\r\nDevice cleaning process completed.");
+                            
+                            // Auto-close after 1 second
+                            var closeTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+                            closeTimer.Tick += (s, e) =>
+                            {
+                                closeTimer.Stop();
+                                closeTimer.Dispose();
+                                this.Close();
+                            };
+                            closeTimer.Start();
+                            return; // Exit early to avoid the completion message below
+                        }
+                        else if (result == DeviceRemovalConfirmationForm.ConfirmationResult.Yes)
                         {
                             await cleaningService.RemoveGhostDevicesAsync(nonWhitelistedDevices);
                         }
