@@ -8,6 +8,14 @@ using System.Windows.Forms;
 
 namespace HWIDChecker.Services
 {
+    public enum UpdateResult
+    {
+        NoUpdateAvailable,
+        UpdateCompleted,
+        UserDeclined,
+        Error
+    }
+
     public class AutoUpdateService
     {
         private const string GITHUB_API_COMMITS_URL = "https://api.github.com/repos/Fundryi/HWID-Privacy/commits";
@@ -27,7 +35,7 @@ namespace HWIDChecker.Services
                                    Path.Combine(currentDirectory, "HWIDChecker.exe");
         }
 
-        public async Task<bool> CheckForUpdatesAsync()
+        public async Task<UpdateResult> CheckForUpdatesAsync()
         {
             try
             {
@@ -35,7 +43,7 @@ namespace HWIDChecker.Services
                 var latestCommitInfo = await GetLatestCommitForFileAsync();
                 if (latestCommitInfo == null)
                 {
-                    return false;
+                    return UpdateResult.NoUpdateAvailable;
                 }
 
                 // Get current executable's last write time
@@ -61,14 +69,14 @@ namespace HWIDChecker.Services
                 {
                     // message += "Result: No update needed (local version is same or newer)";
                     // MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return false;
+                    return UpdateResult.NoUpdateAvailable;
                 }
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Error checking for updates: {ex.Message}", "Update Check Failed",
                                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return false;
+                return UpdateResult.Error;
             }
         }
 
@@ -145,7 +153,7 @@ namespace HWIDChecker.Services
             public DateTime CommitDate { get; set; }
         }
 
-        private async Task<bool> PerformUpdateAsync(string newCommitSha, DateTime commitDate)
+        private async Task<UpdateResult> PerformUpdateAsync(string newCommitSha, DateTime commitDate)
         {
             try
             {
@@ -159,7 +167,7 @@ namespace HWIDChecker.Services
 
                 if (result != DialogResult.Yes)
                 {
-                    return false;
+                    return UpdateResult.UserDeclined;
                 }
 
                 // Show progress
@@ -232,13 +240,13 @@ del ""{batchPath}""
                 Application.Exit();
                 Environment.Exit(0);
 
-                return true;
+                return UpdateResult.UpdateCompleted;
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Update failed: {ex.Message}", "Update Error", 
                                MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return false;
+                return UpdateResult.Error;
             }
         }
 
