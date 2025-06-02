@@ -88,20 +88,10 @@ namespace HWIDChecker.Services
                 var response = await httpClient.GetAsync(GITHUB_RAW_URL);
                 response.EnsureSuccessStatusCode();
                 
-                // Debug: Check file size and last-modified header
-                var contentLength = response.Content.Headers.ContentLength;
-                var lastModified = response.Content.Headers.LastModified;
-                
                 using var contentStream = await response.Content.ReadAsStreamAsync();
                 using var sha1 = SHA1.Create();
                 var hash = sha1.ComputeHash(contentStream);
-                var hashString = Convert.ToHexString(hash).ToLowerInvariant();
-                
-                // Debug output (temporary)
-                MessageBox.Show($"GitHub File Debug:\nSize: {contentLength} bytes\nLast Modified: {lastModified}\nSHA1: {hashString}",
-                              "GitHub File Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                
-                return hashString;
+                return Convert.ToHexString(hash).ToLowerInvariant();
             }
             catch (Exception ex)
             {
@@ -115,17 +105,10 @@ namespace HWIDChecker.Services
             {
                 if (File.Exists(currentExecutablePath))
                 {
-                    var fileInfo = new FileInfo(currentExecutablePath);
                     using var sha1 = SHA1.Create();
                     using var stream = File.OpenRead(currentExecutablePath);
                     var hash = sha1.ComputeHash(stream);
-                    var hashString = Convert.ToHexString(hash).ToLowerInvariant();
-                    
-                    // Debug output (temporary)
-                    MessageBox.Show($"Local File Debug:\nPath: {currentExecutablePath}\nSize: {fileInfo.Length} bytes\nLast Modified: {fileInfo.LastWriteTime}\nSHA1: {hashString}",
-                                  "Local File Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    
-                    return hashString;
+                    return Convert.ToHexString(hash).ToLowerInvariant();
                 }
                 
                 return string.Empty;
