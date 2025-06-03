@@ -33,6 +33,7 @@ namespace HWIDChecker.UI.Forms
             layout.CleanDevicesButton.Click += CleanDevicesButton_Click;
             layout.CleanLogsButton.Click += CleanLogsButton_Click;
             layout.CheckUpdatesButton.Click += CheckUpdatesButton_Click;
+            layout.SectionedViewButton.Click += SectionedViewButton_Click;
         }
 
 
@@ -40,7 +41,10 @@ namespace HWIDChecker.UI.Forms
         {
             try
             {
-                var filePath = fileExportService.ExportHardwareInfo(layout.OutputTextBox.Text);
+                // Use the helper method to ensure we get the complete content for export
+                // This maintains the original formatting with separators for exported files
+                var contentToExport = layout.GetAllContentForExport();
+                var filePath = fileExportService.ExportHardwareInfo(contentToExport);
                 MessageBox.Show($"Export completed successfully!\nSaved to: {filePath}",
                     "Export", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
@@ -61,6 +65,14 @@ namespace HWIDChecker.UI.Forms
         {
             var cleanLogsForm = new CleanLogsForm();
             cleanLogsForm.ShowDialog(mainForm);
+        }
+
+        private void SectionedViewButton_Click(object sender, EventArgs e)
+        {
+            // Pass the existing data from the main form to avoid re-loading
+            var existingData = layout.GetAllContentForExport();
+            var sectionedViewForm = new SectionedViewForm(hardwareInfoManager, existingData);
+            sectionedViewForm.ShowDialog(mainForm);
         }
 
         private async void CheckUpdatesButton_Click(object sender, EventArgs e)

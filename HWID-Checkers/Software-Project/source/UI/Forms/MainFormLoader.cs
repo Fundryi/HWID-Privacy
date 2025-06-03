@@ -3,6 +3,7 @@ using System.Windows.Forms;
 using System.Threading.Tasks;
 using HWIDChecker.Hardware;
 using HWIDChecker.UI.Components;
+using System.Linq;
 
 namespace HWIDChecker.UI.Forms
 {

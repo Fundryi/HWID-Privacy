@@ -3,6 +3,8 @@ using System.Windows.Forms;
 using HWIDChecker.UI.Components;
 using HWIDChecker.Services;
 using System.Runtime.InteropServices;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace HWIDChecker.UI.Forms
 {
@@ -16,6 +18,7 @@ namespace HWIDChecker.UI.Forms
         public Button CleanDevicesButton { get; private set; }
         public Button CleanLogsButton { get; private set; }
         public Button CheckUpdatesButton { get; private set; }
+        public Button SectionedViewButton { get; private set; }
         public Label LoadingLabel { get; private set; }
 
         public MainFormLayout()
@@ -168,6 +171,15 @@ namespace HWIDChecker.UI.Forms
                 MinimumSize = dpiService.ScaleSizeConservative(new Size(110, 35))
             };
             Buttons.ApplyStyle(CheckUpdatesButton);
+
+            SectionedViewButton = new Button
+            {
+                Text = "Sectioned View",
+                Height = dpiService.ScaleValueConservative(20),
+                AutoSize = true,
+                MinimumSize = dpiService.ScaleSizeConservative(new Size(110, 35))
+            };
+            Buttons.ApplyStyle(SectionedViewButton);
         }
 
         private FlowLayoutPanel CreateButtonPanel(int formWidth)
@@ -200,12 +212,13 @@ namespace HWIDChecker.UI.Forms
             CleanDevicesButton.Margin = buttonMargin;
             CleanLogsButton.Margin = buttonMargin;
             CheckUpdatesButton.Margin = buttonMargin;
+            SectionedViewButton.Margin = buttonMargin;
 
-            centeredButtonPanel.Controls.AddRange(new Control[] { RefreshButton, ExportButton, CleanDevicesButton, CleanLogsButton, CheckUpdatesButton });
+            centeredButtonPanel.Controls.AddRange(new Control[] { RefreshButton, ExportButton, CleanDevicesButton, CleanLogsButton, CheckUpdatesButton, SectionedViewButton });
 
             // Calculate center position for buttons with conservative DPI scaling
             int scaledSpacing = dpiService.ScaleValueConservative(35);
-            int totalCenteredWidth = RefreshButton.Width + ExportButton.Width + CleanDevicesButton.Width + CleanLogsButton.Width + CheckUpdatesButton.Width + scaledSpacing;
+            int totalCenteredWidth = RefreshButton.Width + ExportButton.Width + CleanDevicesButton.Width + CleanLogsButton.Width + CheckUpdatesButton.Width + SectionedViewButton.Width + scaledSpacing;
             int startX = (buttonPanel.Width - totalCenteredWidth) / 2;
             var panelMarginVertical = dpiService.ScaleValueConservative(10);
             centeredButtonPanel.Margin = new Padding(Math.Max(0, startX), panelMarginVertical, 0, panelMarginVertical);
@@ -213,6 +226,12 @@ namespace HWIDChecker.UI.Forms
             buttonPanel.Controls.Add(centeredButtonPanel);
 
             return buttonPanel;
+        }
+
+        public string GetAllContentForExport()
+        {
+            // Return the content from OutputTextBox for export compatibility
+            return OutputTextBox.Text;
         }
 
         public void UpdateLoadingLabelPosition(Form form)
