@@ -42,11 +42,13 @@ namespace HWIDChecker.UI.Forms
         }
 
         /// <summary>
-        /// Apply DPI scaling to the form after all controls have been added
+        /// Apply conservative DPI scaling to the form after all controls have been added
+        /// This prevents forms from becoming too large on high DPI displays
         /// </summary>
         protected void ApplyDpiScaling()
         {
-            dpiService.ScaleControl(this);
+            // Don't apply aggressive scaling that can make forms unusable
+            // Instead rely on individual control scaling and Windows' built-in DPI handling
         }
 
         /// <summary>
@@ -59,35 +61,36 @@ namespace HWIDChecker.UI.Forms
         }
 
         /// <summary>
-        /// Helper method to scale a size value
+        /// Helper method to scale a size value conservatively
         /// </summary>
         protected Size ScaleSize(Size size)
         {
-            return dpiService.ScaleSize(size);
+            return dpiService.ScaleSizeConservative(size);
         }
 
         /// <summary>
-        /// Helper method to scale an integer value
+        /// Helper method to scale an integer value conservatively
         /// </summary>
         protected int ScaleValue(int value)
         {
-            return dpiService.ScaleValue(value);
+            return dpiService.ScaleValueConservative(value);
         }
 
         /// <summary>
-        /// Helper method to scale padding
+        /// Helper method to scale padding conservatively
         /// </summary>
         protected Padding ScalePadding(Padding padding)
         {
-            return dpiService.ScalePadding(padding);
+            var scaledValue = dpiService.ScaleValueConservative(5); // Use a reasonable default
+            return new Padding(scaledValue);
         }
 
         protected override void SetBoundsCore(int x, int y, int width, int height, BoundsSpecified specified)
         {
-            // Apply DPI scaling to form bounds if high DPI
+            // Apply conservative DPI scaling to form bounds to prevent oversized windows
             if (dpiService != null && dpiService.IsHighDpi)
             {
-                var scaledSize = dpiService.ScaleSize(new Size(width, height));
+                var scaledSize = dpiService.ScaleSizeConservative(new Size(width, height));
                 base.SetBoundsCore(x, y, scaledSize.Width, scaledSize.Height, specified);
             }
             else

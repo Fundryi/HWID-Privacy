@@ -26,31 +26,9 @@ namespace HWIDChecker.UI.Forms
             // Update DPI scaling service with new DPI
             dpiService.UpdateScaleFactorForWindow(this.Handle);
             
-            // Re-scale the form and all controls
-            SuspendLayout();
-            try
-            {
-                dpiService.ScaleControl(this);
-                initializer.Layout?.UpdateLoadingLabelPosition(this);
-            }
-            finally
-            {
-                ResumeLayout(true);
-            }
-        }
-
-        protected override void SetBoundsCore(int x, int y, int width, int height, BoundsSpecified specified)
-        {
-            // Apply DPI scaling to form bounds
-            if (dpiService != null && dpiService.IsHighDpi)
-            {
-                var scaledSize = dpiService.ScaleSize(new System.Drawing.Size(width, height));
-                base.SetBoundsCore(x, y, scaledSize.Width, scaledSize.Height, specified);
-            }
-            else
-            {
-                base.SetBoundsCore(x, y, width, height, specified);
-            }
+            // Only update loading label position - don't re-scale all controls
+            // to prevent the form from becoming unusable
+            initializer.Layout?.UpdateLoadingLabelPosition(this);
         }
     }
 }
