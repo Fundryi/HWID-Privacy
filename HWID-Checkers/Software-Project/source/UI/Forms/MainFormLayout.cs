@@ -1,12 +1,15 @@
 using System.Drawing;
 using System.Windows.Forms;
 using HWIDChecker.UI.Components;
+using HWIDChecker.Services;
 using System.Runtime.InteropServices;
 
 namespace HWIDChecker.UI.Forms
 {
     public class MainFormLayout
     {
+        private readonly DpiScalingService dpiService;
+        
         public TextBox OutputTextBox { get; private set; }
         public Button RefreshButton { get; private set; }
         public Button ExportButton { get; private set; }
@@ -14,6 +17,11 @@ namespace HWIDChecker.UI.Forms
         public Button CleanLogsButton { get; private set; }
         public Button CheckUpdatesButton { get; private set; }
         public Label LoadingLabel { get; private set; }
+
+        public MainFormLayout()
+        {
+            dpiService = DpiScalingService.Instance;
+        }
 
         [DllImport("user32.dll")]
         private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
@@ -44,15 +52,25 @@ namespace HWIDChecker.UI.Forms
             }
 
             form.Text = "HWID Checker";
-            form.Size = new Size(790, 820);
+            
+            // Apply DPI scaling to form size
+            var baseSize = new Size(790, 820);
+            form.Size = dpiService.ScaleSize(baseSize);
+            
             form.StartPosition = FormStartPosition.CenterScreen;
             form.BackColor = ThemeColors.MainBackground;
             form.ForeColor = ThemeColors.PrimaryText;
+
+            // Enable automatic scaling for the form
+            form.AutoScaleMode = AutoScaleMode.Dpi;
 
             InitializeControls();
             var buttonPanel = CreateButtonPanel(form.Width);
 
             form.Controls.AddRange(new Control[] { OutputTextBox, buttonPanel, LoadingLabel });
+
+            // Apply DPI scaling to all controls
+            dpiService.ScaleControl(form);
 
             // Enable dark scrollbars for Windows 10 and later
             if (Environment.OSVersion.Version.Major >= 10)
@@ -70,6 +88,10 @@ namespace HWIDChecker.UI.Forms
 
         private void InitializeControls()
         {
+            // Create base font and scale it
+            var baseFont = new Font("Consolas", 9.75f, FontStyle.Regular);
+            var scaledFont = dpiService.ScaleFont(baseFont);
+
             OutputTextBox = new TextBox
             {
                 Multiline = true,
@@ -80,10 +102,10 @@ namespace HWIDChecker.UI.Forms
                 BackColor = ThemeColors.TextBoxBackground,
                 ForeColor = ThemeColors.TextBoxText,
                 BorderStyle = BorderStyle.None,
-                Margin = new Padding(10),
-                Padding = new Padding(5),
+                Margin = dpiService.ScalePadding(new Padding(10)),
+                Padding = dpiService.ScalePadding(new Padding(5)),
                 HideSelection = false,
-                Font = new Font("Consolas", 9.75f, FontStyle.Regular)
+                Font = scaledFont
             };
 
             LoadingLabel = new Label
@@ -93,7 +115,7 @@ namespace HWIDChecker.UI.Forms
                 ForeColor = ThemeColors.LoadingLabelText,
                 BackColor = ThemeColors.LoadingLabelBackground,
                 Visible = false,
-                Padding = new Padding(5),
+                Padding = dpiService.ScalePadding(new Padding(5)),
                 TextAlign = ContentAlignment.MiddleCenter
             };
 
@@ -105,45 +127,45 @@ namespace HWIDChecker.UI.Forms
             RefreshButton = new Button
             {
                 Text = "Refresh",
-                Height = 20,
+                Height = dpiService.ScaleValue(20),
                 AutoSize = true,
-                MinimumSize = new Size(120, 35)
+                MinimumSize = dpiService.ScaleSize(new Size(120, 35))
             };
             Buttons.ApplyStyle(RefreshButton);
 
             ExportButton = new Button
             {
                 Text = "Export",
-                Height = 20,
+                Height = dpiService.ScaleValue(20),
                 AutoSize = true,
-                MinimumSize = new Size(120, 35)
+                MinimumSize = dpiService.ScaleSize(new Size(120, 35))
             };
             Buttons.ApplyStyle(ExportButton);
 
             CleanDevicesButton = new Button
             {
                 Text = "Clean Devices",
-                Height = 20,
+                Height = dpiService.ScaleValue(20),
                 AutoSize = true,
-                MinimumSize = new Size(100, 35)
+                MinimumSize = dpiService.ScaleSize(new Size(100, 35))
             };
             Buttons.ApplyStyle(CleanDevicesButton);
 
             CleanLogsButton = new Button
             {
                 Text = "Clean Logs",
-                Height = 20,
+                Height = dpiService.ScaleValue(20),
                 AutoSize = true,
-                MinimumSize = new Size(100, 35)
+                MinimumSize = dpiService.ScaleSize(new Size(100, 35))
             };
             Buttons.ApplyStyle(CleanLogsButton);
 
             CheckUpdatesButton = new Button
             {
                 Text = "Check Updates",
-                Height = 20,
+                Height = dpiService.ScaleValue(20),
                 AutoSize = true,
-                MinimumSize = new Size(110, 35)
+                MinimumSize = dpiService.ScaleSize(new Size(110, 35))
             };
             Buttons.ApplyStyle(CheckUpdatesButton);
         }
@@ -152,7 +174,7 @@ namespace HWIDChecker.UI.Forms
         {
             var buttonPanel = new FlowLayoutPanel
             {
-                Height = 60,
+                Height = dpiService.ScaleValue(60),
                 Dock = DockStyle.Bottom,
                 BackColor = ThemeColors.ButtonPanelBackground,
                 FlowDirection = FlowDirection.LeftToRight,
@@ -170,19 +192,21 @@ namespace HWIDChecker.UI.Forms
                 BackColor = ThemeColors.ButtonPanelBackground
             };
 
-            // Set consistent margins for all buttons
-            RefreshButton.Margin = new Padding(5, 5, 5, 5);
-            ExportButton.Margin = new Padding(5, 5, 5, 5);
-            CleanDevicesButton.Margin = new Padding(5, 5, 5, 5);
-            CleanLogsButton.Margin = new Padding(5, 5, 5, 5);
-            CheckUpdatesButton.Margin = new Padding(5, 5, 5, 5);
+            // Set consistent margins for all buttons with DPI scaling
+            var buttonMargin = dpiService.ScalePadding(new Padding(5, 5, 5, 5));
+            RefreshButton.Margin = buttonMargin;
+            ExportButton.Margin = buttonMargin;
+            CleanDevicesButton.Margin = buttonMargin;
+            CleanLogsButton.Margin = buttonMargin;
+            CheckUpdatesButton.Margin = buttonMargin;
 
             centeredButtonPanel.Controls.AddRange(new Control[] { RefreshButton, ExportButton, CleanDevicesButton, CleanLogsButton, CheckUpdatesButton });
 
-            // Calculate center position for buttons
-            int totalCenteredWidth = RefreshButton.Width + ExportButton.Width + CleanDevicesButton.Width + CleanLogsButton.Width + CheckUpdatesButton.Width + 35;
+            // Calculate center position for buttons with DPI scaling
+            int scaledSpacing = dpiService.ScaleValue(35);
+            int totalCenteredWidth = RefreshButton.Width + ExportButton.Width + CleanDevicesButton.Width + CleanLogsButton.Width + CheckUpdatesButton.Width + scaledSpacing;
             int startX = (buttonPanel.Width - totalCenteredWidth) / 2;
-            centeredButtonPanel.Margin = new Padding(Math.Max(0, startX), 10, 0, 10);
+            centeredButtonPanel.Margin = dpiService.ScalePadding(new Padding(Math.Max(0, startX), 10, 0, 10));
 
             buttonPanel.Controls.Add(centeredButtonPanel);
 
