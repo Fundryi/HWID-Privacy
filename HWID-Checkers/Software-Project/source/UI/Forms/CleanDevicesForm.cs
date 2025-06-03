@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace HWIDChecker.UI.Forms
 {
-    public class CleanDevicesForm : Form
+    public class CleanDevicesForm : DpiAwareForm
     {
         private TextBox outputTextBox;
         private Button closeButton;
@@ -63,8 +63,13 @@ namespace HWIDChecker.UI.Forms
         private void InitializeComponents()
         {
             this.Text = "Device Cleaning";
-            this.Width = 800;
-            this.Height = 600;
+            
+            // Apply DPI scaling to form size
+            var baseSize = new Size(800, 600);
+            var scaledSize = ScaleSize(baseSize);
+            this.Width = scaledSize.Width;
+            this.Height = scaledSize.Height;
+            
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -78,13 +83,14 @@ namespace HWIDChecker.UI.Forms
                 Dock = DockStyle.Fill,
                 BackColor = Color.Black,
                 ForeColor = Color.Lime,
-                Font = new Font("Consolas", 9.75f, FontStyle.Regular)
+                Font = CreateScaledFont("Consolas", 9.75f, FontStyle.Regular)
             };
+            
             whitelistButton = new Button
             {
                 Text = "Manage Whitelist",
                 Dock = DockStyle.Bottom,
-                Height = 30,
+                Height = ScaleValue(30),
                 Enabled = false
             };
             whitelistButton.Click += WhitelistButton_Click;
@@ -93,18 +99,18 @@ namespace HWIDChecker.UI.Forms
             {
                 Text = "Reclean",
                 Dock = DockStyle.Bottom,
-                Height = 30,
+                Height = ScaleValue(30),
                 Enabled = false
             };
             recleanButton.Click += (s, e) => StartCleaningProcess();
 
-closeButton = new Button
-{
-    Text = "Close",
-    Dock = DockStyle.Bottom,
-    Height = 30,
-    Enabled = false
-};
+            closeButton = new Button
+            {
+                Text = "Close",
+                Dock = DockStyle.Bottom,
+                Height = ScaleValue(30),
+                Enabled = false
+            };
             closeButton.Click += (s, e) =>
             {
                 if (isProcessing)
@@ -118,11 +124,11 @@ closeButton = new Button
                 this.Close();
             };
 
-            // Create panel for outputTextBox
+            // Create panel for outputTextBox with DPI-scaled padding
             var panel = new Panel
             {
                 Dock = DockStyle.Fill,
-                Padding = new Padding(10)
+                Padding = ScalePadding(new Padding(10))
             };
             panel.Controls.Add(outputTextBox);
 
@@ -130,6 +136,9 @@ closeButton = new Button
             this.Controls.Add(whitelistButton);
             this.Controls.Add(recleanButton);
             this.Controls.Add(closeButton);
+
+            // Apply DPI scaling to all controls
+            ApplyDpiScaling();
 
             this.Load += CleanDevicesForm_Load;
         }

@@ -2,16 +2,23 @@ using System;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
+using HWIDChecker.Services;
 
 namespace HWIDChecker.UI.Components
 {
     public class CompareFormLayout
     {
+        private readonly DpiScalingService dpiService;
         public RichTextBox LeftText { get; private set; }
         public RichTextBox RightText { get; private set; }
         private bool isScrolling = false;
         private int formWidth;
         private int formHeight;
+
+        public CompareFormLayout()
+        {
+            dpiService = DpiScalingService.Instance;
+        }
 
         [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
         private static extern int SetWindowTheme(IntPtr hWnd, string pszSubAppName, string pszSubIdList);
@@ -29,7 +36,8 @@ namespace HWIDChecker.UI.Components
         public void SetText(RichTextBox textBox, string content)
         {
             textBox.Clear();
-            textBox.Font = new Font("Cascadia Code", 10);
+            var baseFont = new Font("Cascadia Code", 10);
+            textBox.Font = dpiService.ScaleFont(baseFont);
             textBox.Text = content;
             textBox.Select(0, 0);
         }
@@ -40,15 +48,17 @@ namespace HWIDChecker.UI.Components
             {
                 System.Diagnostics.Debug.WriteLine("Starting CompareFormLayout initialization...");
 
-                // Set precise pixel dimensions for the form
-                this.formWidth = 790 * 2;
-                this.formHeight = 800;
+                // Set precise pixel dimensions for the form with DPI scaling
+                var baseSize = new Size(790 * 2, 800);
+                var scaledSize = dpiService.ScaleSize(baseSize);
+                this.formWidth = scaledSize.Width;
+                this.formHeight = scaledSize.Height;
 
                 System.Diagnostics.Debug.WriteLine($"Form dimensions: {this.formWidth}x{this.formHeight}");
 
                 // Set form properties before size to prevent layout system from overriding
                 form.AutoSize = false;
-                form.AutoScaleMode = AutoScaleMode.None;
+                form.AutoScaleMode = AutoScaleMode.Dpi; // Enable DPI scaling
                 form.Text = "Compare HWID Information";
                 form.MinimizeBox = true;
                 form.MaximizeBox = true;
@@ -102,17 +112,20 @@ namespace HWIDChecker.UI.Components
         {
             try
             {
+                var baseFont = new Font("Cascadia Code", 10, FontStyle.Regular, GraphicsUnit.Point);
+                var scaledFont = dpiService.ScaleFont(baseFont);
+
                 var textBox = new RichTextBox
                 {
                     Multiline = true,
                     ReadOnly = true,
                     Dock = DockStyle.Fill,
-                    Font = new Font("Cascadia Code", 10, FontStyle.Regular, GraphicsUnit.Point),
+                    Font = scaledFont,
                     BackColor = Color.FromArgb(45, 45, 45),
                     ForeColor = Color.FromArgb(220, 220, 220),
                     BorderStyle = BorderStyle.None,
-                    Margin = new Padding(10),
-                    Padding = new Padding(5),
+                    Margin = dpiService.ScalePadding(new Padding(10)),
+                    Padding = dpiService.ScalePadding(new Padding(5)),
                     HideSelection = false,
                     WordWrap = true,
                     ScrollBars = RichTextBoxScrollBars.Vertical
@@ -147,8 +160,8 @@ namespace HWIDChecker.UI.Components
                     Dock = DockStyle.Fill,
                     ColumnCount = 2,
                     RowCount = 1,
-                    Padding = new Padding(2),
-                    Margin = new Padding(0),
+                    Padding = dpiService.ScalePadding(new Padding(2)),
+                    Margin = dpiService.ScalePadding(new Padding(0)),
                     BackColor = Color.FromArgb(35, 35, 35),
                     AutoSize = false,
                     AutoSizeMode = AutoSizeMode.GrowAndShrink
@@ -175,21 +188,26 @@ namespace HWIDChecker.UI.Components
                     Dock = DockStyle.Fill,
                     RowCount = 2,
                     ColumnCount = 1,
-                    Padding = new Padding(1),
-                    Margin = new Padding(1),
+                    Padding = dpiService.ScalePadding(new Padding(1)),
+                    Margin = dpiService.ScalePadding(new Padding(1)),
                     BackColor = Color.FromArgb(40, 40, 40),
                     AutoSize = false,
                     AutoSizeMode = AutoSizeMode.GrowAndShrink
                 };
-                panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 20F));
+                
+                var scaledLabelHeight = dpiService.ScaleValue(20);
+                panel.RowStyles.Add(new RowStyle(SizeType.Absolute, scaledLabelHeight));
                 panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+                var baseLabelFont = new Font("Segoe UI", 9f, FontStyle.Bold);
+                var scaledLabelFont = dpiService.ScaleFont(baseLabelFont);
 
                 var label = new Label
                 {
                     Text = labelText,
                     Dock = DockStyle.Fill,
                     TextAlign = ContentAlignment.MiddleLeft,
-                    Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                    Font = scaledLabelFont,
                     BackColor = Color.FromArgb(40, 40, 40),
                     ForeColor = Color.FromArgb(220, 220, 220),
                     AutoSize = false
