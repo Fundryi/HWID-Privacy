@@ -52,7 +52,13 @@ namespace HWIDChecker.Services
 
         private static DpiScalingService _instance;
         private float _scaleFactor = 1.0f;
+        private float _fontScaleFactor = 1.0f;
         private readonly object _lock = new object();
+        
+        // Smart scaling limits to prevent UI from becoming unusable
+        private const float MAX_SCALE_FACTOR = 1.3f;        // Maximum 130% scaling for layout
+        private const float MAX_FONT_SCALE_FACTOR = 1.2f;   // Maximum 120% font scaling
+        private const float MIN_SCALE_FACTOR = 0.9f;        // Minimum 90% scaling
 
         public static DpiScalingService Instance
         {
@@ -73,6 +79,7 @@ namespace HWIDChecker.Services
         }
 
         public float ScaleFactor => _scaleFactor;
+        public float FontScaleFactor => _fontScaleFactor;
 
         public float BaseDpi => 96.0f; // Standard Windows DPI
 
@@ -107,15 +114,53 @@ namespace HWIDChecker.Services
                 if (hdc != IntPtr.Zero)
                 {
                     int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
-                    _scaleFactor = dpiX / BaseDpi;
+                    float rawScaleFactor = dpiX / BaseDpi;
+                    
+                    // Apply smart scaling with limits
+                    _scaleFactor = CalculateSmartScaleFactor(rawScaleFactor);
+                    _fontScaleFactor = CalculateSmartFontScaleFactor(rawScaleFactor);
+                    
                     ReleaseDC(IntPtr.Zero, hdc);
+                    
+                    System.Diagnostics.Debug.WriteLine($"Raw DPI Scale: {rawScaleFactor:F2}x, Smart Scale: {_scaleFactor:F2}x, Font Scale: {_fontScaleFactor:F2}x");
                 }
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Failed to calculate DPI scale factor: {ex.Message}");
                 _scaleFactor = 1.0f;
+                _fontScaleFactor = 1.0f;
             }
+        }
+
+        private float CalculateSmartScaleFactor(float rawScale)
+        {
+            // For layout scaling, we want to be more conservative
+            if (rawScale <= 1.0f)
+                return Math.Max(rawScale, MIN_SCALE_FACTOR);
+            
+            // Progressive scaling reduction for high DPI
+            if (rawScale <= 1.25f)
+                return Math.Min(rawScale * 0.9f, MAX_SCALE_FACTOR); // Reduce 125% to ~112%
+            else if (rawScale <= 1.5f)
+                return Math.Min(rawScale * 0.8f, MAX_SCALE_FACTOR); // Reduce 150% to ~120%
+            else
+                return MAX_SCALE_FACTOR; // Cap at 130% for very high DPI
+        }
+
+        private float CalculateSmartFontScaleFactor(float rawScale)
+        {
+            // For fonts, we can be slightly more aggressive but still capped
+            if (rawScale <= 1.0f)
+                return Math.Max(rawScale, MIN_SCALE_FACTOR);
+            
+            // Progressive font scaling
+            if (rawScale <= 1.25f)
+                return Math.Min(rawScale * 0.95f, MAX_FONT_SCALE_FACTOR); // Reduce 125% to ~119%
+            else if (rawScale <= 1.5f)
+                return Math.Min(rawScale * 0.85f, MAX_FONT_SCALE_FACTOR); // Reduce 150% to ~127% -> capped to 120%
+            else
+                return MAX_FONT_SCALE_FACTOR; // Cap at 120% for fonts
         }
 
         public float GetDpiForWindow(IntPtr windowHandle)
@@ -127,7 +172,8 @@ namespace HWIDChecker.Services
                 {
                     if (GetDpiForMonitor(monitor, DpiType.Effective, out uint dpiX, out uint dpiY) == 0)
                     {
-                        return dpiX / BaseDpi;
+                        float rawScale = dpiX / BaseDpi;
+                        return CalculateSmartScaleFactor(rawScale);
                     }
                 }
             }
@@ -176,12 +222,14 @@ namespace HWIDChecker.Services
 
         public Font ScaleFont(Font font)
         {
-            return new Font(font.FontFamily, font.Size * _scaleFactor, font.Style);
+            return new Font(font.FontFamily, font.Size * _fontScaleFactor, font.Style);
         }
 
         public Font ScaleFont(Font font, float customScale)
         {
-            return new Font(font.FontFamily, font.Size * customScale, font.Style);
+            // Apply smart scaling to custom scale factors too
+            float smartCustomScale = CalculateSmartFontScaleFactor(customScale);
+            return new Font(font.FontFamily, font.Size * smartCustomScale, font.Style);
         }
 
         public void ScaleControl(Control control)
@@ -247,6 +295,24 @@ namespace HWIDChecker.Services
                 if (Math.Abs(newScale - _scaleFactor) > 0.01f) // Only update if significantly different
                 {
                     _scaleFactor = newScale;
+                    
+                    // Also update font scale factor based on the new DPI
+                    try
+                    {
+                        IntPtr monitor = MonitorFromWindow(windowHandle, MONITOR_DEFAULTTONEAREST);
+                        if (monitor != IntPtr.Zero)
+                        {
+                            if (GetDpiForMonitor(monitor, DpiType.Effective, out uint dpiX, out uint dpiY) == 0)
+                            {
+                                float rawScale = dpiX / BaseDpi;
+                                _fontScaleFactor = CalculateSmartFontScaleFactor(rawScale);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Failed to update font scale factor: {ex.Message}");
+                    }
                 }
             }
         }
@@ -255,7 +321,42 @@ namespace HWIDChecker.Services
 
         public string GetDpiInfo()
         {
-            return $"DPI Scale Factor: {_scaleFactor:F2}x ({BaseDpi * _scaleFactor:F0} DPI)";
+            return $"Layout Scale: {_scaleFactor:F2}x, Font Scale: {_fontScaleFactor:F2}x ({BaseDpi * _scaleFactor:F0} DPI)";
+        }
+
+        /// <summary>
+        /// Get a conservative scaling factor that's safer for main application windows
+        /// </summary>
+        public float GetConservativeScaleFactor()
+        {
+            // Even more conservative scaling for main windows
+            if (_scaleFactor <= 1.1f)
+                return _scaleFactor;
+            else if (_scaleFactor <= 1.2f)
+                return 1.1f;  // Cap at 110% for moderate scaling
+            else
+                return 1.15f; // Cap at 115% for high scaling
+        }
+
+        /// <summary>
+        /// Scale a size using conservative factors to prevent UI from becoming too large
+        /// </summary>
+        public Size ScaleSizeConservative(Size size)
+        {
+            float conservativeScale = GetConservativeScaleFactor();
+            return new Size(
+                (int)Math.Round(size.Width * conservativeScale),
+                (int)Math.Round(size.Height * conservativeScale)
+            );
+        }
+
+        /// <summary>
+        /// Scale a value using conservative factors
+        /// </summary>
+        public int ScaleValueConservative(int value)
+        {
+            float conservativeScale = GetConservativeScaleFactor();
+            return (int)Math.Round(value * conservativeScale);
         }
     }
 }
