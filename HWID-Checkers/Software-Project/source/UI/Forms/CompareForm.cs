@@ -4,20 +4,15 @@ using System.Drawing;
 using System.Windows.Forms;
 using System.IO;
 using HWIDChecker.UI.Components;
-using HWIDChecker.Services;
 
 namespace HWIDChecker.UI.Forms
 {
     public class CompareForm : Form
     {
         private readonly Components.CompareFormLayout layout; // Explicitly specify Components namespace
-        private readonly DpiScalingService dpiService;
 
         private CompareForm(string leftContent)
         {
-            // Initialize DPI scaling before any UI operations
-            dpiService = DpiScalingService.Instance;
-            
             // Set icon
             try
             {
@@ -34,8 +29,9 @@ namespace HWIDChecker.UI.Forms
                 System.Diagnostics.Debug.WriteLine($"Failed to load icon: {ex.Message}");
             }
 
-            // Enable automatic scaling for the form
-            AutoScaleMode = AutoScaleMode.Dpi;
+            // Use Font-based scaling for proper DPI handling
+            AutoScaleMode = AutoScaleMode.Font;
+            AutoScaleDimensions = new SizeF(96F, 96F);
 
             layout = new Components.CompareFormLayout(); // Explicitly specify Components namespace
             layout.InitializeLayout(this);
@@ -54,29 +50,6 @@ namespace HWIDChecker.UI.Forms
             mainContainer.Controls.Add(rightPanel, 1, 0);
 
             Controls.Add(mainContainer);
-
-            // Apply DPI scaling to all controls
-            dpiService.ScaleControl(this);
-
-            // Handle DPI changes at runtime
-            this.DpiChanged += CompareForm_DpiChanged;
-        }
-
-        private void CompareForm_DpiChanged(object sender, DpiChangedEventArgs e)
-        {
-            // Update DPI scaling service with new DPI
-            dpiService.UpdateScaleFactorForWindow(this.Handle);
-            
-            // Re-scale the form and all controls
-            SuspendLayout();
-            try
-            {
-                dpiService.ScaleControl(this);
-            }
-            finally
-            {
-                ResumeLayout(true);
-            }
         }
 
         public static CompareForm CreateCompareWithCurrent(string currentConfig, List<string> exportFiles)
