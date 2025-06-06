@@ -65,17 +65,15 @@ namespace HWIDChecker.UI.Forms
         {
             this.Text = "Device Cleaning";
             
-            // Use base form size - Windows Forms will handle DPI scaling automatically
-            this.Size = DpiHelper.GetBaseFormSize(800, 600);
-            
+            // Use fixed size with DPI scaling like the main form
+            this.FormBorderStyle = FormBorderStyle.FixedSingle; // Disable resizing
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             
-            // Use Font-based scaling for proper DPI handling
-            this.AutoScaleMode = AutoScaleMode.Font;
-            this.AutoScaleDimensions = new SizeF(96F, 96F);
+            // Use standard Windows Forms DPI handling
+            StandardDpiScaling.ConfigureForm(this);
+            StandardDpiScaling.SetLogicalSize(this, 800, 600);
 
             outputTextBox = new TextBox
             {
@@ -85,14 +83,14 @@ namespace HWIDChecker.UI.Forms
                 Dock = DockStyle.Fill,
                 BackColor = Color.Black,
                 ForeColor = Color.Lime,
-                Font = DpiHelper.CreateFont("Consolas", 9.75f, FontStyle.Regular)
+                Font = StandardDpiScaling.CreateLogicalFont("Consolas", 9.75f, FontStyle.Regular)
             };
             
             whitelistButton = new Button
             {
                 Text = "Manage Whitelist",
                 Dock = DockStyle.Bottom,
-                Height = 30, // Base height - Windows Forms will scale automatically
+                Height = 30, // Logical height - Windows Forms will scale automatically
                 Enabled = false
             };
             whitelistButton.Click += WhitelistButton_Click;
@@ -101,7 +99,7 @@ namespace HWIDChecker.UI.Forms
             {
                 Text = "Reclean",
                 Dock = DockStyle.Bottom,
-                Height = 30, // Base height - Windows Forms will scale automatically
+                Height = 30, // Logical height - Windows Forms will scale automatically
                 Enabled = false
             };
             recleanButton.Click += (s, e) => StartCleaningProcess();
@@ -110,7 +108,7 @@ namespace HWIDChecker.UI.Forms
             {
                 Text = "Close",
                 Dock = DockStyle.Bottom,
-                Height = 30, // Base height - Windows Forms will scale automatically
+                Height = 30, // Logical height - Windows Forms will scale automatically
                 Enabled = false
             };
             closeButton.Click += (s, e) =>
@@ -126,11 +124,11 @@ namespace HWIDChecker.UI.Forms
                 this.Close();
             };
 
-            // Create panel for outputTextBox - Windows Forms will handle padding scaling
+            // Create panel for outputTextBox with fixed padding
             var panel = new Panel
             {
                 Dock = DockStyle.Fill,
-                Padding = DpiHelper.CreatePadding(10)
+                Padding = StandardDpiScaling.CreateLogicalPadding(10)
             };
             panel.Controls.Add(outputTextBox);
 
@@ -140,6 +138,15 @@ namespace HWIDChecker.UI.Forms
             this.Controls.Add(closeButton);
 
             this.Load += CleanDevicesForm_Load;
+        }
+        
+        // Removed SetDpiAwareSize() - now handled by DpiManager
+        
+        protected override void WndProc(ref Message m)
+        {
+            // Use standard Windows DPI change handling
+            StandardDpiScaling.HandleDpiChange(this, ref m);
+            base.WndProc(ref m);
         }
 
         private void CleanDevicesForm_Load(object sender, EventArgs e)

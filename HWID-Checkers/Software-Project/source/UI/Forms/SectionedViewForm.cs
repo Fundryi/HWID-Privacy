@@ -6,6 +6,7 @@ using System.Windows.Forms;
 using HWIDChecker.Hardware;
 using HWIDChecker.Services;
 using HWIDChecker.UI.Components;
+using HWIDChecker.Utils;
 using static HWIDChecker.Services.UpdateResult;
 
 namespace HWIDChecker.UI.Forms
@@ -19,7 +20,6 @@ namespace HWIDChecker.UI.Forms
         private TextBox currentContentTextBox;
         private Button refreshButton;
         private Button exportButton;
-        private Button compareButton;
         private Button cleanDevicesButton;
         private Button cleanLogsButton;
         private Button checkUpdatesButton;
@@ -53,13 +53,9 @@ namespace HWIDChecker.UI.Forms
             FormBorderStyle = FormBorderStyle.FixedSingle; // Disable resizing
             StartPosition = isMainWindow ? FormStartPosition.CenterScreen : FormStartPosition.CenterParent;
             
-            // Use None to prevent automatic scaling that could make the form tiny
-            AutoScaleMode = AutoScaleMode.None;
-            
-            // Set a good base size that should work on all DPI settings
-            ClientSize = new Size(920, 680);
-            MinimumSize = new Size(920, 680);
-            MaximumSize = new Size(920, 680); // Also set max size to prevent any resizing
+            // Use standard Windows Forms DPI handling
+            StandardDpiScaling.ConfigureForm(this);
+            StandardDpiScaling.SetLogicalSize(this, 920, 710);
 
             CreateModernLayout();
             
@@ -78,14 +74,23 @@ namespace HWIDChecker.UI.Forms
                 CreateTestSection();
             }
         }
+        
+        // Removed SetDpiAwareSize() - now handled by DpiManager
+        
+        protected override void WndProc(ref Message m)
+        {
+            // Use standard Windows DPI change handling
+            StandardDpiScaling.HandleDpiChange(this, ref m);
+            base.WndProc(ref m);
+        }
 
         private void CreateModernLayout()
         {
             // Create elegant sidebar (left side navigation)
             sidebarPanel = new Panel
             {
-                Location = new Point(0, 0),
-                Size = new Size(280, ClientSize.Height - 60),
+                Location = StandardDpiScaling.CreateLogicalPoint(0, 0),
+                Size = StandardDpiScaling.CreateLogicalSize(280, ClientSize.Height - 60),
                 BackColor = Color.FromArgb(40, 40, 40), // Slightly lighter than background
                 BorderStyle = BorderStyle.None,
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left
@@ -94,8 +99,8 @@ namespace HWIDChecker.UI.Forms
             // Add subtle border to sidebar
             var sidebarBorder = new Panel
             {
-                Location = new Point(279, 0),
-                Size = new Size(1, ClientSize.Height - 60),
+                Location = StandardDpiScaling.CreateLogicalPoint(279, 0),
+                Size = StandardDpiScaling.CreateLogicalSize(1, ClientSize.Height - 60),
                 BackColor = Color.FromArgb(60, 60, 60),
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left
             };
@@ -103,25 +108,25 @@ namespace HWIDChecker.UI.Forms
             // Create main content area
             contentPanel = new Panel
             {
-                Location = new Point(280, 0),
-                Size = new Size(ClientSize.Width - 280, ClientSize.Height - 60),
+                Location = StandardDpiScaling.CreateLogicalPoint(280, 0),
+                Size = StandardDpiScaling.CreateLogicalSize(ClientSize.Width - 280, ClientSize.Height - 60),
                 BackColor = Color.FromArgb(25, 25, 25), // Even darker for content
                 BorderStyle = BorderStyle.None,
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-                Padding = new Padding(20)
+                Padding = StandardDpiScaling.CreateLogicalPadding(20)
             };
 
             // Create content textbox with modern styling
             currentContentTextBox = new TextBox
             {
-                Location = new Point(20, 20),
-                Size = new Size(contentPanel.Width - 40, contentPanel.Height - 40),
+                Location = StandardDpiScaling.CreateLogicalPoint(20, 20),
+                Size = StandardDpiScaling.CreateLogicalSize(contentPanel.Width - 40, contentPanel.Height - 40),
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
                 BackColor = Color.FromArgb(35, 35, 35),
                 ForeColor = Color.FromArgb(220, 220, 220),
-                Font = new Font("Consolas", 10f),
+                Font = StandardDpiScaling.CreateLogicalFont("Consolas", 10f),
                 BorderStyle = BorderStyle.None,
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
             };
@@ -131,8 +136,8 @@ namespace HWIDChecker.UI.Forms
             // Create modern button panel at bottom
             var buttonPanel = new Panel
             {
-                Location = new Point(0, ClientSize.Height - 60),
-                Size = new Size(ClientSize.Width, 60),
+                Location = StandardDpiScaling.CreateLogicalPoint(0, ClientSize.Height - 60),
+                Size = StandardDpiScaling.CreateLogicalSize(ClientSize.Width, 60),
                 BackColor = Color.FromArgb(45, 45, 45),
                 Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
             };
@@ -144,12 +149,12 @@ namespace HWIDChecker.UI.Forms
                 AutoSize = true,
                 ForeColor = Color.FromArgb(220, 220, 220),
                 BackColor = Color.Transparent,
-                Font = new Font("Segoe UI", 10f),
+                Font = StandardDpiScaling.CreateLogicalFont("Segoe UI", 10f),
                 Visible = false
             };
             
             // Position loading label in center
-            loadingLabel.Location = new Point(
+            loadingLabel.Location = StandardDpiScaling.CreateLogicalPoint(
                 (ClientSize.Width - loadingLabel.Width) / 2,
                 (ClientSize.Height - loadingLabel.Height) / 2
             );
@@ -157,25 +162,22 @@ namespace HWIDChecker.UI.Forms
             // Create modern buttons based on main window status
             if (isMainWindow)
             {
-                // Main window buttons
-                refreshButton = CreateModernButton("🔄 Refresh", new Point(20, 15));
-                exportButton = CreateModernButton("💾 Export", new Point(140, 15));
-                compareButton = CreateModernButton("🔍 Compare", new Point(260, 15));
-                cleanDevicesButton = CreateModernButton("🧹 Clean Devices", new Point(380, 15));
-                cleanLogsButton = CreateModernButton("📝 Clean Logs", new Point(520, 15));
-                checkUpdatesButton = CreateModernButton("🔄 Updates", new Point(660, 15));
+                // Main window buttons with better spacing and fixed icons
+                refreshButton = CreateModernButton("↻ Refresh", StandardDpiScaling.CreateLogicalPoint(20, 15));
+                exportButton = CreateModernButton("💾 Export", StandardDpiScaling.CreateLogicalPoint(150, 15));
+                cleanDevicesButton = CreateModernButton("🧹 Clean Devices", StandardDpiScaling.CreateLogicalPoint(280, 15));
+                cleanLogsButton = CreateModernButton("📝 Clean Logs", StandardDpiScaling.CreateLogicalPoint(430, 15));
+                checkUpdatesButton = CreateModernButton("⟳ Updates", StandardDpiScaling.CreateLogicalPoint(580, 15));
 
                 // Add event handlers
                 refreshButton.Click += RefreshButton_Click;
                 exportButton.Click += ExportButton_Click;
-                compareButton.Click += CompareButton_Click;
                 cleanDevicesButton.Click += CleanDevicesButton_Click;
                 cleanLogsButton.Click += CleanLogsButton_Click;
                 checkUpdatesButton.Click += CheckUpdatesButton_Click;
 
                 buttonPanel.Controls.AddRange(new Control[] {
-                    refreshButton, exportButton, compareButton,
-                    cleanDevicesButton, cleanLogsButton, checkUpdatesButton
+                    refreshButton, exportButton, cleanDevicesButton, cleanLogsButton, checkUpdatesButton
                 });
             }
             else
@@ -207,7 +209,7 @@ namespace HWIDChecker.UI.Forms
                 BackColor = Color.FromArgb(0, 120, 215), // Modern blue
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 9f),
+                Font = MonitorDpiPresets.CreatePresetFont(this, "Segoe UI", 9f),
                 Cursor = Cursors.Hand
             };
         }
@@ -271,7 +273,7 @@ namespace HWIDChecker.UI.Forms
                 Location = new Point(20, 20),
                 Size = new Size(240, 30),
                 Text = "Hardware Sections",
-                Font = new Font("Segoe UI", 12f, FontStyle.Bold),
+                Font = MonitorDpiPresets.CreatePresetFont(this, "Segoe UI", 12f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(220, 220, 220),
                 BackColor = Color.Transparent
             };
@@ -299,7 +301,7 @@ namespace HWIDChecker.UI.Forms
                 BackColor = Color.FromArgb(50, 50, 50),
                 ForeColor = Color.FromArgb(200, 200, 200),
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10f),
+                Font = MonitorDpiPresets.CreatePresetFont(this, "Segoe UI", 10f),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(15, 0, 0, 0),
                 Cursor = Cursors.Hand,
@@ -514,43 +516,6 @@ namespace HWIDChecker.UI.Forms
             }
         }
         
-        private void CompareButton_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                string contentToCompare = currentHardwareData ?? GetAllContentForExport();
-                
-                var exportService = new FileExportService(AppDomain.CurrentDomain.BaseDirectory);
-                
-                // For now, create a simple comparison with export files from the directory
-                var exportDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Exports");
-                if (!System.IO.Directory.Exists(exportDir))
-                {
-                    MessageBox.Show("No export files found for comparison. Please export hardware information first.",
-                        "No Export Files", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
-                }
-
-                var exportFiles = System.IO.Directory.GetFiles(exportDir, "*.txt").ToList();
-                if (exportFiles.Count == 0)
-                {
-                    MessageBox.Show("No export files found for comparison. Please export hardware information first.",
-                        "No Export Files", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
-                }
-
-                var compareForm = CompareForm.CreateCompareWithCurrent(contentToCompare, exportFiles);
-                if (compareForm != null)
-                {
-                    compareForm.ShowDialog();
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error opening comparison: {ex.Message}", "Comparison Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-        
         private void CleanDevicesButton_Click(object sender, EventArgs e)
         {
             try
@@ -583,7 +548,7 @@ namespace HWIDChecker.UI.Forms
             if (button != null)
             {
                 button.Enabled = false;
-                button.Text = "🔄 Checking...";
+                button.Text = "⟳ Checking...";
             }
 
             try
@@ -621,7 +586,7 @@ namespace HWIDChecker.UI.Forms
                 if (button != null)
                 {
                     button.Enabled = true;
-                    button.Text = "🔄 Updates";
+                    button.Text = "⟳ Updates";
                 }
             }
         }
