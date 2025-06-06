@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Windows.Forms;
 using HWIDChecker.UI.Forms;
 using HWIDChecker.Hardware;
+using HWIDChecker.Utils;
 
 namespace HWIDChecker;
 
@@ -22,6 +23,9 @@ static class Program
                     Application.EnableVisualStyles();
                     Application.SetCompatibleTextRenderingDefault(false);
                     
+                    // Initialize monitor-locked DPI settings
+                    StandardDpiScaling.Initialize();
+                    
                     // Use the modern SectionedViewForm as the main window
                     var mainForm = new SectionedViewForm(isMainWindow: true) { Icon = icon };
                     Application.Run(mainForm);
@@ -31,6 +35,9 @@ static class Program
                     ApplicationConfiguration.Initialize();
                     Application.EnableVisualStyles();
                     Application.SetCompatibleTextRenderingDefault(false);
+                    
+                    // Initialize monitor-locked DPI settings
+                    StandardDpiScaling.Initialize();
                     
                     // Use the modern SectionedViewForm as the main window
                     var mainForm = new SectionedViewForm(isMainWindow: true);
@@ -44,6 +51,9 @@ static class Program
             ApplicationConfiguration.Initialize();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            
+            // Initialize monitor-locked DPI settings
+            StandardDpiScaling.Initialize();
             
             // Fallback: Use the modern SectionedViewForm as the main window
             var mainForm = new SectionedViewForm(isMainWindow: true);
