@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Windows.Forms;
 using HWIDChecker.UI.Forms;
+using HWIDChecker.Hardware;
 
 namespace HWIDChecker;
 
@@ -20,12 +21,20 @@ static class Program
                     ApplicationConfiguration.Initialize();
                     Application.EnableVisualStyles();
                     Application.SetCompatibleTextRenderingDefault(false);
-                    Application.Run(new MainForm { Icon = icon });
+                    
+                    // Use the modern SectionedViewForm as the main window
+                    var mainForm = new SectionedViewForm(isMainWindow: true) { Icon = icon };
+                    Application.Run(mainForm);
                 }
                 else
                 {
                     ApplicationConfiguration.Initialize();
-                    Application.Run(new MainForm());
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+                    
+                    // Use the modern SectionedViewForm as the main window
+                    var mainForm = new SectionedViewForm(isMainWindow: true);
+                    Application.Run(mainForm);
                 }
             }
         }
@@ -33,7 +42,12 @@ static class Program
         {
             System.Diagnostics.Debug.WriteLine($"Failed to load application icon: {ex.Message}");
             ApplicationConfiguration.Initialize();
-            Application.Run(new MainForm());
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            
+            // Fallback: Use the modern SectionedViewForm as the main window
+            var mainForm = new SectionedViewForm(isMainWindow: true);
+            Application.Run(mainForm);
         }
     }
 }
