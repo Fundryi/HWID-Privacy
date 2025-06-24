@@ -72,6 +72,9 @@ namespace HWIDChecker.UI.Forms
             this.AutoScaleMode = AutoScaleMode.Dpi;
             this.ClientSize = new Size(800, 600);
 
+            // Subscribe to DPI changes for runtime handling
+            this.DpiChanged += CleanDevicesForm_DpiChanged;
+
             outputTextBox = new TextBox
             {
                 Multiline = true,
@@ -278,6 +281,13 @@ namespace HWIDChecker.UI.Forms
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
             }
+        }
+
+        private void CleanDevicesForm_DpiChanged(object sender, DpiChangedEventArgs e)
+        {
+            // Handle DPI changes at runtime
+            this.PerformAutoScale();
+            this.Invalidate();
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)

@@ -52,9 +52,12 @@ namespace HWIDChecker.UI.Forms
             FormBorderStyle = FormBorderStyle.FixedSingle; // Disable resizing
             StartPosition = isMainWindow ? FormStartPosition.CenterScreen : FormStartPosition.CenterParent;
             
-            // Use native .NET DPI handling - let Windows Forms handle scaling automatically
+            // CRITICAL: Ensure consistent DPI scaling across all containers
             AutoScaleMode = AutoScaleMode.Dpi;
             ClientSize = new Size(920, 710);
+
+            // Subscribe to DPI changes for runtime handling
+            DpiChanged += SectionedViewForm_DpiChanged;
 
             CreateModernLayout();
             
@@ -74,62 +77,74 @@ namespace HWIDChecker.UI.Forms
             }
         }
 
+        private void SectionedViewForm_DpiChanged(object sender, DpiChangedEventArgs e)
+        {
+            // Handle DPI changes at runtime
+            this.PerformAutoScale();
+            this.Invalidate();
+        }
+
         private void CreateModernLayout()
         {
-            // Create elegant sidebar (left side navigation)
-            sidebarPanel = new Panel
+            // Use TableLayoutPanel for proper DPI-aware layout
+            var mainLayout = new TableLayoutPanel
             {
-                Location = new Point(0, 0),
-                Size = new Size(280, ClientSize.Height - 60),
-                BackColor = Color.FromArgb(40, 40, 40), // Slightly lighter than background
-                BorderStyle = BorderStyle.None,
-                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 2,
+                BackColor = Color.FromArgb(32, 32, 32)
             };
 
-            // Add subtle border to sidebar
-            var sidebarBorder = new Panel
+            // Configure columns: sidebar (280px) and content (fill remaining)
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280F));
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            
+            // Configure rows: main content (fill) and buttons (60px)
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
+
+            // Create sidebar using FlowLayoutPanel for proper DPI scaling
+            sidebarPanel = new FlowLayoutPanel
             {
-                Location = new Point(279, 0),
-                Size = new Size(1, ClientSize.Height - 60),
-                BackColor = Color.FromArgb(60, 60, 60),
-                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.TopDown,
+                AutoScroll = true,
+                AutoSize = false,
+                BackColor = Color.FromArgb(40, 40, 40),
+                WrapContents = false
             };
 
-            // Create main content area
+            // Create content panel with proper scaling
             contentPanel = new Panel
             {
-                Location = new Point(280, 0),
-                Size = new Size(ClientSize.Width - 280, ClientSize.Height - 60),
-                BackColor = Color.FromArgb(25, 25, 25), // Even darker for content
-                BorderStyle = BorderStyle.None,
-                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(25, 25, 25),
                 Padding = new Padding(20)
             };
 
-            // Create content textbox with modern styling
+            // Create content textbox with proper DPI handling
             currentContentTextBox = new TextBox
             {
-                Location = new Point(20, 20),
-                Size = new Size(contentPanel.Width - 40, contentPanel.Height - 40),
+                Dock = DockStyle.Fill,
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
                 BackColor = Color.FromArgb(35, 35, 35),
                 ForeColor = Color.FromArgb(220, 220, 220),
                 Font = new Font("Consolas", 10f),
-                BorderStyle = BorderStyle.None,
-                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
+                BorderStyle = BorderStyle.None
             };
 
             contentPanel.Controls.Add(currentContentTextBox);
 
-            // Create modern button panel at bottom
-            var buttonPanel = new Panel
+            // Create button panel using FlowLayoutPanel for proper DPI scaling
+            var buttonPanel = new FlowLayoutPanel
             {
-                Location = new Point(0, ClientSize.Height - 60),
-                Size = new Size(ClientSize.Width, 60),
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
                 BackColor = Color.FromArgb(45, 45, 45),
-                Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
+                Padding = new Padding(10),
+                WrapContents = true
             };
 
             // Create loading label
@@ -140,24 +155,19 @@ namespace HWIDChecker.UI.Forms
                 ForeColor = Color.FromArgb(220, 220, 220),
                 BackColor = Color.Transparent,
                 Font = new Font("Segoe UI", 10f),
-                Visible = false
+                Visible = false,
+                Anchor = AnchorStyles.None
             };
-            
-            // Position loading label in center
-            loadingLabel.Location = new Point(
-                (ClientSize.Width - loadingLabel.Width) / 2,
-                (ClientSize.Height - loadingLabel.Height) / 2
-            );
 
             // Create modern buttons based on main window status
             if (isMainWindow)
             {
-                // Main window buttons with better spacing and fixed icons
-                refreshButton = CreateModernButton("↻ Refresh", new Point(20, 15));
-                exportButton = CreateModernButton("💾 Export", new Point(150, 15));
-                cleanDevicesButton = CreateModernButton("🧹 Clean Devices", new Point(280, 15));
-                cleanLogsButton = CreateModernButton("📝 Clean Logs", new Point(430, 15));
-                checkUpdatesButton = CreateModernButton("⟳ Updates", new Point(580, 15));
+                // Main window buttons - using Point.Empty since FlowLayoutPanel handles positioning
+                refreshButton = CreateModernButton("↻ Refresh", Point.Empty);
+                exportButton = CreateModernButton("💾 Export", Point.Empty);
+                cleanDevicesButton = CreateModernButton("🧹 Clean Devices", Point.Empty);
+                cleanLogsButton = CreateModernButton("📝 Clean Logs", Point.Empty);
+                checkUpdatesButton = CreateModernButton("⟳ Updates", Point.Empty);
 
                 // Add event handlers
                 refreshButton.Click += RefreshButton_Click;
@@ -172,10 +182,10 @@ namespace HWIDChecker.UI.Forms
             }
             else
             {
-                // Sectioned view buttons (legacy mode)
-                refreshButton = CreateModernButton("🔄 Refresh", new Point(20, 15));
-                exportButton = CreateModernButton("💾 Export", new Point(140, 15));
-                var closeButton = CreateModernButton("✖ Close", new Point(260, 15));
+                // Sectioned view buttons
+                refreshButton = CreateModernButton("🔄 Refresh", Point.Empty);
+                exportButton = CreateModernButton("💾 Export", Point.Empty);
+                var closeButton = CreateModernButton("✖ Close", Point.Empty);
 
                 // Add event handlers
                 refreshButton.Click += RefreshButton_Click;
@@ -185,8 +195,21 @@ namespace HWIDChecker.UI.Forms
                 buttonPanel.Controls.AddRange(new Control[] { refreshButton, exportButton, closeButton });
             }
 
-            // Add all panels to form
-            Controls.AddRange(new Control[] { sidebarPanel, sidebarBorder, contentPanel, buttonPanel, loadingLabel });
+            // Assemble the layout
+            mainLayout.Controls.Add(sidebarPanel, 0, 0);
+            mainLayout.Controls.Add(contentPanel, 1, 0);
+            mainLayout.Controls.Add(buttonPanel, 0, 1);
+            mainLayout.SetColumnSpan(buttonPanel, 2); // Span across both columns
+
+            // Add main layout and loading label to form
+            this.Controls.Add(mainLayout);
+            this.Controls.Add(loadingLabel);
+
+            // Center loading label
+            loadingLabel.Location = new Point(
+                (ClientSize.Width - loadingLabel.Width) / 2,
+                (ClientSize.Height - loadingLabel.Height) / 2
+            );
         }
 
         private Button CreateModernButton(string text, Point location)
@@ -257,19 +280,21 @@ namespace HWIDChecker.UI.Forms
             sidebarPanel.Controls.Clear();
             sectionButtons.Clear();
 
-            // Add title to sidebar
+            // Add title to sidebar - FlowLayoutPanel will handle positioning
             var titleLabel = new Label
             {
-                Location = new Point(20, 20),
-                Size = new Size(240, 30),
+                AutoSize = false,
+                Size = new Size(260, 30),
                 Text = "Hardware Sections",
                 Font = new Font("Segoe UI", 12f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(220, 220, 220),
-                BackColor = Color.Transparent
+                BackColor = Color.Transparent,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(10, 10, 10, 5)
             };
             sidebarPanel.Controls.Add(titleLabel);
 
-            // Create elegant section buttons
+            // Create elegant section buttons - FlowLayoutPanel will handle positioning
             for (int i = 0; i < sections.Count; i++)
             {
                 var sectionButton = CreateSectionButton(sections[i].title, i);
@@ -285,7 +310,7 @@ namespace HWIDChecker.UI.Forms
             
             var button = new Button
             {
-                Location = new Point(10, 60 + (index * 50)),
+                AutoSize = false,
                 Size = new Size(260, 45),
                 Text = $"{icon} {title}",
                 BackColor = Color.FromArgb(50, 50, 50),
@@ -294,6 +319,7 @@ namespace HWIDChecker.UI.Forms
                 Font = new Font("Segoe UI", 10f),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(15, 0, 0, 0),
+                Margin = new Padding(10, 2, 10, 2),
                 Cursor = Cursors.Hand,
                 Tag = index
             };
