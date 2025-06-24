@@ -38,7 +38,7 @@ This will:
 
 ## Requirements
 
-- .NET 8.0 SDK
+- .NET 9.0 SDK
 - Windows 10/11 (x64)
 - Administrator privileges for hardware detection
 
