@@ -108,7 +108,7 @@ namespace HWIDChecker.UI.Forms
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.TopDown,
-                AutoScroll = true,
+                AutoScroll = false,
                 AutoSize = false,
                 BackColor = Color.FromArgb(40, 40, 40),
                 WrapContents = false
