@@ -96,7 +96,7 @@ namespace HWIDChecker.UI.Forms
             };
 
             // Configure columns: sidebar (280px) and content (fill remaining)
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280F));
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 285F));
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             
             // Configure rows: main content (fill) and buttons (60px)
