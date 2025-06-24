@@ -1,7 +1,6 @@
 using System.Drawing;
 using System.Windows.Forms;
 using HWIDChecker.UI.Components;
-using HWIDChecker.Utils;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
 using System.Linq;
@@ -54,16 +53,14 @@ namespace HWIDChecker.UI.Forms
 
             form.Text = "HWID Checker";
             
-            // Use base form size - Windows Forms will handle DPI scaling automatically
-            form.Size = DpiHelper.GetBaseFormSize(790, 820);
-            
+            // Use native .NET DPI handling
+            form.Size = new Size(790, 820);
             form.StartPosition = FormStartPosition.CenterScreen;
             form.BackColor = ThemeColors.MainBackground;
             form.ForeColor = ThemeColors.PrimaryText;
 
-            // CRITICAL: Use Font-based scaling instead of DPI scaling
-            form.AutoScaleMode = AutoScaleMode.Font;
-            form.AutoScaleDimensions = new SizeF(96F, 96F);
+            // Use native DPI scaling
+            form.AutoScaleMode = AutoScaleMode.Dpi;
 
             InitializeControls();
             var buttonPanel = CreateButtonPanel(form.Width);
@@ -87,7 +84,7 @@ namespace HWIDChecker.UI.Forms
         private void InitializeControls()
         {
             // Create font - Windows Forms will handle scaling automatically
-            var font = DpiHelper.CreateFont("Consolas", 9.75f, FontStyle.Regular);
+            var font = new Font("Consolas", 9.75f, FontStyle.Regular);
 
             OutputTextBox = new TextBox
             {
@@ -99,8 +96,8 @@ namespace HWIDChecker.UI.Forms
                 BackColor = ThemeColors.TextBoxBackground,
                 ForeColor = ThemeColors.TextBoxText,
                 BorderStyle = BorderStyle.None,
-                Margin = DpiHelper.CreateMargin(10),
-                Padding = DpiHelper.CreatePadding(5),
+                Margin = new Padding(10),
+                Padding = new Padding(5),
                 HideSelection = false,
                 Font = font
             };
@@ -112,7 +109,7 @@ namespace HWIDChecker.UI.Forms
                 ForeColor = ThemeColors.LoadingLabelText,
                 BackColor = ThemeColors.LoadingLabelBackground,
                 Visible = false,
-                Padding = DpiHelper.CreatePadding(5),
+                Padding = new Padding(5),
                 TextAlign = ContentAlignment.MiddleCenter
             };
 
@@ -193,7 +190,7 @@ namespace HWIDChecker.UI.Forms
             };
 
             // Set consistent margins for all buttons - Windows Forms will scale automatically
-            var buttonMargin = DpiHelper.CreateMargin(5);
+            var buttonMargin = new Padding(5);
             RefreshButton.Margin = buttonMargin;
             ExportButton.Margin = buttonMargin;
             CleanDevicesButton.Margin = buttonMargin;
@@ -204,7 +201,7 @@ namespace HWIDChecker.UI.Forms
             centeredButtonPanel.Controls.AddRange(new Control[] { RefreshButton, ExportButton, CleanDevicesButton, CleanLogsButton, CheckUpdatesButton, SectionedViewButton });
 
             // Simple centering - let Windows Forms handle the scaling
-            var panelMargin = DpiHelper.CreateMargin(10);
+            var panelMargin = new Padding(10);
             centeredButtonPanel.Margin = panelMargin;
 
             buttonPanel.Controls.Add(centeredButtonPanel);
