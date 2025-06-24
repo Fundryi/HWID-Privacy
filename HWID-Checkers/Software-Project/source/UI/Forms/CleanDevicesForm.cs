@@ -229,12 +229,34 @@ namespace HWIDChecker.UI.Forms
                     }
                     else
                     {
-                        HandleStatusUpdate("\r\nOperation cancelled. No devices were removed.");
+                        HandleStatusUpdate("\r\nAll devices are whitelisted. No devices need to be cleaned.");
+                        
+                        // Auto-close after 1 second when all devices are whitelisted
+                        var closeTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+                        closeTimer.Tick += (s, e) =>
+                        {
+                            closeTimer.Stop();
+                            closeTimer.Dispose();
+                            this.Close();
+                        };
+                        closeTimer.Start();
+                        return; // Exit early to avoid showing completion message
                     }
                 }
                 else
                 {
                     HandleStatusUpdate("No non-present devices were found.");
+                    
+                    // Auto-close after 1 second when no devices found
+                    var closeTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+                    closeTimer.Tick += (s, e) =>
+                    {
+                        closeTimer.Stop();
+                        closeTimer.Dispose();
+                        this.Close();
+                    };
+                    closeTimer.Start();
+                    return; // Exit early to avoid showing completion message
                 }
 
                 HandleStatusUpdate("\r\nDevice cleaning process completed.");
