@@ -6,7 +6,6 @@ using System.Windows.Forms;
 using HWIDChecker.Hardware;
 using HWIDChecker.Services;
 using HWIDChecker.UI.Components;
-using HWIDChecker.Utils;
 using static HWIDChecker.Services.UpdateResult;
 
 namespace HWIDChecker.UI.Forms
@@ -53,9 +52,9 @@ namespace HWIDChecker.UI.Forms
             FormBorderStyle = FormBorderStyle.FixedSingle; // Disable resizing
             StartPosition = isMainWindow ? FormStartPosition.CenterScreen : FormStartPosition.CenterParent;
             
-            // Use standard Windows Forms DPI handling
-            StandardDpiScaling.ConfigureForm(this);
-            StandardDpiScaling.SetLogicalSize(this, 920, 710);
+            // Use native .NET DPI handling - let Windows Forms handle scaling automatically
+            AutoScaleMode = AutoScaleMode.Dpi;
+            ClientSize = new Size(920, 710);
 
             CreateModernLayout();
             
@@ -74,23 +73,14 @@ namespace HWIDChecker.UI.Forms
                 CreateTestSection();
             }
         }
-        
-        // Removed SetDpiAwareSize() - now handled by DpiManager
-        
-        protected override void WndProc(ref Message m)
-        {
-            // Use standard Windows DPI change handling
-            StandardDpiScaling.HandleDpiChange(this, ref m);
-            base.WndProc(ref m);
-        }
 
         private void CreateModernLayout()
         {
             // Create elegant sidebar (left side navigation)
             sidebarPanel = new Panel
             {
-                Location = StandardDpiScaling.CreateLogicalPoint(0, 0),
-                Size = StandardDpiScaling.CreateLogicalSize(280, ClientSize.Height - 60),
+                Location = new Point(0, 0),
+                Size = new Size(280, ClientSize.Height - 60),
                 BackColor = Color.FromArgb(40, 40, 40), // Slightly lighter than background
                 BorderStyle = BorderStyle.None,
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left
@@ -99,8 +89,8 @@ namespace HWIDChecker.UI.Forms
             // Add subtle border to sidebar
             var sidebarBorder = new Panel
             {
-                Location = StandardDpiScaling.CreateLogicalPoint(279, 0),
-                Size = StandardDpiScaling.CreateLogicalSize(1, ClientSize.Height - 60),
+                Location = new Point(279, 0),
+                Size = new Size(1, ClientSize.Height - 60),
                 BackColor = Color.FromArgb(60, 60, 60),
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left
             };
@@ -108,25 +98,25 @@ namespace HWIDChecker.UI.Forms
             // Create main content area
             contentPanel = new Panel
             {
-                Location = StandardDpiScaling.CreateLogicalPoint(280, 0),
-                Size = StandardDpiScaling.CreateLogicalSize(ClientSize.Width - 280, ClientSize.Height - 60),
+                Location = new Point(280, 0),
+                Size = new Size(ClientSize.Width - 280, ClientSize.Height - 60),
                 BackColor = Color.FromArgb(25, 25, 25), // Even darker for content
                 BorderStyle = BorderStyle.None,
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-                Padding = StandardDpiScaling.CreateLogicalPadding(20)
+                Padding = new Padding(20)
             };
 
             // Create content textbox with modern styling
             currentContentTextBox = new TextBox
             {
-                Location = StandardDpiScaling.CreateLogicalPoint(20, 20),
-                Size = StandardDpiScaling.CreateLogicalSize(contentPanel.Width - 40, contentPanel.Height - 40),
+                Location = new Point(20, 20),
+                Size = new Size(contentPanel.Width - 40, contentPanel.Height - 40),
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
                 BackColor = Color.FromArgb(35, 35, 35),
                 ForeColor = Color.FromArgb(220, 220, 220),
-                Font = StandardDpiScaling.CreateLogicalFont("Consolas", 10f),
+                Font = new Font("Consolas", 10f),
                 BorderStyle = BorderStyle.None,
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
             };
@@ -136,8 +126,8 @@ namespace HWIDChecker.UI.Forms
             // Create modern button panel at bottom
             var buttonPanel = new Panel
             {
-                Location = StandardDpiScaling.CreateLogicalPoint(0, ClientSize.Height - 60),
-                Size = StandardDpiScaling.CreateLogicalSize(ClientSize.Width, 60),
+                Location = new Point(0, ClientSize.Height - 60),
+                Size = new Size(ClientSize.Width, 60),
                 BackColor = Color.FromArgb(45, 45, 45),
                 Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
             };
@@ -149,12 +139,12 @@ namespace HWIDChecker.UI.Forms
                 AutoSize = true,
                 ForeColor = Color.FromArgb(220, 220, 220),
                 BackColor = Color.Transparent,
-                Font = StandardDpiScaling.CreateLogicalFont("Segoe UI", 10f),
+                Font = new Font("Segoe UI", 10f),
                 Visible = false
             };
             
             // Position loading label in center
-            loadingLabel.Location = StandardDpiScaling.CreateLogicalPoint(
+            loadingLabel.Location = new Point(
                 (ClientSize.Width - loadingLabel.Width) / 2,
                 (ClientSize.Height - loadingLabel.Height) / 2
             );
@@ -163,11 +153,11 @@ namespace HWIDChecker.UI.Forms
             if (isMainWindow)
             {
                 // Main window buttons with better spacing and fixed icons
-                refreshButton = CreateModernButton("↻ Refresh", StandardDpiScaling.CreateLogicalPoint(20, 15));
-                exportButton = CreateModernButton("💾 Export", StandardDpiScaling.CreateLogicalPoint(150, 15));
-                cleanDevicesButton = CreateModernButton("🧹 Clean Devices", StandardDpiScaling.CreateLogicalPoint(280, 15));
-                cleanLogsButton = CreateModernButton("📝 Clean Logs", StandardDpiScaling.CreateLogicalPoint(430, 15));
-                checkUpdatesButton = CreateModernButton("⟳ Updates", StandardDpiScaling.CreateLogicalPoint(580, 15));
+                refreshButton = CreateModernButton("↻ Refresh", new Point(20, 15));
+                exportButton = CreateModernButton("💾 Export", new Point(150, 15));
+                cleanDevicesButton = CreateModernButton("🧹 Clean Devices", new Point(280, 15));
+                cleanLogsButton = CreateModernButton("📝 Clean Logs", new Point(430, 15));
+                checkUpdatesButton = CreateModernButton("⟳ Updates", new Point(580, 15));
 
                 // Add event handlers
                 refreshButton.Click += RefreshButton_Click;
@@ -209,7 +199,7 @@ namespace HWIDChecker.UI.Forms
                 BackColor = Color.FromArgb(0, 120, 215), // Modern blue
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = MonitorDpiPresets.CreatePresetFont(this, "Segoe UI", 9f),
+                Font = new Font("Segoe UI", 9f),
                 Cursor = Cursors.Hand
             };
         }
@@ -273,7 +263,7 @@ namespace HWIDChecker.UI.Forms
                 Location = new Point(20, 20),
                 Size = new Size(240, 30),
                 Text = "Hardware Sections",
-                Font = MonitorDpiPresets.CreatePresetFont(this, "Segoe UI", 12f, FontStyle.Bold),
+                Font = new Font("Segoe UI", 12f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(220, 220, 220),
                 BackColor = Color.Transparent
             };
@@ -301,7 +291,7 @@ namespace HWIDChecker.UI.Forms
                 BackColor = Color.FromArgb(50, 50, 50),
                 ForeColor = Color.FromArgb(200, 200, 200),
                 FlatStyle = FlatStyle.Flat,
-                Font = MonitorDpiPresets.CreatePresetFont(this, "Segoe UI", 10f),
+                Font = new Font("Segoe UI", 10f),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(15, 0, 0, 0),
                 Cursor = Cursors.Hand,

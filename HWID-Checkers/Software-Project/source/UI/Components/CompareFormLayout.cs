@@ -2,7 +2,6 @@ using System;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
-using HWIDChecker.Utils;
 
 namespace HWIDChecker.UI.Components
 {
@@ -35,7 +34,7 @@ namespace HWIDChecker.UI.Components
         public void SetText(RichTextBox textBox, string content)
         {
             textBox.Clear();
-            var font = DpiHelper.CreateFont("Cascadia Code", 10);
+            var font = new Font("Cascadia Code", 10);
             textBox.Font = font;
             textBox.Text = content;
             textBox.Select(0, 0);
@@ -47,17 +46,15 @@ namespace HWIDChecker.UI.Components
             {
                 System.Diagnostics.Debug.WriteLine("Starting CompareFormLayout initialization...");
 
-                // Use base size - Windows Forms will handle DPI scaling automatically
-                var baseSize = DpiHelper.GetBaseFormSize(790 * 2, 800);
-                this.formWidth = baseSize.Width;
-                this.formHeight = baseSize.Height;
+                // Use native .NET DPI handling
+                this.formWidth = 790 * 2;
+                this.formHeight = 800;
 
                 System.Diagnostics.Debug.WriteLine($"Form dimensions: {this.formWidth}x{this.formHeight}");
 
                 // Set form properties before size to prevent layout system from overriding
                 form.AutoSize = false;
-                form.AutoScaleMode = AutoScaleMode.Font; // Use Font-based scaling
-                form.AutoScaleDimensions = new SizeF(96F, 96F);
+                form.AutoScaleMode = AutoScaleMode.Dpi; // Use native DPI scaling
                 form.Text = "Compare HWID Information";
                 form.MinimizeBox = true;
                 form.MaximizeBox = true;
@@ -111,7 +108,7 @@ namespace HWIDChecker.UI.Components
         {
             try
             {
-                var font = DpiHelper.CreateFont("Cascadia Code", 10, FontStyle.Regular);
+                var font = new Font("Cascadia Code", 10, FontStyle.Regular);
 
                 var textBox = new RichTextBox
                 {
@@ -122,8 +119,8 @@ namespace HWIDChecker.UI.Components
                     BackColor = Color.FromArgb(45, 45, 45),
                     ForeColor = Color.FromArgb(220, 220, 220),
                     BorderStyle = BorderStyle.None,
-                    Margin = DpiHelper.CreateMargin(10),
-                    Padding = DpiHelper.CreatePadding(5),
+                    Margin = new Padding(10),
+                    Padding = new Padding(5),
                     HideSelection = false,
                     WordWrap = true,
                     ScrollBars = RichTextBoxScrollBars.Vertical
@@ -158,8 +155,8 @@ namespace HWIDChecker.UI.Components
                     Dock = DockStyle.Fill,
                     ColumnCount = 2,
                     RowCount = 1,
-                    Padding = DpiHelper.CreatePadding(2),
-                    Margin = DpiHelper.CreateMargin(0),
+                    Padding = new Padding(2),
+                    Margin = new Padding(0),
                     BackColor = Color.FromArgb(35, 35, 35),
                     AutoSize = false,
                     AutoSizeMode = AutoSizeMode.GrowAndShrink
@@ -186,18 +183,18 @@ namespace HWIDChecker.UI.Components
                     Dock = DockStyle.Fill,
                     RowCount = 2,
                     ColumnCount = 1,
-                    Padding = DpiHelper.CreatePadding(1),
-                    Margin = DpiHelper.CreateMargin(1),
+                    Padding = new Padding(1),
+                    Margin = new Padding(1),
                     BackColor = Color.FromArgb(40, 40, 40),
                     AutoSize = false,
                     AutoSizeMode = AutoSizeMode.GrowAndShrink
                 };
                 
-                var labelHeight = 20; // Base height - Windows Forms will scale automatically
+                var labelHeight = 20; // Windows Forms will scale automatically
                 panel.RowStyles.Add(new RowStyle(SizeType.Absolute, labelHeight));
                 panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-                var labelFont = DpiHelper.CreateFont("Segoe UI", 9f, FontStyle.Bold);
+                var labelFont = new Font("Segoe UI", 9f, FontStyle.Bold);
 
                 var label = new Label
                 {
