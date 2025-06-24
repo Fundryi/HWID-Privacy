@@ -11,14 +11,15 @@ static class Program
     [STAThread]
     static void Main()
     {
-        // CRITICAL: EnableVisualStyles must be called FIRST for proper DPI scaling
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
+        // .NET 8 pattern: ApplicationConfiguration.Initialize() FIRST
+        ApplicationConfiguration.Initialize();
         
-        // Native .NET DPI handling - ApplicationHighDpiMode is set in .csproj
+        // Then set DPI mode before any visual initialization
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         
-        ApplicationConfiguration.Initialize();
+        // Then enable visual styles
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
         
         try
         {
