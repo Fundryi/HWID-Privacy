@@ -12,6 +12,7 @@ namespace HWIDChecker.UI.Forms
 {
     public partial class SectionedViewForm : Form
     {
+        private const bool ENABLE_DEBUG_BUTTON = true; // Set to false to disable debug button
         private readonly HardwareInfoManager hardwareInfoManager;
         private string currentHardwareData;
         private Panel sidebarPanel;
@@ -22,6 +23,7 @@ namespace HWIDChecker.UI.Forms
         private Button cleanDevicesButton;
         private Button cleanLogsButton;
         private Button checkUpdatesButton;
+        private Button debugButton;
         private Label loadingLabel;
         private List<Button> sectionButtons;
         private List<(string title, string content)> sections;
@@ -176,9 +178,17 @@ namespace HWIDChecker.UI.Forms
                 cleanLogsButton.Click += CleanLogsButton_Click;
                 checkUpdatesButton.Click += CheckUpdatesButton_Click;
 
-                buttonPanel.Controls.AddRange(new Control[] {
-                    refreshButton, exportButton, cleanDevicesButton, cleanLogsButton, checkUpdatesButton
-                });
+                var buttonsToAdd = new List<Control> { refreshButton, exportButton, cleanDevicesButton, cleanLogsButton, checkUpdatesButton };
+
+                // Add debug button if enabled
+                if (ENABLE_DEBUG_BUTTON)
+                {
+                    debugButton = CreateModernButton("📜 Old View", Point.Empty);
+                    debugButton.Click += DebugButton_Click;
+                    buttonsToAdd.Add(debugButton);
+                }
+
+                buttonPanel.Controls.AddRange(buttonsToAdd.ToArray());
             }
             else
             {
@@ -260,13 +270,6 @@ namespace HWIDChecker.UI.Forms
                 {
                     sections.Add((title, content));
                 }
-            }
-
-            // Debug: log what sections we found
-            System.Diagnostics.Debug.WriteLine($"Found {sections.Count} sections:");
-            foreach (var section in sections)
-            {
-                System.Diagnostics.Debug.WriteLine($"- '{section.title}' ({section.content.Length} chars)");
             }
 
             if (sections.Count == 0)
@@ -389,6 +392,11 @@ namespace HWIDChecker.UI.Forms
         {
             try
             {
+                if (ENABLE_DEBUG_BUTTON)
+                {
+                    System.Diagnostics.Debug.WriteLine("*** LoadHardwareDataAsync() STARTED ***");
+                }
+                
                 // Show loading indicator
                 ShowLoading(true);
                 
@@ -603,6 +611,60 @@ namespace HWIDChecker.UI.Forms
                 {
                     button.Enabled = true;
                     button.Text = "⟳ Updates";
+                }
+            }
+        }
+        
+        private async void DebugButton_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                var debugButton = sender as Button;
+                if (debugButton != null)
+                {
+                    debugButton.Enabled = false;
+                    debugButton.Text = "📜 Loading...";
+                }
+
+                // Get raw hardware data directly from HardwareInfoManager
+                var rawData = await hardwareInfoManager.GetAllHardwareInfo();
+                
+                // Create a debug window to show the raw data
+                var debugForm = new Form
+                {
+                    Text = "Old View - Raw Hardware Data",
+                    Size = new Size(1000, 700),
+                    StartPosition = FormStartPosition.CenterParent,
+                    BackColor = Color.FromArgb(32, 32, 32),
+                    ForeColor = Color.White
+                };
+
+                var debugTextBox = new TextBox
+                {
+                    Dock = DockStyle.Fill,
+                    Multiline = true,
+                    ReadOnly = true,
+                    ScrollBars = ScrollBars.Both,
+                    BackColor = Color.FromArgb(25, 25, 25),
+                    ForeColor = Color.FromArgb(220, 220, 220),
+                    Font = new Font("Consolas", 9f),
+                    Text = rawData
+                };
+
+                debugForm.Controls.Add(debugTextBox);
+                debugForm.ShowDialog();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Debug error: {ex.Message}", "Debug Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                var debugButton = sender as Button;
+                if (debugButton != null)
+                {
+                    debugButton.Enabled = true;
+                    debugButton.Text = "📜 Old View";
                 }
             }
         }
