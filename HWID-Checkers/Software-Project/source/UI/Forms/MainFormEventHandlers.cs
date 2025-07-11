@@ -1,7 +1,6 @@
 using System;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using HWIDChecker.Forms;
 using HWIDChecker.Services;
 using HWIDChecker.UI.Components;
 using HWIDChecker.Hardware;
