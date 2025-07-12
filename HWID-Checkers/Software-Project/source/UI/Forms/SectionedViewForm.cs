@@ -41,7 +41,7 @@ namespace HWIDChecker.UI.Forms
             
             if (isMainWindow && string.IsNullOrEmpty(existingData))
             {
-                LoadHardwareDataAsync();
+                _ = LoadHardwareDataAsync();
             }
         }
 
