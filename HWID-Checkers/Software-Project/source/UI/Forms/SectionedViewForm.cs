@@ -266,10 +266,12 @@ namespace HWIDChecker.UI.Forms
                 // Extract content exactly as it appears
                 var content = allData.Substring(contentStart, contentEnd - contentStart).Trim();
                 
-                if (!string.IsNullOrEmpty(content))
+                // Always add the section, even if content is empty
+                if (string.IsNullOrEmpty(content))
                 {
-                    sections.Add((title, content));
+                    content = "No data available";
                 }
+                sections.Add((title, content));
             }
 
             if (sections.Count == 0)
@@ -400,58 +402,95 @@ namespace HWIDChecker.UI.Forms
                 // Show loading indicator
                 ShowLoading(true);
                 
-                // Collect all hardware info using the same method as MainFormLoader
-                var allContentBuilder = new System.Text.StringBuilder();
-                var results = new string[hardwareInfoManager.GetProviderCount()];
+                // FORCE ALL SECTIONS TO APPEAR - Create sections directly from hardware manager
+                sections.Clear();
                 
-                var progress = new Progress<(int index, string content)>(update =>
+                // Get all available section titles from hardware manager
+                var availableSections = hardwareInfoManager.GetAvailableSections();
+                
+                // Create placeholder sections for all hardware providers
+                foreach (var sectionTitle in availableSections)
                 {
-                    results[update.index] = update.content;
-                    var currentResults = results.Where(r => r != null);
-                    var combinedContent = string.Join(string.Empty, currentResults);
+                    sections.Add((sectionTitle, "Loading..."));
+                }
+                
+                // Create buttons immediately with all sections
+                CreateSidebarButtons();
+                if (sections.Count > 0)
+                {
+                    ShowSection(0);
+                    if (sectionButtons.Count > 0)
+                        HighlightActiveButton(sectionButtons[0]);
+                }
+                
+                // Now load actual data in background and update sections
+                var fullData = await hardwareInfoManager.GetAllHardwareInfo();
+                currentHardwareData = fullData;
+                
+                // Parse the actual data
+                var tempSections = new List<(string title, string content)>();
+                var sectionPattern = @"={20,}[\r\n]+\s*([^=\r\n]+?)\s*[\r\n]+={20,}";
+                var matches = System.Text.RegularExpressions.Regex.Matches(fullData, sectionPattern);
+                
+                for (int i = 0; i < matches.Count; i++)
+                {
+                    var match = matches[i];
+                    var title = match.Groups[1].Value.Trim();
+                    var contentStart = match.Index + match.Length;
+                    var contentEnd = (i + 1 < matches.Count) ? matches[i + 1].Index : fullData.Length;
+                    var content = fullData.Substring(contentStart, contentEnd - contentStart).Trim();
                     
-                    // Update UI on main thread
-                    if (this.InvokeRequired)
+                    if (string.IsNullOrEmpty(content))
                     {
-                        this.Invoke(new Action(() => {
-                            currentHardwareData = combinedContent;
-                        }));
+                        content = "No data available";
+                    }
+                    tempSections.Add((title, content));
+                }
+                
+                // Update existing sections with actual data
+                for (int i = 0; i < sections.Count; i++)
+                {
+                    var sectionTitle = sections[i].title;
+                    var matchingData = tempSections.FirstOrDefault(s => s.title.Equals(sectionTitle, StringComparison.OrdinalIgnoreCase));
+                    
+                    if (matchingData.title != null)
+                    {
+                        sections[i] = (sectionTitle, matchingData.content);
                     }
                     else
                     {
-                        currentHardwareData = combinedContent;
+                        sections[i] = (sectionTitle, "No data available");
                     }
-                });
-                
-                // Load hardware data
-                await hardwareInfoManager.GetAllHardwareInfo(progress);
+                }
                 
                 // Update UI on main thread
                 if (this.InvokeRequired)
                 {
                     this.Invoke(new Action(() => {
-                        ParseDataIntoSections(currentHardwareData);
-                        CreateSidebarButtons();
-                        if (sections.Count > 0)
-                        {
-                            ShowSection(0);
-                            if (sectionButtons.Count > 0)
-                                HighlightActiveButton(sectionButtons[0]);
-                        }
                         ShowLoading(false);
+                        // Refresh current view if one is selected
+                        if (sectionButtons.Count > 0)
+                        {
+                            var activeButtonIndex = sectionButtons.FindIndex(b => b.BackColor == Color.FromArgb(0, 120, 215));
+                            if (activeButtonIndex >= 0)
+                            {
+                                ShowSection(activeButtonIndex);
+                            }
+                        }
                     }));
                 }
                 else
                 {
-                    ParseDataIntoSections(currentHardwareData);
-                    CreateSidebarButtons();
-                    if (sections.Count > 0)
-                    {
-                        ShowSection(0);
-                        if (sectionButtons.Count > 0)
-                            HighlightActiveButton(sectionButtons[0]);
-                    }
                     ShowLoading(false);
+                    // Refresh current view if one is selected
+                    if (sectionButtons.Count > 0)
+                    {
+                        var activeButtonIndex = sectionButtons.FindIndex(b => b.BackColor == Color.FromArgb(0, 120, 215));
+                        if (activeButtonIndex >= 0)
+                        {
+                            ShowSection(activeButtonIndex);
+                        }
+                    }
                 }
             }
             catch (Exception ex)

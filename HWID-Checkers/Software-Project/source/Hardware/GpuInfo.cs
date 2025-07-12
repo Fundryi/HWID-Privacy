@@ -1,12 +1,20 @@
 using System.Diagnostics;
 using System.Management;
 using System.Text;
+using HWIDChecker.Services;
 
 namespace HWIDChecker.Hardware;
 
 public class GpuInfo : IHardwareInfo
 {
+    private readonly TextFormattingService textFormatter;
+
     public string SectionTitle => "GPU INFO";
+
+    public GpuInfo(TextFormattingService textFormatter = null)
+    {
+        this.textFormatter = textFormatter;
+    }
 
     public string GetInformation()
     {

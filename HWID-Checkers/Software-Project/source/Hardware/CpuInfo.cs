@@ -1,11 +1,19 @@
 using System.Management;
 using System.Text;
+using HWIDChecker.Services;
 
 namespace HWIDChecker.Hardware;
 
 public class CpuInfo : IHardwareInfo
 {
+    private readonly TextFormattingService textFormatter;
+
     public string SectionTitle => "CPU";
+
+    public CpuInfo(TextFormattingService textFormatter = null)
+    {
+        this.textFormatter = textFormatter;
+    }
 
     public string GetInformation()
     {
