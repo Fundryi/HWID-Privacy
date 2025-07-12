@@ -1,11 +1,19 @@
 using System.Diagnostics;
 using System.Text;
+using HWIDChecker.Services;
 
 namespace HWIDChecker.Hardware;
 
 public class TpmInfo : IHardwareInfo
 {
+    private readonly TextFormattingService textFormatter;
+
     public string SectionTitle => "TPM MODULES";
+
+    public TpmInfo(TextFormattingService textFormatter = null)
+    {
+        this.textFormatter = textFormatter;
+    }
 
     public string GetInformation()
     {

@@ -28,7 +28,7 @@ namespace HWIDChecker.Hardware
                 new SystemInfo(),
                 new RamInfo(textFormatter),
                 new CpuInfo(),
-                new TpmInfo(),
+                new TpmInfo(textFormatter),
                 new UsbInfo(textFormatter),
                 new GpuInfo(),
                 new MonitorInfo(textFormatter),
