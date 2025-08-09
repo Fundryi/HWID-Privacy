@@ -138,3 +138,61 @@ For Realtek network adapters, you can modify the MAC address using the Realtek e
    - Run `ipconfig /all`
    - Look for your network adapter's Physical Address
    - It should match your programmed MAC address
+
+---
+
+## USB NICs
+
+### Realtek USB NICs (Update)
+- Status:
+  - Realtek-based USB NICs (e.g., RTL8153/RTL8156 series) can also be permanently spoofed.
+  - Use the Realtek USB PG Tool package; primary folder to use:
+    - “**LATEST_PUB_WIN_USB_PGTOOL_v2.0.22_V2**”
+- Tool Package:
+  - [RealtekMAC USB.zip](./USB%20Realtek%20Files/RealtekMAC%20USB.zip)
+    - Older folders inside are retained only for experimentation; the above folder is the recommended one.
+- Tested Hardware:
+  - Recommended USB NIC: 
+    - [USB‑C 2.5GbE (Uniaccessories)](https://uniaccessories.com/products/usb-c-to-ethernet-adapter-2500mbps)
+      - [Amazon DE Link](https://www.amazon.de/-/en/dp/B0C2H9HVH3)
+    - Examples that **DONT WORK** at the moment because of missing .CFG settings or custom EFUSE:
+      - [UGREEN Product](https://de.ugreen.com/products/ugreen-usb-c-ethernet-adapter-gigabit-lan-adapter-netzwerkadapter-kompatibel-mit-macbook-air-pro-ipad-pro-air-surface-pro-8-7-galaxy-tabs-steam-deck-spielkonsole-switch-und-mehr-typ-c-geraten)
+      - [Amazon DE](https://www.amazon.de/dp/B0DNSTHRGQ/)
+
+- Quick Programming Steps (Windows):
+  - Open the USB PG Tool from “LATEST_PUB_WIN_USB_PGTOOL_v2.0.22_V2”.
+  - Select your device and ensure mode is set to EFUSE.
+  - Click “DUMP” to read current settings and confirm the tool returns “PASS”.
+![DUMP/Read section](./Images/Realtek%20USB1.png)
+  - Set “CURRENT MAC” to your desired value (preserve vendor OUI if possible).
+  - Click “PROGRAM” to flash; success should show “PASS”.
+![DUMP/Read section](./Images/Realtek%20USB2.png)
+  - Done
+- Serial Number Note:
+  - The tool allows changing the USB “Serial Number”. Avoid changing it in most scenarios:
+    - Many Realtek USB NICs share common serial prefixes (e.g., “4013”), so altering it can make your unit uniquely stand out.
+  - Do not modify other advanced settings unless you know exactly what they do.
+
+---
+
+### ASIX AX88179(A/B now too!)
+- Overview:
+  - Permanent MAC changes are possible using the ASIX programming utility.
+  - Keep the vendor OUI (first 6 hex digits) and change only the last 6.
+- Downloads:
+  - [ASIXFlash-master.zip](./USB%20AX88179%20Files/ASIXFlash-master.zip)
+    - Upstream reference: [ASIXFlash Repository](https://github.com/jglim/ASIXFlash)
+  - [Captain Mac Tool.zip](./USB%20AX88179%20Files/Captain%20Mac%20Tool.zip)
+    - Password Used: `captaindma`
+      - Not added by me, will also open their website...
+- Quick Steps:
+  1. Extract the tool, run as Administrator.
+  2. Backup current config/EEPROM if the tool provides an option.
+  3. Program a new MAC that preserves the original OUI.
+  4. Unplug/replug the adapter.
+  5. Done
+- Notes:
+  - AX88179 “A/B” revisions can only be flashed with the Captain Mac Tool.
+  - If programming fails or reverts, the unit/firmware may be locked or unsupported.
+
+---
