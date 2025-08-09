@@ -116,7 +116,7 @@
 ### 6. **USB Peripherals**
 
 - **Keyboards/Mice**:
-  - Roccat (now Turtleshell), Xtrfy models and Razer DeathAdder V3 should not have USB serials.
+  - Roccat (now Turtleshell), Xtrfy models and "all" Razer products should not have USB serials.
 - **USB Sticks**: Some “UDisk” drives default to `00000000`
   - Verify with **USBDeview**.
 - **Avoid**: Devices with hardcoded hardware serials you cannot edit.
