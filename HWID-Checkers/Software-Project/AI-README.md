@@ -1,6 +1,7 @@
 # AI-README: HWID Checker Architecture Index
 
 > **READ THIS FIRST** - This file is the authoritative guide for AI-assisted code modifications.
+> WE USE THIS BUILD COMMAND ALWAYS: dotnet publish "HWID-Checkers/Software-Project/source/HWIDChecker.csproj" -c Release
 
 ---
 

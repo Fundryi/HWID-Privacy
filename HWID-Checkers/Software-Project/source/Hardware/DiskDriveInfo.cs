@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Management;
 using System.Text;
 using HWIDChecker.Services;
+using HWIDChecker.Services.Win32;
 
 namespace HWIDChecker.Hardware;
 
@@ -23,6 +25,8 @@ public class DiskDriveInfo : IHardwareInfo
         public string Model { get; set; } = "";
         public string SerialNumber { get; set; } = "";
         public string FirmwareVersion { get; set; } = "";
+        public string WwnHex { get; set; } = "";
+        public string WwnDecoded { get; set; } = "";
     }
 
     private string FormatAsTable(List<DiskInfo> disks)
@@ -51,7 +55,17 @@ public class DiskDriveInfo : IHardwareInfo
             // Model, Serial, and Firmware info
             sb.AppendLine($"    ├── Model: {disk.Model}");
             sb.AppendLine($"    ├── Serial: {disk.SerialNumber}");
-            sb.AppendLine($"    └── Firmware: {disk.FirmwareVersion}");
+            
+            // Firmware and WWN info
+            sb.AppendLine($"    ├── Firmware: {disk.FirmwareVersion}");
+            if (!string.IsNullOrEmpty(disk.WwnHex))
+            {
+                sb.AppendLine($"    ├── WWN (StorageDeviceIdProperty): {disk.WwnHex}");
+                if (!string.IsNullOrEmpty(disk.WwnDecoded))
+                {
+                    sb.AppendLine($"    └── WWN decoded: {disk.WwnDecoded}");
+                }
+            }
             
             // Add separator between drives, but not after the last one
             if (i < disks.Count - 1)
@@ -68,6 +82,9 @@ public class DiskDriveInfo : IHardwareInfo
         var disks = new List<DiskInfo>();
         var logicalDrives = GetLogicalDrives();
 
+        // First, get MSFT_PhysicalDisk info for UniqueId/WWN
+        var physicalDiskUniqueIdMap = GetPhysicalDiskUniqueIdMap();
+
         using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_DiskDrive");
         foreach (ManagementObject disk in searcher.Get())
         {
@@ -75,11 +92,18 @@ public class DiskDriveInfo : IHardwareInfo
             var model = disk["Model"]?.ToString()?.Trim() ?? "Unknown Model";
             var serial = disk["SerialNumber"]?.ToString()?.Trim() ?? "Unknown Serial";
             var firmware = disk["FirmwareRevision"]?.ToString()?.Trim() ?? "";
+            
+            // Get disk index for WWN query
+            int diskIndex = -1;
+            if (int.TryParse(disk["Index"]?.ToString(), out int parsedIndex))
+            {
+                diskIndex = parsedIndex;
+            }
 
             // Find associated logical drive
             var logicalDrive = logicalDrives.FirstOrDefault(d => d.PhysicalDrive == deviceId);
             
-            disks.Add(new DiskInfo
+            var diskInfo = new DiskInfo
             {
                 DeviceId = deviceId,
                 DriveLetter = logicalDrive != default ? logicalDrive.DriveLetter.TrimEnd(':') : "",
@@ -87,10 +111,146 @@ public class DiskDriveInfo : IHardwareInfo
                 Model = model,
                 SerialNumber = serial,
                 FirmwareVersion = firmware
-            });
+            };
+            
+            // Try to get WWN information - first from MSFT_PhysicalDisk (WMI), then fallback to DeviceIoControl
+            if (diskIndex >= 0 && physicalDiskUniqueIdMap.TryGetValue(diskIndex, out var uniqueIdInfo))
+            {
+                diskInfo.WwnHex = uniqueIdInfo.UniqueIdHex;
+                diskInfo.WwnDecoded = uniqueIdInfo.UniqueId;
+            }
+            else if (diskIndex >= 0)
+            {
+                StorageDeviceIdQuery.TryGetWwnHexFromPhysicalDrive(diskIndex, out string wwnHex, out string decoded);
+                diskInfo.WwnHex = wwnHex;
+                diskInfo.WwnDecoded = decoded;
+            }
+            
+            disks.Add(diskInfo);
         }
 
         return FormatAsTable(disks);
+    }
+
+    private Dictionary<int, (string UniqueId, string UniqueIdHex)> GetPhysicalDiskUniqueIdMap()
+    {
+        var result = new Dictionary<int, (string, string)>();
+        
+        try
+        {
+            // Query MSFT_PhysicalDisk for UniqueId
+            using var searcher = new ManagementObjectSearcher("SELECT DeviceId, UniqueId FROM MSFT_PhysicalDisk");
+            foreach (ManagementObject disk in searcher.Get())
+            {
+                var deviceId = disk["DeviceId"]?.ToString();
+                var uniqueId = disk["UniqueId"]?.ToString();
+                
+                if (!string.IsNullOrEmpty(deviceId) && int.TryParse(deviceId, out int diskIndex) && !string.IsNullOrEmpty(uniqueId))
+                {
+                    // Convert UniqueId to hex
+                    string uniqueIdHex = ConvertUniqueIdToHex(uniqueId);
+                    result[diskIndex] = (uniqueId, uniqueIdHex);
+                }
+            }
+        }
+        catch
+        {
+            // MSFT_PhysicalDisk may not be available on all systems - try PowerShell as fallback
+            result = GetPhysicalDiskUniqueIdFromPowerShell();
+        }
+        
+        return result;
+    }
+
+    private Dictionary<int, (string UniqueId, string UniqueIdHex)> GetPhysicalDiskUniqueIdFromPowerShell()
+    {
+        var result = new Dictionary<int, (string, string)>();
+        
+        try
+        {
+            // Use PowerShell to Get-PhysicalDisk
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = "-NoProfile -Command \"Get-PhysicalDisk | Select-Object DeviceId, UniqueId | ConvertTo-Json\"",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = Process.Start(psi);
+            if (process != null)
+            {
+                string output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+
+                // Parse JSON output
+                if (!string.IsNullOrEmpty(output) && output != "[]")
+                {
+                    var disks = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(output);
+                    if (disks.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        foreach (var disk in disks.EnumerateArray())
+                        {
+                            if (disk.TryGetProperty("DeviceId", out var deviceIdProp) &&
+                                disk.TryGetProperty("UniqueId", out var uniqueIdProp))
+                            {
+                                string deviceId = deviceIdProp.ToString();
+                                string uniqueId = uniqueIdProp.ToString();
+
+                                if (!string.IsNullOrEmpty(deviceId) && int.TryParse(deviceId, out int diskIndex) && !string.IsNullOrEmpty(uniqueId))
+                                {
+                                    string uniqueIdHex = ConvertUniqueIdToHex(uniqueId);
+                                    result[diskIndex] = (uniqueId, uniqueIdHex);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // PowerShell method failed
+        }
+        
+        return result;
+    }
+
+    private string ConvertUniqueIdToHex(string uniqueId)
+    {
+        if (string.IsNullOrEmpty(uniqueId))
+        {
+            return string.Empty;
+        }
+
+        // Try to parse as GUID
+        if (Guid.TryParse(uniqueId, out Guid guid))
+        {
+            byte[] bytes = guid.ToByteArray();
+            var sb = new StringBuilder(bytes.Length * 3);
+            for (int i = 0; i < bytes.Length; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(':');
+                }
+                sb.Append(bytes[i].ToString("X2"));
+            }
+            return sb.ToString();
+        }
+
+        // If it's already ASCII, convert to hex
+        var hexSb = new StringBuilder(uniqueId.Length * 3);
+        foreach (char c in uniqueId)
+        {
+            if (hexSb.Length > 0)
+            {
+                hexSb.Append(':');
+            }
+            hexSb.Append(((byte)c).ToString("X2"));
+        }
+        return hexSb.ToString();
     }
 
     private List<(string PhysicalDrive, string DriveLetter, string VolumeSerial)> GetLogicalDrives()
