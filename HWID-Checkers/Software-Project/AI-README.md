@@ -27,11 +27,10 @@
 
 | Task | Files to Modify | Key Classes |
 |------|----------------|-------------|
-| Add new hardware info type | `Hardware/*Info.cs`, `HardwareInfoManager.cs`, `Strategies/*IdentifierStrategy.cs`, `ComponentParser.cs` | `IHardwareInfo`, `IComponentIdentifierStrategy` |
-| Add property to existing hardware | `Hardware/*Info.cs`, `Strategies/*IdentifierStrategy.cs` | Specific info class, specific strategy |
+| Add new hardware info type | `Hardware/*Info.cs`, `HardwareInfoManager.cs` | `IHardwareInfo` |
+| Add property to existing hardware | `Hardware/*Info.cs` | Specific info class |
 | Change text formatting | `TextFormattingService.cs` | `TextFormattingService` |
 | Add UI button/handler | `SectionedViewForm.cs` | `SectionedViewForm` (buttons created inline) |
-| Modify comparison logic | `ChangeDetector.cs`, `ComponentMatcher.cs`, `Strategies/*IdentifierStrategy.cs` | `IChangeDetector`, `IComponentMatcher` |
 | Add export format | `FileExportService.cs` | `FileExportService` |
 
 ---
@@ -56,7 +55,7 @@
 │  (Orchestrator)     │                        │                     │
 └──────┬──────────────┘                        │ • TextFormatting    │
        │                                       │ • FileExport        │
-       │                                       │ • ChangeDetector    │
+       │                                       │ • DeviceCleaning    │
        │                                       │ • DeviceCleaning    │
        │                                       │ • AutoUpdate        │
        ▼                                       └─────────────────────┘
@@ -81,16 +80,6 @@ All hardware info classes must implement:
 ```csharp
 string GetInformation();     // Returns raw data string
 string SectionTitle { get; } // Display title for UI
-```
-
-### IComponentIdentifierStrategy Interface
-**Location:** `Services/Interfaces/IComponentIdentifierStrategy.cs`
-
-Used for component comparison:
-```csharp
-string[] GetComparisonProperties();        // Properties to compare
-string GetIdentifier(Dictionary<...>);      // Primary unique key
-string[] GetFallbackIdentifiers(...);      // Backup keys
 ```
 
 ---
@@ -121,10 +110,6 @@ string[] GetFallbackIdentifiers(...);      // Backup keys
 |------|---------|-------------|
 | `TextFormattingService.cs` | **FORMATTER** - Formats all output text (headers, sections, separators) | None |
 | `FileExportService.cs` | Exports hardware data to timestamped TXT files | None |
-| `ChangeDetector.cs` | Detects changes between two hardware snapshots | `IComponentIdentifierStrategy` |
-| `ComponentParser.cs` | Parses exported TXT into `ComponentIdentifier` objects | `IComponentIdentifierStrategy` |
-| `ComponentMatcher.cs` | Matches components between two snapshots | `IComponentIdentifierStrategy` |
-| `ComparisonServiceFactory.cs` | Factory for comparison services | `ChangeDetector`, `ComponentMatcher`, `ComponentParser` |
 | `DeviceCleaningService.cs` | Scans and removes ghost (non-present) devices | `SetupApi` (Win32) |
 | `SystemCleaningService.cs` | Wrapper for async device cleaning operations | `DeviceCleaningService` |
 | `DeviceWhitelistService.cs` | Manages device whitelist for cleaning | None |
@@ -135,9 +120,7 @@ string[] GetFallbackIdentifiers(...);      // Backup keys
 
 | Subdir | Purpose |
 |--------|---------|
-| `Interfaces/` | Service contracts (`IChangeDetector`, `IComponentIdentifierStrategy`, `IComponentMatcher`, `IComponentParser`) |
-| `Models/` | Data models (`ComponentIdentifier`, `ComparisonResult`, `ChangeType`, `DeviceDetail`) |
-| `Strategies/` | Component identification strategies for comparison |
+| `Models/` | Data models (`DeviceDetail`) |
 | `Win32/` | Native Windows API P/Invoke declarations (`SetupApi`) |
 
 ### UI Layer (`UI/`)
@@ -179,23 +162,6 @@ string[] GetFallbackIdentifiers(...);      // Backup keys
    new SoundCardInfo(textFormatter)
    ```
 
-3. **Add comparison strategy** (`Services/Strategies/HardwareIdentifierStrategies.cs`):
-   ```csharp
-   public class SoundCardIdentifierStrategy : BaseHardwareIdentifierStrategy
-   {
-       public override string[] GetComparisonProperties() => 
-           new[] { "Name", "DeviceID", "Manufacturer" };
-       protected override string[] GetPrimaryKeyComponents() => 
-           new[] { "DeviceID" };
-       protected override string[] GetFallbackKeyComponents() => 
-           new[] { "Name", "Manufacturer" };
-   }
-   ```
-
-4. **Register strategy in ComponentParser** (`Services/ComponentParser.cs`):
-   - Add to `_sectionTypeMap`: `["SOUND CARDS"] = "SOUNDCARD"`
-   - Add to `_strategies`: `["SOUNDCARD"] = new SoundCardIdentifierStrategy()`
-
 ### Adding a New Property to Existing Hardware
 
 **Example: Adding "Temperature" to CPU info**
@@ -203,9 +169,6 @@ string[] GetFallbackIdentifiers(...);      // Backup keys
 1. **Modify the info class** (`Hardware/CpuInfo.cs`):
    - Add WMI query for temperature (if available)
    - Append to output string
-
-2. **Update comparison strategy** (`Services/Strategies/HardwareIdentifierStrategies.cs`):
-   - Add "Temperature" to `CpuIdentifierStrategy.GetComparisonProperties()`
 
 ### Modifying Text Formatting
 
@@ -220,39 +183,6 @@ string[] GetFallbackIdentifiers(...);      // Backup keys
 Constants at top:
 - `LINE_WIDTH = 93` - Main separator width
 - `ITEM_SEPARATOR_WIDTH = 40` - Item separator width
-
----
-
-## Comparison System Architecture
-
-```
-Exported TXT File (Old)
-         │
-         ▼
-   ComponentParser
-         │
-         ▼
-   List<ComponentIdentifier>
-         │
-         ▼
-   ComponentMatcher ──┐
-         │            │
-         ▼            │
-   Matches (Base ↔ Target)
-         │
-         ▼
-   ChangeDetector
-         │
-         ▼
-   List<ComparisonResult>
-```
-
-**Key Classes:**
-- `ComponentIdentifier` - Parsed component with type, unique key, properties
-- `ComparisonResult` - Change type (Added/Removed/Modified) + property changes
-- `ChangeType` enum - Added, Removed, Modified, Unchanged
-
----
 
 ## Device Cleaning System
 
@@ -304,11 +234,6 @@ graph TD
     
     J[User Clicks Export] --> K[FileExportService.ExportHardwareInfo]
     K --> L[Save as HWID-EXPORT-DD.MM.YY-HH;mm;ss.txt]
-    
-    M[Compare Two Files] --> N[ComponentParser.Parse]
-    N --> O[ComponentMatcher.Match]
-    O --> P[ChangeDetector.DetectChanges]
-    P --> Q[ComparisonResult]
 ```
 
 ---
@@ -329,12 +254,11 @@ graph TD
 **Update AI-README.md when:**
 
 1. Adding/removing hardware info types
-2. Modifying the comparison system architecture
-3. Changing service layer contracts
-4. Adding new UI forms or major UI restructuring
-5. Modifying the data flow between layers
-6. Adding new Win32 integrations or native API calls
-7. Changing the auto-update mechanism
+2. Changing service layer contracts
+3. Adding new UI forms or major UI restructuring
+4. Modifying the data flow between layers
+5. Adding new Win32 integrations or native API calls
+6. Changing the auto-update mechanism
 
 **DO NOT update for:**
 - Bug fixes in existing code
@@ -372,17 +296,12 @@ source/
 ├── Services/
 │   ├── TextFormattingService.cs        # FORMATTER
 │   ├── FileExportService.cs            # Export to TXT
-│   ├── ChangeDetector.cs               # Compare logic
-│   ├── ComponentParser.cs              # Parse TXT to objects
-│   ├── ComponentMatcher.cs             # Match components
 │   ├── DeviceCleaningService.cs        # Ghost device removal
 │   ├── SystemCleaningService.cs        # Async wrapper
 │   ├── DeviceWhitelistService.cs       # Whitelist management
 │   ├── EventLogCleaningService.cs      # Log cleaning
 │   ├── AutoUpdateService.cs            # GitHub updates
-│   ├── Interfaces/                     # Service contracts
 │   ├── Models/                         # Data models
-│   ├── Strategies/                     # Comparison strategies
 │   └── Win32/                          # Native Windows API
 └── UI/
     ├── Forms/
