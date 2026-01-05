@@ -27,6 +27,7 @@ public class DiskDriveInfo : IHardwareInfo
         public string FirmwareVersion { get; set; } = "";
         public string WwnHex { get; set; } = "";
         public string WwnDecoded { get; set; } = "";
+        public bool WwnFromRawIoctl { get; set; } = false;
     }
 
     private string FormatAsTable(List<DiskInfo> disks)
@@ -56,14 +57,23 @@ public class DiskDriveInfo : IHardwareInfo
             sb.AppendLine($"    ├── Model: {disk.Model}");
             sb.AppendLine($"    ├── Serial: {disk.SerialNumber}");
             
-            // Firmware and WWN info
-            sb.AppendLine($"    ├── Firmware: {disk.FirmwareVersion}");
-            if (!string.IsNullOrEmpty(disk.WwnHex))
+            // Firmware info (end of tree if no WWN data)
+            if (string.IsNullOrEmpty(disk.WwnHex))
             {
+                sb.AppendLine($"    └── Firmware: {disk.FirmwareVersion}");
+            }
+            else
+            {
+                // Has WWN data - add Firmware and WWN lines
+                sb.AppendLine($"    ├── Firmware: {disk.FirmwareVersion}");
                 sb.AppendLine($"    ├── WWN (StorageDeviceIdProperty): {disk.WwnHex}");
                 if (!string.IsNullOrEmpty(disk.WwnDecoded))
                 {
                     sb.AppendLine($"    └── WWN decoded: {disk.WwnDecoded}");
+                }
+                else
+                {
+                    sb.AppendLine($"    └── WWN decoded: <empty>");
                 }
             }
             
@@ -81,9 +91,6 @@ public class DiskDriveInfo : IHardwareInfo
     {
         var disks = new List<DiskInfo>();
         var logicalDrives = GetLogicalDrives();
-
-        // First, get MSFT_PhysicalDisk info for UniqueId/WWN
-        var physicalDiskUniqueIdMap = GetPhysicalDiskUniqueIdMap();
 
         using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_DiskDrive");
         foreach (ManagementObject disk in searcher.Get())
@@ -113,17 +120,15 @@ public class DiskDriveInfo : IHardwareInfo
                 FirmwareVersion = firmware
             };
             
-            // Try to get WWN information - first from MSFT_PhysicalDisk (WMI), then fallback to DeviceIoControl
-            if (diskIndex >= 0 && physicalDiskUniqueIdMap.TryGetValue(diskIndex, out var uniqueIdInfo))
+            // Try to get WWN information - use PowerShell directly (most reliable method)
+            if (diskIndex >= 0)
             {
-                diskInfo.WwnHex = uniqueIdInfo.UniqueIdHex;
-                diskInfo.WwnDecoded = uniqueIdInfo.UniqueId;
-            }
-            else if (diskIndex >= 0)
-            {
-                StorageDeviceIdQuery.TryGetWwnHexFromPhysicalDrive(diskIndex, out string wwnHex, out string decoded);
-                diskInfo.WwnHex = wwnHex;
-                diskInfo.WwnDecoded = decoded;
+                var physicalDiskUniqueIdMap = GetPhysicalDiskUniqueIdMap();
+                if (physicalDiskUniqueIdMap.TryGetValue(diskIndex, out var uniqueIdInfo))
+                {
+                    diskInfo.WwnHex = uniqueIdInfo.UniqueIdHex;
+                    diskInfo.WwnDecoded = uniqueIdInfo.UniqueId;
+                }
             }
             
             disks.Add(diskInfo);
