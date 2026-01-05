@@ -259,7 +259,15 @@ internal static class StorageDeviceIdQuery
             if (bestIdentifier.Value.CodeSet == STORAGE_IDENTIFIER_CODE_SET.CodeSetAscii ||
                 IsPrintableAscii(bestIdentifier.Value.Identifier))
             {
-                decoded = Encoding.ASCII.GetString(bestIdentifier.Value.Identifier).TrimEnd('\0');
+                string asciiDecoded = Encoding.ASCII.GetString(bestIdentifier.Value.Identifier).TrimEnd('\0');
+                decoded = asciiDecoded;
+            }
+            // Only show WWN if it's NOT a 16-byte GUID (GUIDs are not real WWN)
+            else if (bestIdentifier.Value.IdentifierSize == 16)
+            {
+                // 16-byte binary identifier - treat as no WWN (GUID is not a real WWN)
+                wwnHex = string.Empty;
+                decoded = string.Empty;
             }
 
             return true;
@@ -319,9 +327,11 @@ internal static class StorageDeviceIdQuery
             }
 
             // Priority 2: Binary with 8 or 16 bytes (EUI-64 / NGUID-style)
+            // Only accept if NOT all zeros (all-zeros means no WWN available)
             if (binary8Or16Identifier == null &&
                 identifier.CodeSet == STORAGE_IDENTIFIER_CODE_SET.CodeSetBinary &&
-                (identifier.IdentifierSize == 8 || identifier.IdentifierSize == 16))
+                (identifier.IdentifierSize == 8 || identifier.IdentifierSize == 16) &&
+                !IsAllZeros(identifier.Identifier))
             {
                 binary8Or16Identifier = identifier;
             }
@@ -341,6 +351,23 @@ internal static class StorageDeviceIdQuery
 
         // Return based on priority
         return asciiNameIdentifier ?? binary8Or16Identifier ?? firstIdentifier;
+    }
+
+    private static bool IsAllZeros(byte[] bytes)
+    {
+        if (bytes == null || bytes.Length == 0)
+        {
+            return true;
+        }
+        
+        foreach (byte b in bytes)
+        {
+            if (b != 0)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static string BytesToColonHex(byte[] bytes)
