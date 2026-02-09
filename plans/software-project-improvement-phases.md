@@ -3,6 +3,11 @@
 ## Scope
 `HWID-Checkers/Software-Project` audit and improvement roadmap to make the project more consistent, maintainable, and production-safe while preserving current behavior (scan HWIDs, display results, export data).
 
+## Execution Status (2026-02-09)
+- Phase 1: completed
+- Phase 2: completed
+- Phase 3-5: pending
+
 ## Current-State Findings
 - Docs were partially out of sync with implementation (comparison references, old update mechanism details, stale paths).
 - Legacy UI path (`MainForm*`) and legacy data handlers remain in-tree but are not used by the active entry point.
