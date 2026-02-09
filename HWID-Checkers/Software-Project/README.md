@@ -76,7 +76,7 @@ Current providers (12):
 - File export (`FileExportService`)
 - Device cleaning + whitelist management
 - Event log cleaning
-- Auto-update check/download for `HWIDChecker.exe` from GitHub
+- Auto-update check/download for `HWIDChecker.exe` from GitHub (SHA256 hash comparison)
 
 ## Usage Instructions
 
