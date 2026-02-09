@@ -1,14 +1,15 @@
 # Auto-Update System for HWID Checker
 
 ## Overview
-The HWID Checker now includes an auto-update system that can check for and download the latest version from GitHub without requiring manual releases.
+The HWID Checker includes an auto-update system that compares the local executable hash with the GitHub-hosted executable hash, then updates in place when they differ.
 
 ## How It Works
 
 ### Update Detection
-- The system checks the GitHub API for commits that modified the `HWIDChecker.exe` file
-- It compares the commit timestamp with the current executable's last modified time
-- If a newer version exists on GitHub, it offers to download and install it
+- The updater downloads `HWIDChecker.exe` from GitHub (raw URL, cache-busted query string)
+- It computes SHA1 of the downloaded content
+- It computes SHA1 of the currently running executable
+- If hashes differ, it offers update/install
 
 ### Manual Update Check
 - Users can click the "Check Updates" button to manually check for updates
@@ -16,36 +17,34 @@ The HWID Checker now includes an auto-update system that can check for and downl
 - If no update is available, it displays an informational message
 
 ### Update Process
-1. **Detection**: Checks GitHub API for latest commit that modified `HWIDChecker.exe`
-2. **Download**: Downloads the new executable to a temporary location
-3. **Replace**: Creates a batch script to replace the current executable
-4. **Restart**: Automatically restarts the application with the new version
+1. **Detect**: Compare local SHA1 vs GitHub file SHA1
+2. **Prompt**: Ask user to confirm update
+3. **Download**: Stream new executable to temp path with progress UI
+4. **Replace**: Generate temporary batch script to replace the running exe
+5. **Restart**: Launch new executable and exit old process
 
 ## Technical Details
 
 ### Files Added/Modified
 - `Services/AutoUpdateService.cs` - Core update logic
-- `UI/Forms/MainFormLayout.cs` - Added "Check Updates" button
-- `UI/Forms/MainFormEventHandlers.cs` - Update button event handler
-- `UI/Forms/MainFormInitializer.cs` - Integration with main form
-- `HWIDChecker.csproj` - Added System.Text.Json dependency
+- `UI/Forms/SectionedViewForm.cs` - Main UI update button + event handler
+- `HWIDChecker.csproj` - Project publish/runtime settings and package references
 
-### GitHub API Endpoints Used
-- `https://api.github.com/repos/Fundryi/HWID-Privacy/commits?path=HWIDChecker.exe&per_page=1`
+### GitHub Endpoints Used
 - `https://github.com/Fundryi/HWID-Privacy/raw/main/HWIDChecker.exe`
 
 ### Update Logic
 ```csharp
-// Gets the latest commit that modified HWIDChecker.exe
-var latestCommitInfo = await GetLatestCommitForFileAsync();
+// Download GitHub file and compute SHA1
+var githubFileSha = await GetGitHubFileSha1Async();
 
-// Compares with current file timestamp
-var currentFileTime = GetCurrentExecutableTime();
+// Compute local executable SHA1
+var localFileSha = GetLocalFileSha();
 
-// Updates if GitHub version is newer
-if (latestCommitInfo.CommitDate > currentFileTime)
+// Update when hashes differ
+if (!localFileSha.Equals(githubFileSha, StringComparison.OrdinalIgnoreCase))
 {
-    return await PerformUpdateAsync(latestCommitInfo.Sha, latestCommitInfo.CommitDate);
+    return await PerformUpdateAsync(githubFileSha);
 }
 ```
 
@@ -65,10 +64,10 @@ if (latestCommitInfo.CommitDate > currentFileTime)
 4. The application will restart automatically with the new version
 
 ## Benefits
-- **No manual releases required** - Updates are based on commits
-- **Automatic file replacement** - No manual download/extract needed
-- **Seamless user experience** - One-click update process
-- **Reliable detection** - Uses GitHub's commit API for accuracy
+- **Simple detection logic** - Direct binary hash comparison
+- **No installer required** - In-place executable replacement
+- **Seamless user flow** - One-click check/update from app UI
+- **Cache-resistant fetch** - Cache-busting query parameter on download URL
 
 ## Error Handling
 - Network connection issues are handled gracefully
