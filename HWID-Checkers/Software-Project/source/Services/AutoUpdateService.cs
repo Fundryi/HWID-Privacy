@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Security.Cryptography;
-using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -19,11 +18,9 @@ namespace HWIDChecker.Services
 
     public class AutoUpdateService
     {
-        private const string GITHUB_API_CONTENTS_URL = "https://api.github.com/repos/Fundryi/HWID-Privacy/contents/HWIDChecker.exe";
         private const string GITHUB_RAW_URL = "https://github.com/Fundryi/HWID-Privacy/raw/main/HWIDChecker.exe";
         
         private readonly HttpClient httpClient;
-        private readonly string currentDirectory;
         private readonly string currentExecutablePath;
 
         public AutoUpdateService()
@@ -40,9 +37,8 @@ namespace HWIDChecker.Services
             };
             httpClient.DefaultRequestHeaders.Add("Pragma", "no-cache");
             
-            currentDirectory = Application.StartupPath;
             currentExecutablePath = Process.GetCurrentProcess().MainModule?.FileName ??
-                                   Path.Combine(currentDirectory, "HWIDChecker.exe");
+                                   Path.Combine(Application.StartupPath, "HWIDChecker.exe");
         }
 
         public async Task<UpdateResult> CheckForUpdatesAsync()
@@ -72,7 +68,7 @@ namespace HWIDChecker.Services
                 {
                     // message += "Result: Update available (SHA1 hashes differ)!";
                     // MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return await PerformUpdateAsync(githubFileSha);
+                    return await PerformUpdateAsync();
                 }
                 else
                 {
@@ -131,7 +127,7 @@ namespace HWIDChecker.Services
             }
         }
 
-        private async Task<UpdateResult> PerformUpdateAsync(string newFileSha)
+        private async Task<UpdateResult> PerformUpdateAsync()
         {
             try
             {
