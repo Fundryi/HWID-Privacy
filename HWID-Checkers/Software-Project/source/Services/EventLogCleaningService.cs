@@ -51,12 +51,12 @@ namespace HWIDChecker.Services
             return unique;
         }
 
-        private async Task<bool> ClearLogWithAdvancedMethodsAsync(string logName)
+        private async Task<bool> ClearLogWithAdvancedMethodsAsync(string logName, CancellationToken cancellationToken)
         {
             try
             {
                 // Try standard clearing first
-                var clearResult = await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"");
+                var clearResult = await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"", cancellationToken: cancellationToken);
                 if (string.IsNullOrEmpty(clearResult.StdErr))
                 {
                     OnStatusUpdate?.Invoke($"Cleared: {logName}");
@@ -70,10 +70,10 @@ namespace HWIDChecker.Services
                 // Method 1: Take ownership and set permissions if file exists
                 if (System.IO.File.Exists(logPath))
                 {
-                    await RunProcessAsync("takeown.exe", $"/f \"{logPath}\" /A");
-                    await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r Administrators:(F) /T");
-                    await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r SYSTEM:(F) /T");
-                    await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r \"{Environment.UserName}\":(F) /T");
+                    await RunProcessAsync("takeown.exe", $"/f \"{logPath}\" /A", cancellationToken: cancellationToken);
+                    await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r Administrators:(F) /T", cancellationToken: cancellationToken);
+                    await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r SYSTEM:(F) /T", cancellationToken: cancellationToken);
+                    await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r \"{Environment.UserName}\":(F) /T", cancellationToken: cancellationToken);
                 }
 
                 // Method 2: Try PowerShell Clear-EventLog with fallback
@@ -86,14 +86,14 @@ namespace HWIDChecker.Services
                         & wevtutil.exe cl $log
                     }}
                 ";
-                await RunProcessAsync("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{psScript}\"");
+                await RunProcessAsync("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{psScript}\"", cancellationToken: cancellationToken);
 
                 // Method 3: Try export and clear approach
                 string tempFile = System.IO.Path.GetTempFileName();
                 try
                 {
-                    await RunProcessAsync("wevtutil.exe", $"epl \"{logName}\" \"{tempFile}\"");
-                    await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"");
+                    await RunProcessAsync("wevtutil.exe", $"epl \"{logName}\" \"{tempFile}\"", cancellationToken: cancellationToken);
+                    await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"", cancellationToken: cancellationToken);
                 }
                 finally
                 {
@@ -110,13 +110,13 @@ namespace HWIDChecker.Services
                     try
                     {
                         System.IO.File.Delete(logPath);
-                        await RunProcessAsync("wevtutil.exe", "cl System"); // Force refresh
+                        await RunProcessAsync("wevtutil.exe", "cl System", cancellationToken: cancellationToken); // Force refresh
                     }
                     catch { /* Ignore delete errors */ }
                 }
 
                 // Verify if log was cleared
-                var verifyResult = await RunProcessAsync("wevtutil.exe", $"gli \"{logName}\"");
+                var verifyResult = await RunProcessAsync("wevtutil.exe", $"gli \"{logName}\"", cancellationToken: cancellationToken);
                 bool cleared = verifyResult.StdOut.Contains("recordCount: 0") || !System.IO.File.Exists(logPath);
                 
                 if (cleared)
@@ -126,6 +126,10 @@ namespace HWIDChecker.Services
                 }
                 
                 return false;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -247,7 +251,11 @@ namespace HWIDChecker.Services
 
         private record ProcessResult(string StdOut, string StdErr);
 
-        private async Task<ProcessResult> RunProcessAsync(string fileName, string arguments, int timeoutMs = ProcessTimeoutMs)
+        private async Task<ProcessResult> RunProcessAsync(
+            string fileName,
+            string arguments,
+            int timeoutMs = ProcessTimeoutMs,
+            CancellationToken cancellationToken = default)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -272,8 +280,24 @@ namespace HWIDChecker.Services
 
             try
             {
-                using var timeoutCts = new CancellationTokenSource(timeoutMs);
-                await process.WaitForExitAsync(timeoutCts.Token);
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                linkedCts.CancelAfter(timeoutMs);
+                await process.WaitForExitAsync(linkedCts.Token);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+                }
+                catch
+                {
+                }
+
+                throw new OperationCanceledException($"Process canceled: {fileName} {arguments}", cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -302,10 +326,11 @@ namespace HWIDChecker.Services
             return new ProcessResult(stdOut ?? string.Empty, stdErr ?? string.Empty);
         }
 
-        public async Task CleanEventLogsAsync()
+        public async Task CleanEventLogsAsync(CancellationToken cancellationToken = default)
         {
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 OnStatusUpdate?.Invoke("Collecting standard event log channels...");
                 var logNames = BuildUniqueLogList(StandardEventLogs, out var standardDuplicatesRemoved);
                 var knownLogNames = new HashSet<string>(logNames, StringComparer.OrdinalIgnoreCase);
@@ -326,10 +351,12 @@ namespace HWIDChecker.Services
                 int skippedDuplicate = 0;
                 var failedLogs = new List<(string Name, string Message)>();
 
-                async Task ProcessLogBatchAsync(IEnumerable<string> batch)
+                async Task ProcessLogBatchAsync(IEnumerable<string> batch, CancellationToken token)
                 {
                     foreach (var batchLogName in batch)
                     {
+                        token.ThrowIfCancellationRequested();
+
                         var logName = NormalizeLogName(batchLogName);
                         if (string.IsNullOrEmpty(logName))
                         {
@@ -346,7 +373,7 @@ namespace HWIDChecker.Services
                         try
                         {
                             // First check if log exists and is enabled
-                            var logInfoResult = await RunProcessAsync("wevtutil.exe", $"gli \"{logName}\"");
+                            var logInfoResult = await RunProcessAsync("wevtutil.exe", $"gli \"{logName}\"", cancellationToken: token);
                             if (!string.IsNullOrEmpty(logInfoResult.StdErr))
                             {
                                 OnStatusUpdate?.Invoke($"Skipped: {logName} (not found)");
@@ -364,7 +391,7 @@ namespace HWIDChecker.Services
                             OnStatusUpdate?.Invoke($"Processing: {logName}");
 
                             // Try to clear using our advanced methods (which includes standard clearing first)
-                            if (await ClearLogWithAdvancedMethodsAsync(logName))
+                            if (await ClearLogWithAdvancedMethodsAsync(logName, token))
                             {
                                 clearedLogs++;
                             }
@@ -372,6 +399,10 @@ namespace HWIDChecker.Services
                             {
                                 failedLogs.Add((logName, "Failed to clear log after trying all available methods"));
                             }
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
                         }
                         catch (Exception ex)
                         {
@@ -382,16 +413,17 @@ namespace HWIDChecker.Services
                 }
 
                 // Process standard logs first for immediate visible activity.
-                await ProcessLogBatchAsync(logNames);
+                await ProcessLogBatchAsync(logNames, cancellationToken);
 
                 // Then collect additional logs as an optional enhancement.
+                cancellationToken.ThrowIfCancellationRequested();
                 OnStatusUpdate?.Invoke("Collecting additional event log channels...");
-                var additionalLogs = await TryCollectAdditionalLogsAsync(knownLogNames);
+                var additionalLogs = await TryCollectAdditionalLogsAsync(knownLogNames, cancellationToken);
                 if (additionalLogs.Count > 0)
                 {
                     additionalLogsCount = additionalLogs.Count;
                     OnStatusUpdate?.Invoke($"Collected {additionalLogs.Count} additional logs to process.");
-                    await ProcessLogBatchAsync(additionalLogs);
+                    await ProcessLogBatchAsync(additionalLogs, cancellationToken);
                 }
                 else
                 {
@@ -427,6 +459,12 @@ namespace HWIDChecker.Services
                 OnStatusUpdate?.Invoke($"Failed                     : {failedLogs.Count}");
                 OnStatusUpdate?.Invoke("=========================================");
             }
+            catch (OperationCanceledException)
+            {
+                OnStatusUpdate?.Invoke(string.Empty);
+                OnStatusUpdate?.Invoke("Log cleaning canceled by user.");
+                throw;
+            }
             catch (Exception ex)
             {
                 OnError?.Invoke("Event Log Cleaning", ex.Message);
@@ -434,14 +472,18 @@ namespace HWIDChecker.Services
             }
         }
 
-        private async Task<List<string>> TryCollectAdditionalLogsAsync(HashSet<string> knownLogNames)
+        private async Task<List<string>> TryCollectAdditionalLogsAsync(HashSet<string> knownLogNames, CancellationToken cancellationToken)
         {
             var additionalLogs = new List<string>();
 
             ProcessResult listResult;
             try
             {
-                listResult = await RunProcessAsync("wevtutil.exe", "el", AdditionalLogListTimeoutMs);
+                listResult = await RunProcessAsync("wevtutil.exe", "el", AdditionalLogListTimeoutMs, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -465,6 +507,8 @@ namespace HWIDChecker.Services
             var discoveredUnique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var log in discoveredLogs)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 if (knownLogNames.Contains(log))
                 {
                     duplicateDiscoveredChannels++;
@@ -497,18 +541,30 @@ namespace HWIDChecker.Services
 
             await Parallel.ForEachAsync(
                 candidateLogs,
-                new ParallelOptions { MaxDegreeOfParallelism = AdditionalDiscoveryMaxDegreeOfParallelism },
-                async (log, cancellationToken) =>
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = AdditionalDiscoveryMaxDegreeOfParallelism,
+                    CancellationToken = cancellationToken
+                },
+                async (log, probeToken) =>
                 {
                     try
                     {
-                        var infoResult = await RunProcessAsync("wevtutil.exe", $"gli \"{log}\"", AdditionalLogInfoTimeoutMs);
+                        var infoResult = await RunProcessAsync(
+                            "wevtutil.exe",
+                            $"gli \"{log}\"",
+                            AdditionalLogInfoTimeoutMs,
+                            probeToken);
                         if (!string.IsNullOrEmpty(infoResult.StdOut) &&
                             !infoResult.StdOut.Contains("enabled: false") &&
                             !infoResult.StdOut.Contains("recordCount: 0"))
                         {
                             additionalLogBag.Add(log);
                         }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
                     }
                     catch
                     {

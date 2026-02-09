@@ -27,6 +27,8 @@ namespace HWIDChecker.UI.Forms
         private TableLayoutPanel mainLayout;
         private FlowLayoutPanel actionButtonPanel;
         private TextBox currentContentTextBox;
+        private Label sectionTitleLabel;
+        private Label sectionMetaLabel;
         private Button refreshButton;
         private Button exportButton;
         private Button cleanDevicesButton;
@@ -58,8 +60,8 @@ namespace HWIDChecker.UI.Forms
         {
             // Set form properties BEFORE setting size to prevent scaling issues
             Text = isMainWindow ? "HWID Checker" : "HWID Checker - Sectioned View";
-            BackColor = Color.FromArgb(32, 32, 32); // Darker background
-            ForeColor = Color.White;
+            BackColor = ThemeColors.MainBackground;
+            ForeColor = ThemeColors.PrimaryText;
             FormBorderStyle = FormBorderStyle.Sizable;
             StartPosition = isMainWindow ? FormStartPosition.CenterScreen : FormStartPosition.CenterParent;
             
@@ -111,7 +113,7 @@ namespace HWIDChecker.UI.Forms
                 Dock = DockStyle.Fill,
                 ColumnCount = 2,
                 RowCount = 2,
-                BackColor = Color.FromArgb(32, 32, 32)
+                BackColor = ThemeColors.MainBackground
             };
 
             // Configure columns: sidebar (adaptive width) and content (fill remaining)
@@ -129,20 +131,76 @@ namespace HWIDChecker.UI.Forms
                 FlowDirection = FlowDirection.TopDown,
                 AutoScroll = true,
                 AutoSize = false,
-                BackColor = Color.FromArgb(40, 40, 40),
+                BackColor = ThemeColors.SidebarBackground,
                 WrapContents = false,
                 Padding = new Padding(0, 8, 0, 8)
             };
 
-            // Create content panel with proper scaling
+            // Create content panel with section header + content body
             contentPanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(25, 25, 25),
-                Padding = new Padding(16)
+                BackColor = ThemeColors.SurfaceBackground,
+                Padding = new Padding(14, 14, 14, 14)
             };
 
-            // Create content textbox with proper DPI handling
+            var contentLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+                BackColor = ThemeColors.SurfaceBackground
+            };
+            contentLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            contentLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            contentLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 1F));
+            contentLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            var headerPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                BackColor = ThemeColors.ContentBackground,
+                Padding = new Padding(14, 10, 14, 9),
+                Margin = new Padding(0)
+            };
+
+            sectionTitleLabel = new Label
+            {
+                Dock = DockStyle.Top,
+                AutoEllipsis = true,
+                AutoSize = false,
+                Height = 26,
+                Text = "Section",
+                Font = new Font("Segoe UI Semibold", 12.5f, FontStyle.Bold),
+                ForeColor = ThemeColors.SidebarHeaderText,
+                BackColor = Color.Transparent,
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+
+            sectionMetaLabel = new Label
+            {
+                Dock = DockStyle.Top,
+                AutoEllipsis = true,
+                AutoSize = false,
+                Height = 18,
+                Text = string.Empty,
+                Font = new Font("Segoe UI", 9f, FontStyle.Regular),
+                ForeColor = ThemeColors.MutedText,
+                BackColor = Color.Transparent,
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+
+            headerPanel.Controls.Add(sectionMetaLabel);
+            headerPanel.Controls.Add(sectionTitleLabel);
+
+            var dividerPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = ThemeColors.BorderSubtle,
+                Margin = new Padding(0)
+            };
+
             currentContentTextBox = new TextBox
             {
                 Dock = DockStyle.Fill,
@@ -150,20 +208,23 @@ namespace HWIDChecker.UI.Forms
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Both,
                 WordWrap = false,
-                BackColor = Color.FromArgb(35, 35, 35),
-                ForeColor = Color.FromArgb(220, 220, 220),
+                BackColor = ThemeColors.TextBoxBackground,
+                ForeColor = ThemeColors.TextBoxText,
                 Font = new Font("Consolas", 10f),
-                BorderStyle = BorderStyle.None
+                BorderStyle = BorderStyle.FixedSingle
             };
 
-            contentPanel.Controls.Add(currentContentTextBox);
+            contentLayout.Controls.Add(headerPanel, 0, 0);
+            contentLayout.Controls.Add(dividerPanel, 0, 1);
+            contentLayout.Controls.Add(currentContentTextBox, 0, 2);
+            contentPanel.Controls.Add(contentLayout);
 
             // Create button panel using FlowLayoutPanel for proper DPI scaling
             actionButtonPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.LeftToRight,
-                BackColor = Color.FromArgb(45, 45, 45),
+                BackColor = ThemeColors.ButtonPanelBackground,
                 Padding = new Padding(12, 8, 12, 8),
                 WrapContents = true,
                 AutoSize = true,
@@ -176,7 +237,7 @@ namespace HWIDChecker.UI.Forms
             {
                 Text = "Loading hardware information...",
                 AutoSize = true,
-                ForeColor = Color.FromArgb(220, 220, 220),
+                ForeColor = ThemeColors.LoadingLabelText,
                 BackColor = Color.Transparent,
                 Font = new Font("Segoe UI", 10f),
                 Visible = false,
@@ -187,11 +248,11 @@ namespace HWIDChecker.UI.Forms
             if (isMainWindow)
             {
                 // Main window buttons - using Point.Empty since FlowLayoutPanel handles positioning
-                refreshButton = CreateModernButton("↻ Refresh", Point.Empty);
-                exportButton = CreateModernButton("💾 Export", Point.Empty);
-                cleanDevicesButton = CreateModernButton("🧹 Clean Devices", Point.Empty);
-                cleanLogsButton = CreateModernButton("📝 Clean Logs", Point.Empty);
-                checkUpdatesButton = CreateModernButton("⟳ Updates", Point.Empty);
+                refreshButton = CreateModernButton("↻ Refresh", Point.Empty, Buttons.ButtonVariant.Secondary);
+                exportButton = CreateModernButton("💾 Export", Point.Empty, Buttons.ButtonVariant.Secondary);
+                cleanDevicesButton = CreateModernButton("🧹 Clean Devices", Point.Empty, Buttons.ButtonVariant.Secondary);
+                cleanLogsButton = CreateModernButton("📝 Clean Logs", Point.Empty, Buttons.ButtonVariant.Secondary);
+                checkUpdatesButton = CreateModernButton("⟳ Updates", Point.Empty, Buttons.ButtonVariant.Secondary);
 
                 // Add event handlers
                 refreshButton.Click += RefreshButton_Click;
@@ -205,7 +266,7 @@ namespace HWIDChecker.UI.Forms
                 // Add debug button if enabled
                 if (ENABLE_DEBUG_BUTTON)
                 {
-                    debugButton = CreateModernButton("📜 Old View", Point.Empty);
+                    debugButton = CreateModernButton("📜 Old View", Point.Empty, Buttons.ButtonVariant.Secondary);
                     debugButton.Click += DebugButton_Click;
                     buttonsToAdd.Add(debugButton);
                 }
@@ -215,9 +276,9 @@ namespace HWIDChecker.UI.Forms
             else
             {
                 // Sectioned view buttons
-                refreshButton = CreateModernButton("🔄 Refresh", Point.Empty);
-                exportButton = CreateModernButton("💾 Export", Point.Empty);
-                var closeButton = CreateModernButton("✖ Close", Point.Empty);
+                refreshButton = CreateModernButton("🔄 Refresh", Point.Empty, Buttons.ButtonVariant.Secondary);
+                exportButton = CreateModernButton("💾 Export", Point.Empty, Buttons.ButtonVariant.Secondary);
+                var closeButton = CreateModernButton("✖ Close", Point.Empty, Buttons.ButtonVariant.Secondary);
 
                 // Add event handlers
                 refreshButton.Click += RefreshButton_Click;
@@ -240,7 +301,7 @@ namespace HWIDChecker.UI.Forms
             UpdateResponsiveLayout();
         }
 
-        private Button CreateModernButton(string text, Point location)
+        private Button CreateModernButton(string text, Point location, Buttons.ButtonVariant variant)
         {
             var button = new Button
             {
@@ -255,7 +316,7 @@ namespace HWIDChecker.UI.Forms
                 Margin = new Padding(0, 0, 8, 8)
             };
 
-            Buttons.ApplyStyle(button, Buttons.ButtonVariant.Primary);
+            Buttons.ApplyStyle(button, variant);
             return button;
         }
 
@@ -311,15 +372,28 @@ namespace HWIDChecker.UI.Forms
             var titleLabel = new Label
             {
                 AutoSize = false,
-                Size = new Size(GetSidebarControlWidth(), 32),
+                Size = new Size(GetSidebarControlWidth(), 34),
                 Text = "Hardware Sections",
-                Font = new Font("Segoe UI", 12f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(220, 220, 220),
+                Font = new Font("Segoe UI Semibold", 13f, FontStyle.Bold),
+                ForeColor = ThemeColors.SidebarHeaderText,
                 BackColor = Color.Transparent,
                 TextAlign = ContentAlignment.MiddleLeft,
-                Margin = new Padding(12, 0, 12, 8)
+                Margin = new Padding(12, 0, 12, 0)
             };
             sidebarPanel.Controls.Add(titleLabel);
+
+            var subtitleLabel = new Label
+            {
+                AutoSize = false,
+                Size = new Size(GetSidebarControlWidth(), 20),
+                Text = $"{sections.Count} sections",
+                Font = new Font("Segoe UI", 8.75f, FontStyle.Regular),
+                ForeColor = ThemeColors.MutedText,
+                BackColor = Color.Transparent,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(12, 0, 12, 10)
+            };
+            sidebarPanel.Controls.Add(subtitleLabel);
 
             // Create elegant section buttons - FlowLayoutPanel will handle positioning
             for (int i = 0; i < sections.Count; i++)
@@ -340,22 +414,23 @@ namespace HWIDChecker.UI.Forms
             var button = new Button
             {
                 AutoSize = false,
-                Size = new Size(GetSidebarControlWidth(), 44),
+                Size = new Size(GetSidebarControlWidth(), 42),
                 Text = $"{icon} {title}",
-                BackColor = Color.FromArgb(50, 50, 50),
-                ForeColor = Color.FromArgb(200, 200, 200),
+                BackColor = ThemeColors.SidebarItemBackground,
+                ForeColor = ThemeColors.SidebarItemText,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10f),
+                Font = new Font("Segoe UI", 9.75f, FontStyle.Regular),
                 TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(15, 0, 0, 0),
-                Margin = new Padding(12, 0, 12, 6),
+                Padding = new Padding(12, 0, 0, 0),
+                Margin = new Padding(12, 0, 12, 5),
                 Cursor = Cursors.Hand,
                 Tag = index
             };
 
-            button.FlatAppearance.BorderSize = 0;
-            button.FlatAppearance.MouseOverBackColor = Color.FromArgb(70, 70, 70);
-            button.FlatAppearance.MouseDownBackColor = Color.FromArgb(0, 120, 215);
+            button.FlatAppearance.BorderSize = 1;
+            button.FlatAppearance.BorderColor = ThemeColors.BorderSubtle;
+            button.FlatAppearance.MouseOverBackColor = ThemeColors.SidebarItemHover;
+            button.FlatAppearance.MouseDownBackColor = ThemeColors.SidebarItemActive;
 
             button.Click += (s, e) => {
                 ShowSection((int)button.Tag);
@@ -388,19 +463,23 @@ namespace HWIDChecker.UI.Forms
             // Reset all buttons
             foreach (var btn in sectionButtons)
             {
-                btn.BackColor = Color.FromArgb(50, 50, 50);
-                btn.ForeColor = Color.FromArgb(200, 200, 200);
+                btn.BackColor = ThemeColors.SidebarItemBackground;
+                btn.ForeColor = ThemeColors.SidebarItemText;
+                btn.FlatAppearance.BorderColor = ThemeColors.BorderSubtle;
             }
 
             // Highlight active button
-            activeButton.BackColor = Color.FromArgb(0, 120, 215);
-            activeButton.ForeColor = Color.White;
+            activeButton.BackColor = ThemeColors.SidebarItemActive;
+            activeButton.ForeColor = ThemeColors.SidebarItemActiveText;
+            activeButton.FlatAppearance.BorderColor = ThemeColors.PrimaryButtonHover;
         }
 
         private void ShowSection(int index)
         {
             if (index >= 0 && index < sections.Count)
             {
+                sectionTitleLabel.Text = sections[index].title;
+                sectionMetaLabel.Text = $"Section {index + 1} of {sections.Count}";
                 currentContentTextBox.Text = sections[index].content;
                 currentContentTextBox.SelectionStart = 0;
                 currentContentTextBox.ScrollToCaret();
@@ -495,7 +574,7 @@ namespace HWIDChecker.UI.Forms
                         // Refresh current view if one is selected
                         if (sectionButtons.Count > 0)
                         {
-                            var activeButtonIndex = sectionButtons.FindIndex(b => b.BackColor == Color.FromArgb(0, 120, 215));
+                            var activeButtonIndex = sectionButtons.FindIndex(b => b.BackColor.ToArgb() == ThemeColors.SidebarItemActive.ToArgb());
                             if (activeButtonIndex >= 0)
                             {
                                 ShowSection(activeButtonIndex);
@@ -509,7 +588,7 @@ namespace HWIDChecker.UI.Forms
                     // Refresh current view if one is selected
                     if (sectionButtons.Count > 0)
                     {
-                        var activeButtonIndex = sectionButtons.FindIndex(b => b.BackColor == Color.FromArgb(0, 120, 215));
+                        var activeButtonIndex = sectionButtons.FindIndex(b => b.BackColor.ToArgb() == ThemeColors.SidebarItemActive.ToArgb());
                         if (activeButtonIndex >= 0)
                         {
                             ShowSection(activeButtonIndex);
