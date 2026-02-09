@@ -1,6 +1,6 @@
 # HWID Checker Project
 
-> This whole project is 99.99% written by AI.
+> Windows desktop tool for inspecting hardware identifiers, viewing them in a sectioned UI, and exporting results to text files.
 
 ## Table of Contents
 
@@ -10,144 +10,140 @@
   - [Requirements](#requirements)
   - [Features](#features)
     - [Core Functionality](#core-functionality)
-    - [Hardware Detection](#hardware-detection)
+    - [Hardware Providers](#hardware-providers)
     - [System Services](#system-services)
   - [Usage Instructions](#usage-instructions)
     - [GUI Version](#gui-version)
-    - [Command Line](#command-line)
+    - [Command Line Scripts](#command-line-scripts)
   - [Project Structure](#project-structure)
-  - [File Formats](#file-formats)
-    - [Export Files (TXT)](#export-files-txt)
-    - [Comparison Results](#comparison-results)
+  - [Export Format](#export-format)
 
 ## Building the Project
+
+From repository root:
 
 ```bash
 dotnet publish "HWID-Checkers/Software-Project/source/HWIDChecker.csproj" -c Release
 ```
-OR
+
+Alternative:
+
 ```bash
-dotnet publish HWID-CHECKER.sln -c Release
+dotnet publish "HWID-Checkers/Software-Project/HWID-CHECKER.sln" -c Release
 ```
 
-This will:
+Output:
 
-- Build the project in Release configuration
-- Create a single-file executable
-- Copy published files to `source/bin/RELEASE/win-x64/publish`
+- Published executable: `HWID-Checkers/Software-Project/source/bin/RELEASE/win-x64/publish/HWIDChecker.exe`
+- Post-publish copy target: repository root (`HWIDChecker.exe`)
 
 ## Requirements
 
 - .NET 9.0 SDK
 - Windows 10/11 (x64)
-- Administrator privileges for hardware detection
+- Administrator privileges only for cleaning features (device/log cleaning)
 
 ## Features
 
 ### Core Functionality
 
-- Hardware ID validation for Windows 10/11
-- Cross-version compatibility checks
-- Comprehensive hardware component detection
-- Real-time validation and comparison
+- Collects and displays hardware identifiers from local system sources
+- Sectioned UI with per-section navigation
+- Refresh scan results in-app
+- Export full scan output to timestamped `.txt` files
 
-### Hardware Detection
+### Hardware Providers
 
-- Detection of 20+ hardware components including:
-  - CPU information
-  - GPU details
-  - Storage devices
-  - Network adapters
-  - BIOS information
-  - TPM status
-  - USB devices
-  - System information
-  - Monitor details
-  - RAM configuration
-  - Motherboard information
-- Real-time refresh capability
-- WMI-based data collection
+Current providers (12):
+
+- Disk drives
+- Motherboard
+- (SM)BIOS
+- System information
+- RAM modules
+- CPU
+- TPM modules
+- USB devices
+- GPU info
+- Monitor information
+- Network adapters
+- ARP info/cache
 
 ### System Services
 
-- Hardware information management
-- Component comparison service
-- File export functionality
-- System cleaning utilities
-- Device management
-- Event log maintenance
+- Hardware collection orchestration (`HardwareInfoManager`)
+- Output formatting (`TextFormattingService`)
+- File export (`FileExportService`)
+- Device cleaning + whitelist management
+- Event log cleaning
+- Auto-update check/download for `HWIDChecker.exe` from GitHub
 
 ## Usage Instructions
 
 ### GUI Version
 
-1. Run `HWIDChecker.exe` as Administrator
-2. Click "Scan Hardware" to detect components
-3. Use Export/Compare features as needed
-4. Optional: Use cleaning tools for system maintenance
+1. Run `HWIDChecker.exe`.
+2. Wait for initial scan (main window loads into `SectionedViewForm`).
+3. Use section buttons to inspect specific hardware outputs.
+4. Use:
+   - `↻ Refresh` to rescan
+   - `💾 Export` to export all section data
+   - `🧹 Clean Devices` / `📝 Clean Logs` for maintenance tasks (admin required)
+   - `⟳ Updates` to check/download updates
 
-### Command Line
+### Command Line Scripts
 
-Located in HWID-Checkers/Bats/:
+Legacy batch scripts are in `HWID-Checkers/Bats/`:
+
 ```bat
-:: Windows 10 check
 HWID CHECK W10.bat
-
-:: Windows 11 check
 HWID CHECK W11.bat
 ```
 
 ## Project Structure
 
-```
+```text
 HWID-Checkers/Software-Project/
 ├── source/
-│   ├── Hardware/              # Hardware component implementations
-│   │   ├── ArpInfo.cs
-│   │   ├── BiosInfo.cs
-│   │   ├── CpuInfo.cs
-│   │   ├── DiskDriveInfo.cs
-│   │   ├── GpuInfo.cs
-│   │   ├── MonitorInfo.cs
-│   │   ├── MotherboardInfo.cs
-│   │   ├── NetworkInfo.cs
-│   │   ├── RamInfo.cs
-│   │   ├── SystemInfo.cs
-│   │   ├── TpmInfo.cs
-│   │   └── UsbInfo.cs
-│   ├── Services/             # Core services
-│   │   ├── Interfaces/       # Service contracts
-│   │   ├── Models/          # Data models
-│   │   ├── Strategies/      # Implementation strategies
-│   │   └── Win32/          # Native Windows API integration
-│   ├── UI/                  # User interface components
-│   │   ├── Components/      # Reusable UI elements
-│   │   ├── DataHandlers/    # UI data management
-│   │   └── Forms/          # Windows Forms
-│   └── Utils/              # Helper utilities
-├── ComparisonSystem-Architecture.md  # System architecture documentation
-└── README.md                         # Project documentation
-
-../Bats/                    # Batch script utilities
-    ├── HWID CHECK W10.bat  # Windows 10 validation
-    └── HWID CHECK W11.bat  # Windows 11 validation
+│   ├── Program.cs
+│   ├── HWIDChecker.csproj
+│   ├── Hardware/
+│   │   ├── IHardwareInfo.cs
+│   │   ├── HardwareInfoManager.cs
+│   │   └── *Info.cs (12 providers)
+│   ├── Services/
+│   │   ├── AutoUpdateService.cs
+│   │   ├── DeviceCleaningService.cs
+│   │   ├── DeviceWhitelistService.cs
+│   │   ├── EventLogCleaningService.cs
+│   │   ├── FileExportService.cs
+│   │   ├── SystemCleaningService.cs
+│   │   ├── TextFormattingService.cs
+│   │   ├── Models/DeviceDetail.cs
+│   │   └── Win32/{SetupApi.cs, StorageDeviceIdQuery.cs}
+│   ├── UI/
+│   │   ├── Forms/SectionedViewForm.cs            # Active main UI
+│   │   ├── Forms/CleanDevicesForm.cs
+│   │   ├── Forms/CleanLogsForm.cs
+│   │   ├── Forms/WhitelistDevicesForm.cs
+│   │   ├── Forms/DeviceRemovalConfirmationForm.cs
+│   │   ├── Forms/MainForm*.cs                    # Legacy/unused path
+│   │   ├── DataHandlers/*.cs                     # Legacy/unused path
+│   │   └── Components/{Buttons.cs, ThemeColors.cs}
+│   └── Resources/app.ico
+├── AI-README.md
+├── AUTO-UPDATE-README.md
+└── HWID-CHECKER.sln
 ```
 
-## File Formats
+## Export Format
 
-### Export Files (TXT)
+Exported files are plain text and include:
 
-- Header with system metadata
-- Sections for each hardware component:
-  - Component name
-  - Manufacturer
-  - Hardware IDs
-  - Component-specific details
-  - Detection timestamp
+- Main header
+- One formatted section per hardware provider
+- Provider-specific identifiers and metadata
 
-### Comparison Results
+Filename pattern:
 
-- JSON-based diff format
-- Machine-readable change log
-- Visual highlighting of modifications
-- Detailed component comparisons
+- `HWID-EXPORT-dd.MM.yyyy-HH;mm;ss.txt`

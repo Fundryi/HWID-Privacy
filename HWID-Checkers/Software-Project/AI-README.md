@@ -15,12 +15,10 @@
 | `UI/Forms/MainFormLoader.cs` | **UNUSED** - Loader for old MainForm |
 | `UI/Forms/MainFormInitializer.cs` | **UNUSED** - Initializer for old MainForm |
 | `UI/Forms/MainForm.resx` | **UNUSED** - Resource file for old MainForm |
-| `UI/Components/CompareFormLayout.cs` | **UNUSED** - Never instantiated anywhere |
 | `UI/DataHandlers/HardwareDataHandler.cs` | **UNUSED** - Base class for unused handlers |
 | `UI/DataHandlers/HardwareDataHandlerFactory.cs` | **UNUSED** - Factory never instantiated |
 | `UI/DataHandlers/NetworkInfoHandler.cs` | **UNUSED** - Handler never used |
 | `UI/DataHandlers/SystemInfoHandler.cs` | **UNUSED** - Handler never used |
-| `UI/DPI/` | **UNUSED** - Empty directory |
 
 ---
 
@@ -57,7 +55,7 @@
 └──────┬──────────────┘                        │ • TextFormatting    │
        │                                       │ • FileExport        │
        │                                       │ • DeviceCleaning    │
-       │                                       │ • DeviceCleaning    │
+       │                                       │ • EventLogCleaning  │
        │                                       │ • AutoUpdate        │
        ▼                                       └─────────────────────┘
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -93,17 +91,17 @@ string SectionTitle { get; } // Display title for UI
 |------|---------|-------------|
 | `HardwareInfoManager.cs` | **ORCHESTRATOR** - Combines all hardware providers, runs parallel collection | All `*Info.cs`, `TextFormattingService` |
 | `IHardwareInfo.cs` | Contract for all hardware providers | None |
-| `DiskDriveInfo.cs` | Collects disk drive info (model, serial, firmware, volumes) | `TextFormattingService`, WMI |
+| `DiskDriveInfo.cs` | Collects disk info (device ID, model, serial, firmware, volume serial, WWN/UniqueId) | `TextFormattingService`, WMI, PowerShell |
 | `CpuInfo.cs` | Collects CPU info (name, processor ID, serial) | `TextFormattingService`, WMI |
 | `BiosInfo.cs` | Collects BIOS/SMBIOS info (manufacturer, version, UUID) | `TextFormattingService`, WMI |
 | `MotherboardInfo.cs` | Collects motherboard info (product, serial, manufacturer) | `TextFormattingService`, WMI |
 | `RamInfo.cs` | Collects RAM info (capacity, speed, device locator) | `TextFormattingService`, WMI |
 | `GpuInfo.cs` | Collects GPU info (name, device ID, driver version) | `TextFormattingService`, WMI |
-| `TpmInfo.cs` | Collects TPM info (version, manufacturer) | `TextFormattingService`, WMI |
+| `TpmInfo.cs` | Collects TPM state + EK details (hash/serial/thumbprint/issuer) | `TextFormattingService`, PowerShell |
 | `UsbInfo.cs` | Collects USB device info (device ID, description) | `TextFormattingService`, WMI |
 | `MonitorInfo.cs` | Collects monitor info (name, serial, product code) | `TextFormattingService`, WMI |
 | `NetworkInfo.cs` | Collects network adapter info (MAC, adapter type, driver) | `TextFormattingService`, WMI |
-| `ArpInfo.cs` | Collects ARP table info (IP, MAC, interface) | `TextFormattingService`, WMI |
+| `ArpInfo.cs` | Collects dynamic ARP entries (IP + MAC) | `TextFormattingService`, `arp.exe` |
 
 ### Services Layer (`Services/`)
 
@@ -115,7 +113,7 @@ string SectionTitle { get; } // Display title for UI
 | `SystemCleaningService.cs` | Wrapper for async device cleaning operations | `DeviceCleaningService` |
 | `DeviceWhitelistService.cs` | Manages device whitelist for cleaning | None |
 | `EventLogCleaningService.cs` | Cleans Windows event logs | None |
-| `AutoUpdateService.cs` | Checks GitHub for updates and auto-updates exe | `System.Text.Json` |
+| `AutoUpdateService.cs` | Checks GitHub-hosted exe via SHA1 hash diff and auto-updates local exe | `HttpClient`, hashing, WinForms |
 
 ### Services - Subdirectories
 
@@ -139,8 +137,6 @@ string SectionTitle { get; } // Display title for UI
 **UNUSED FILES (See top of file):**
 - `Forms/MainForm.cs`, `MainFormLayout.cs`, `MainFormEventHandlers.cs`, `MainFormLoader.cs`, `MainFormInitializer.cs`, `MainForm.resx`
 - `DataHandlers/HardwareDataHandler.cs`, `HardwareDataHandlerFactory.cs`, `NetworkInfoHandler.cs`, `SystemInfoHandler.cs`
-- `Components/CompareFormLayout.cs`
-- `DPI/` (empty directory)
 
 ---
 
@@ -210,13 +206,13 @@ Constants at top:
 **Location:** `Services/AutoUpdateService.cs`
 
 **Flow:**
-1. Query GitHub API: `/repos/Fundryi/HWID-Privacy/commits?path=HWIDChecker.exe&per_page=1`
-2. Compare commit timestamp with `HWIDChecker.exe` last modified time
-3. If newer, download from: `/raw/main/HWIDChecker.exe`
-4. Create batch script to replace exe
-5. Restart application
+1. Download GitHub `HWIDChecker.exe` (raw URL with cache-busting query)
+2. Compute SHA1 of GitHub file
+3. Compute SHA1 of current local executable
+4. If hashes differ, download update to temp file
+5. Create batch script to replace exe and restart app
 
-**Dependency:** `System.Text.Json` for API response parsing
+**Dependency:** `HttpClient` + hashing (`System.Security.Cryptography`)
 
 ---
 
@@ -319,4 +315,4 @@ source/
 
 ---
 
-**Last Updated:** 2025-12-26
+**Last Updated:** 2026-02-09
