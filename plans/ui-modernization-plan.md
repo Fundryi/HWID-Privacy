@@ -1,5 +1,11 @@
 # UI Modernization Plan (HWID Checker)
 
+## Execution Status (2026-02-09)
+- Branch: `feature/ui-modernization`
+- Phase A: in progress
+- Phase B-E: pending
+- Baseline worksheet: `plans/ui-modernization-baseline-checklist.md`
+
 ## Goal
 Modernize the WinForms interface so it looks cleaner and more professional while staying functionally identical and working reliably across:
 - Different resolutions
