@@ -6,7 +6,7 @@ Capture reproducible baseline behavior before UI redesign changes.
 ## Current Status (2026-02-09)
 1. Baseline captured and used to drive layout fixes in Phase B.
 2. 4K @ 175% (`M2`) has been actively validated with real screenshots across all target forms.
-3. Additional verification on 2K @ 100% (`M1`) should be re-run once after the latest modal/log-cleaning updates to close the loop.
+3. Additional verification on 2K @ 100% (`M1`) should be re-run once after the latest modal/log-cleaning and hierarchy updates to close the loop.
 
 ## Test Matrix
 
@@ -35,9 +35,9 @@ Capture reproducible baseline behavior before UI redesign changes.
 
 | Matrix ID | Form | Screenshot Path | Notes |
 |---|---|---|---|
-| M1 | Main window | Pending refresh | Recheck requested after latest updates |
-| M1 | Clean Devices | Pending refresh | Recheck requested after latest updates |
-| M1 | Clean Logs | Pending refresh | Recheck requested after latest updates |
+| M1 | Main window | Pending refresh | Recheck requested after latest hierarchy/button updates |
+| M1 | Clean Devices | Pending refresh | Recheck requested after latest styling updates |
+| M1 | Clean Logs | Pending refresh | Recheck requested after latest cancellation/force-stop updates |
 | M1 | Whitelist | Pending refresh | Recheck requested after latest updates |
 | M1 | Device removal confirmation | Pending refresh | Recheck requested after latest updates |
 | M2 | Main window | Captured (user run) | No clipping; horizontal scroll behavior confirmed |
@@ -53,6 +53,8 @@ Capture reproducible baseline behavior before UI redesign changes.
 | D-001 | M2 | Clean Logs | High | Blank/unclear feedback during startup stage | Run clean logs on 4K@175% and observe no early output | Added immediate startup status and detailed progress events |
 | D-002 | M2 | Clean Logs/Clean Devices | Medium | Oversized footer area after layout migration | Open forms on 4K@175% and inspect bottom action row | Fixed action row height/margins and disabled wrapping for single-line button rows |
 | D-003 | M2 | Whitelist | Medium | Excessive top whitespace in header area | Open whitelist form on 4K@175% | Flattened header container and tightened spacing |
+| D-004 | M2 | Clean Logs | High | User could not reliably stop/close while active cleaning run was in progress | Start log cleaning and attempt to close via button/titlebar | Added force-stop confirmation + cancellation token propagation through cleaning pipeline |
+| D-005 | M2 | Main window | Low | `Export` and `Clean Devices` appeared always highlighted, causing ambiguous primary action emphasis | Open main form after hierarchy pass 1 | Normalized action button variants to secondary style for balanced emphasis |
 
 ## Phase A Exit Criteria
 1. All matrix rows executed and logged.

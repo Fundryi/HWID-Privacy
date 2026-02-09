@@ -1,6 +1,7 @@
 using System;
 using System.Windows.Forms;
 using System.Drawing;
+using System.Threading;
 using HWIDChecker.Services;
 using HWIDChecker.UI.Components;
 using System.Threading.Tasks;
@@ -16,7 +17,9 @@ namespace HWIDChecker.UI.Forms
         private TextBox outputTextBox;
         private Button closeButton;
         private SystemCleaningService cleaningService;
+        private CancellationTokenSource cleaningCancellationTokenSource;
         private bool isProcessing;
+        private bool forceClosingRequested;
 
         public CleanLogsForm()
         {
@@ -92,10 +95,10 @@ namespace HWIDChecker.UI.Forms
                 MinimumSize = new Size(110, 34),
                 Padding = new Padding(12, 4, 12, 4),
                 Margin = new Padding(0, 0, 8, 0),
-                Enabled = false
+                Enabled = true
             };
             Buttons.ApplyStyle(closeButton, Buttons.ButtonVariant.Primary);
-            closeButton.Click += (s, e) => this.Close();
+            closeButton.Click += CloseButton_Click;
 
             // Output container
             var outputPanel = new Panel
@@ -153,16 +156,26 @@ namespace HWIDChecker.UI.Forms
             try
             {
                 isProcessing = true;
-                closeButton.Enabled = false;
+                forceClosingRequested = false;
+                closeButton.Enabled = true;
+                closeButton.Text = "Stop & Close";
                 outputTextBox.Clear();
+
+                cleaningCancellationTokenSource?.Dispose();
+                cleaningCancellationTokenSource = new CancellationTokenSource();
+
                 HandleStatusUpdate("Starting event log cleanup...");
                 HandleStatusUpdate("Enumerating and clearing logs. This may take a moment.\r\n");
 
                 // Clean event logs only
-                await cleaningService.CleanLogsAsync();
+                await cleaningService.CleanLogsAsync(cleaningCancellationTokenSource.Token);
 
                 HandleStatusUpdate("\r\nLog cleaning process completed.");
                 HandleStatusUpdate("Review the summary above. This window will stay open.");
+            }
+            catch (OperationCanceledException)
+            {
+                HandleStatusUpdate("\r\nLog cleaning canceled by user.");
             }
             catch (Exception ex)
             {
@@ -175,9 +188,12 @@ namespace HWIDChecker.UI.Forms
             finally
             {
                 isProcessing = false;
+                cleaningCancellationTokenSource?.Dispose();
+                cleaningCancellationTokenSource = null;
                 if (!this.IsDisposed)
                 {
                     closeButton.Enabled = true;
+                    closeButton.Text = "Close";
                 }
             }
         }
@@ -193,10 +209,49 @@ namespace HWIDChecker.UI.Forms
         {
             if (isProcessing)
             {
-                // Allow closing even during processing for logs-only operation
-                isProcessing = false;
+                if (!forceClosingRequested)
+                {
+                    var result = MessageBox.Show(
+                        "Log cleaning is still running. Force-stop and close this window?",
+                        "Confirm Stop",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning);
+
+                    if (result != DialogResult.Yes)
+                    {
+                        e.Cancel = true;
+                        return;
+                    }
+                }
+
+                forceClosingRequested = true;
+                cleaningCancellationTokenSource?.Cancel();
             }
             base.OnFormClosing(e);
+        }
+
+        private void CloseButton_Click(object sender, EventArgs e)
+        {
+            if (!isProcessing)
+            {
+                this.Close();
+                return;
+            }
+
+            var result = MessageBox.Show(
+                "Log cleaning is still running. Force-stop and close this window?",
+                "Confirm Stop",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+
+            if (result != DialogResult.Yes)
+            {
+                return;
+            }
+
+            forceClosingRequested = true;
+            cleaningCancellationTokenSource?.Cancel();
+            this.Close();
         }
 
         private void CleanLogsForm_DpiChanged(object sender, DpiChangedEventArgs e)

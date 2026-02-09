@@ -4,7 +4,7 @@
 - Branch: `feature/ui-modernization`
 - Phase A: completed
 - Phase B: completed
-- Phase C: in progress (kickoff)
+- Phase C: in progress (kickoff + hierarchy pass 2)
 - Phase D-E: pending
 - Baseline worksheet: `plans/ui-modernization-baseline-checklist.md`
 
@@ -28,6 +28,17 @@
    - expanded UI color/button tokens in `ThemeColors`
    - shared button variants in `Buttons` (`Primary`, `Secondary`, `Danger`)
    - consistent action-button styling applied across main and modal forms
+10. Phase C hierarchy pass 1:
+   - main content now has a dedicated section header/title area
+   - sidebar hierarchy improved with title/subtitle rhythm and clearer selected state
+   - action bar button priority now uses mixed variants instead of one-color actions
+11. Phase C hierarchy pass 2:
+   - main action bar emphasis normalized (no unintended always-highlighted export/device-clean buttons)
+   - clean windows now align more closely with main visual language
+12. Usability hardening checkpoint:
+   - `CleanLogsForm` now supports explicit force-stop and close during active runs
+   - cancellation token now propagates from UI -> `SystemCleaningService` -> `EventLogCleaningService`
+   - in-flight child processes are canceled/killed on user-requested stop
 
 ## Goal
 Modernize the WinForms interface so it looks cleaner and more professional while staying functionally identical and working reliably across:
@@ -98,7 +109,7 @@ Exit criteria:
 ## Phase C: Visual Redesign (Modern but Practical)
 Goal: Improve clarity, hierarchy, and aesthetics without overdesign.
 
-Status: in progress (initial consistency pass implemented; typography/hierarchy pass next).
+Status: in progress (consistency + hierarchy pass 2 implemented; next: typography/spacing polish).
 
 Tasks:
 1. Define UI tokens in one place:

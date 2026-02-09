@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using HWIDChecker.Services.Models;
 
@@ -25,11 +26,16 @@ namespace HWIDChecker.Services
             _deviceCleaner.OnError += (source, message) => OnError?.Invoke(source, message);
         }
 
-        public async Task CleanLogsAsync()
+        public async Task CleanLogsAsync(CancellationToken cancellationToken = default)
         {
             try
             {
-                await _eventLogCleaner.CleanEventLogsAsync();
+                await _eventLogCleaner.CleanEventLogsAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                // User-requested cancellation should not be treated as an error.
+                throw;
             }
             catch (Exception ex)
             {

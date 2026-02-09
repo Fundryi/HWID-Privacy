@@ -8,6 +8,17 @@ namespace HWIDChecker.UI.Components
         public static readonly Color MainBackground = Color.FromArgb(30, 30, 30);
         public static readonly Color SecondaryBackground = Color.FromArgb(35, 35, 35);
         public static readonly Color ContentBackground = Color.FromArgb(45, 45, 45);
+        public static readonly Color SurfaceBackground = Color.FromArgb(26, 26, 26);
+        public static readonly Color BorderSubtle = Color.FromArgb(58, 58, 62);
+        public static readonly Color SidebarBackground = Color.FromArgb(34, 34, 36);
+        public static readonly Color SidebarItemBackground = Color.FromArgb(46, 46, 50);
+        public static readonly Color SidebarItemHover = Color.FromArgb(60, 60, 66);
+        public static readonly Color SidebarItemActive = Color.FromArgb(0, 120, 215);
+        public static readonly Color SidebarItemText = Color.FromArgb(210, 210, 210);
+        public static readonly Color SidebarItemActiveText = Color.White;
+        public static readonly Color SidebarHeaderText = Color.FromArgb(235, 235, 235);
+        public static readonly Color MutedText = Color.FromArgb(165, 165, 170);
+        public static readonly Color SuccessText = Color.FromArgb(125, 205, 125);
 
         // Button colors
         public static readonly Color ButtonBackground = Color.FromArgb(45, 45, 48);
