@@ -2,9 +2,32 @@
 
 ## Execution Status (2026-02-09)
 - Branch: `feature/ui-modernization`
-- Phase A: in progress
-- Phase B-E: pending
+- Phase A: completed
+- Phase B: completed
+- Phase C: in progress (kickoff)
+- Phase D-E: pending
 - Baseline worksheet: `plans/ui-modernization-baseline-checklist.md`
+
+### Completed So Far (A+B + C Kickoff)
+1. Main window (`SectionedViewForm`) is now resizable with minimum size constraints and adaptive sidebar width.
+2. Main action bar layout is responsive and wraps cleanly at narrower widths.
+3. Text output areas now support horizontal scrolling where long hardware/log lines require it.
+4. `CleanDevicesForm`, `CleanLogsForm`, and `WhitelistDevicesForm` were migrated to container-based adaptive layouts.
+5. `DeviceRemovalConfirmationForm` was rebuilt on adaptive layout containers (no hard-coded absolute button positioning).
+6. High-DPI spacing issues in modal/footer regions were fixed based on 4K@175% feedback.
+7. Clean Logs UX improvements shipped:
+   - immediate startup status lines
+   - detailed progress reporting
+   - deterministic end-of-run summary block
+   - no auto-close after completion
+8. Event-log cleaning pipeline hardening:
+   - standard channels processed first
+   - additional channel discovery with bounded parallel probing
+   - explicit deduplication to prevent duplicate processing
+9. Phase C kickoff implementation:
+   - expanded UI color/button tokens in `ThemeColors`
+   - shared button variants in `Buttons` (`Primary`, `Secondary`, `Danger`)
+   - consistent action-button styling applied across main and modal forms
 
 ## Goal
 Modernize the WinForms interface so it looks cleaner and more professional while staying functionally identical and working reliably across:
@@ -29,11 +52,10 @@ Modernize the WinForms interface so it looks cleaner and more professional while
 Goal: Establish objective acceptance criteria before redesign.
 
 Tasks:
-1. Define UI test matrix:
-   - 1366x768 @ 100%
-   - 1920x1080 @ 100% / 125%
-   - 2560x1440 @ 100% / 150%
-   - 3840x2160 @ 150% / 200%
+1. Define UI test matrix (current scope):
+   - 2560x1440 @ 100%
+   - 3840x2160 @ 175%
+   - 1920x1080 @ 100% (optional sanity check)
 2. Capture baseline screenshots for:
    - Main window
    - Clean Devices
@@ -48,6 +70,7 @@ Tasks:
 
 Exit criteria:
 1. Baseline issues are documented and reproducible.
+2. Required matrix rows are completed for 2K@100% and 4K@175%.
 
 ## Phase B: Layout System Hardening
 Goal: Make forms resolution- and DPI-robust.
@@ -74,6 +97,8 @@ Exit criteria:
 
 ## Phase C: Visual Redesign (Modern but Practical)
 Goal: Improve clarity, hierarchy, and aesthetics without overdesign.
+
+Status: in progress (initial consistency pass implemented; typography/hierarchy pass next).
 
 Tasks:
 1. Define UI tokens in one place:
