@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using HWIDChecker.Services.Win32;
@@ -15,17 +16,34 @@ namespace HWIDChecker.Services
         public event Action<string, string> OnError;
 #pragma warning restore CS0067
 
+        private const int ERROR_INSUFFICIENT_BUFFER = 122;
+
+        private static readonly HashSet<string> IgnoredHardwareIds = new(StringComparer.OrdinalIgnoreCase)
+        {
+            @"SW\{96E080C7-143C-11D1-B40F-00A0C9223196}", // Microsoft Streaming Service Proxy
+            "ms_pppoeminiport",      // WAN Miniport (PPPOE)
+            "ms_pptpminiport",       // WAN Miniport (PPTP)
+            "ms_agilevpnminiport",   // WAN Miniport (IKEv2)
+            "ms_ndiswanbh",          // WAN Miniport (Network Monitor)
+            "ms_ndiswanip",          // WAN Miniport (IP)
+            "ms_sstpminiport",       // WAN Miniport (SSTP)
+            "ms_ndiswanipv6",        // WAN Miniport (IPv6)
+            "ms_l2tpminiport",       // WAN Miniport (L2TP)
+            @"MMDEVAPI\AudioEndpoints" // Audio Endpoint
+        };
+
         private IntPtr _devicesHandle = IntPtr.Zero;
+
+        private static bool IsInvalidDeviceHandle(IntPtr handle) => handle == IntPtr.Zero || handle.ToInt64() == -1;
 
         public List<DeviceDetail> ScanForGhostDevices()
         {
             var devices = new List<DeviceDetail>();
             var setupClass = Guid.Empty;
             
-            // Store the device info set handle as a class field
             _devicesHandle = SetupDiGetClassDevs(ref setupClass, IntPtr.Zero, IntPtr.Zero, (uint)DiGetClassFlags.DIGCF_ALLCLASSES);
 
-            if (_devicesHandle == IntPtr.Zero || _devicesHandle.ToInt64() == -1)
+            if (IsInvalidDeviceHandle(_devicesHandle))
             {
                 throw new Exception("Failed to get device list");
             }
@@ -37,47 +55,11 @@ namespace HWIDChecker.Services
 
                 while (SetupDiEnumDeviceInfo(_devicesHandle, deviceIndex, ref deviceInfoData))
                 {
-                    var properties = new Dictionary<SetupDiGetDeviceRegistryPropertyEnum, string>();
-                    var propertyArray = new[]
-                    {
-                        SetupDiGetDeviceRegistryPropertyEnum.SPDRP_FRIENDLYNAME,
-                        SetupDiGetDeviceRegistryPropertyEnum.SPDRP_DEVICEDESC,
-                        SetupDiGetDeviceRegistryPropertyEnum.SPDRP_HARDWAREID,
-                        SetupDiGetDeviceRegistryPropertyEnum.SPDRP_CLASS,
-                        SetupDiGetDeviceRegistryPropertyEnum.SPDRP_INSTALL_STATE
-                    };
-
-                    foreach (var prop in propertyArray)
-                    {
-                        var propBuffer = new byte[1024];
-                        if (SetupDiGetDeviceRegistryProperty(_devicesHandle, ref deviceInfoData, (uint)prop,
-                            out uint propType, propBuffer, (uint)propBuffer.Length, out uint requiredSize))
-                        {
-                            if (prop == SetupDiGetDeviceRegistryPropertyEnum.SPDRP_INSTALL_STATE)
-                            {
-                                properties[prop] = (requiredSize != 0).ToString();
-                            }
-                            else if (requiredSize > 0)
-                            {
-                                properties[prop] = Encoding.Unicode.GetString(propBuffer, 0, (int)requiredSize).Trim('\0');
-                            }
-                        }
-                    }
-
-                    // Check if device is present
-                    bool isGhostDevice = true; // Assume it's a ghost device by default
-                    foreach (var property in properties)
-                    {
-                        if (property.Key == SetupDiGetDeviceRegistryPropertyEnum.SPDRP_INSTALL_STATE)
-                        {
-                            isGhostDevice = property.Value == "False";
-                            break;
-                        }
-                    }
+                    var properties = ReadDeviceProperties(ref deviceInfoData);
+                    bool isGhostDevice = IsGhostDevice(ref deviceInfoData, properties);
 
                     if (isGhostDevice)
                     {
-                        // Create an exact copy of the device info data for when we remove it
                         var deviceInfoCopy = new SP_DEVINFO_DATA
                         {
                             cbSize = deviceInfoData.cbSize,
@@ -86,44 +68,28 @@ namespace HWIDChecker.Services
                             reserved = deviceInfoData.reserved
                         };
 
-                        var deviceName = "True"; // Match old script's behavior
+                        var deviceName = properties.GetValueOrDefault(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_FRIENDLYNAME) ??
+                                         properties.GetValueOrDefault(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_DEVICEDESC) ??
+                                         "Unknown Device";
                         var deviceDesc = properties.GetValueOrDefault(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_DEVICEDESC) ??
-                                       properties.GetValueOrDefault(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_FRIENDLYNAME) ??
-                                       "Unknown Device";
+                                         deviceName;
 
-                        var hardwareIds = new List<string>();
-                        if (properties.TryGetValue(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_HARDWAREID, out var hwId))
+                        var hardwareIds = GetHardwareIds(properties);
+                        if (ShouldIgnoreDevice(hardwareIds))
                         {
-                            hardwareIds.AddRange(hwId.Split('\0', StringSplitOptions.RemoveEmptyEntries));
+                            deviceIndex++;
+                            continue;
                         }
 
                         var deviceClass = properties.GetValueOrDefault(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_CLASS) ?? "";
+                        var hardwareId = hardwareIds.Count > 0 ? string.Join(" | ", hardwareIds) : "";
 
-                        // Default Windows devices to ignore
-                        var ignoredDevices = new HashSet<string>
-                        {
-                            @"SW\{96E080C7-143C-11D1-B40F-00A0C9223196}", // Microsoft Streaming Service Proxy
-                            "ms_pppoeminiport",      // WAN Miniport (PPPOE)
-                            "ms_pptpminiport",       // WAN Miniport (PPTP)
-                            "ms_agilevpnminiport",   // WAN Miniport (IKEv2)
-                            "ms_ndiswanbh",          // WAN Miniport (Network Monitor)
-                            "ms_ndiswanip",          // WAN Miniport (IP)
-                            "ms_sstpminiport",       // WAN Miniport (SSTP)
-                            "ms_ndiswanipv6",        // WAN Miniport (IPv6)
-                            "ms_l2tpminiport",       // WAN Miniport (L2TP)
-                            "MMDEVAPI\\AudioEndpoints" // Audio Endpoint
-                        };
-
-                        var hardwareId = string.Join("", hardwareIds);
-                        if (!ignoredDevices.Contains(hardwareId))
-                        {
-                            devices.Add(new DeviceDetail(
-                                deviceName,
-                                deviceDesc,
-                                hardwareId,
-                                deviceClass,
-                                deviceInfoCopy));
-                        }
+                        devices.Add(new DeviceDetail(
+                            deviceName,
+                            deviceDesc,
+                            hardwareId,
+                            deviceClass,
+                            deviceInfoCopy));
                     }
 
                     deviceIndex++;
@@ -133,7 +99,7 @@ namespace HWIDChecker.Services
             }
             catch
             {
-                if (_devicesHandle != IntPtr.Zero && _devicesHandle.ToInt64() != -1)
+                if (!IsInvalidDeviceHandle(_devicesHandle))
                 {
                     SetupDiDestroyDeviceInfoList(_devicesHandle);
                     _devicesHandle = IntPtr.Zero;
@@ -148,8 +114,7 @@ namespace HWIDChecker.Services
 
             try
             {
-                // Make sure we have a valid handle from scanning
-                if (_devicesHandle == IntPtr.Zero || _devicesHandle.ToInt64() == -1)
+                if (IsInvalidDeviceHandle(_devicesHandle))
                 {
                     throw new Exception("Invalid device list handle. Please scan for devices first.");
                 }
@@ -161,10 +126,8 @@ namespace HWIDChecker.Services
                 {
                     try
                     {
-                        // Use the exact same device info data we stored during scanning
                         var devInfoData = device.DeviceInfoData;
                         
-                        // Attempt to remove the device directly
                         if (SetupDiRemoveDevice(_devicesHandle, ref devInfoData))
                         {
                             removedCount++;
@@ -190,12 +153,128 @@ namespace HWIDChecker.Services
             }
             finally
             {
-                if (_devicesHandle != IntPtr.Zero && _devicesHandle.ToInt64() != -1)
+                if (!IsInvalidDeviceHandle(_devicesHandle))
                 {
                     SetupDiDestroyDeviceInfoList(_devicesHandle);
                     _devicesHandle = IntPtr.Zero;
                 }
             }
+        }
+
+        private Dictionary<SetupDiGetDeviceRegistryPropertyEnum, string> ReadDeviceProperties(ref SP_DEVINFO_DATA deviceInfoData)
+        {
+            var properties = new Dictionary<SetupDiGetDeviceRegistryPropertyEnum, string>();
+            var propertyArray = new[]
+            {
+                SetupDiGetDeviceRegistryPropertyEnum.SPDRP_FRIENDLYNAME,
+                SetupDiGetDeviceRegistryPropertyEnum.SPDRP_DEVICEDESC,
+                SetupDiGetDeviceRegistryPropertyEnum.SPDRP_HARDWAREID,
+                SetupDiGetDeviceRegistryPropertyEnum.SPDRP_CLASS,
+                SetupDiGetDeviceRegistryPropertyEnum.SPDRP_INSTALL_STATE
+            };
+
+            foreach (var prop in propertyArray)
+            {
+                if (!TryReadDeviceProperty(ref deviceInfoData, prop, out _, out var propBuffer, out var requiredSize))
+                {
+                    continue;
+                }
+
+                if (prop == SetupDiGetDeviceRegistryPropertyEnum.SPDRP_INSTALL_STATE)
+                {
+                    if (requiredSize >= sizeof(uint))
+                    {
+                        properties[prop] = BitConverter.ToUInt32(propBuffer, 0).ToString();
+                    }
+                }
+                else if (requiredSize > 0)
+                {
+                    properties[prop] = Encoding.Unicode.GetString(propBuffer, 0, (int)requiredSize).Trim('\0');
+                }
+            }
+
+            return properties;
+        }
+
+        private bool TryReadDeviceProperty(
+            ref SP_DEVINFO_DATA deviceInfoData,
+            SetupDiGetDeviceRegistryPropertyEnum prop,
+            out uint propType,
+            out byte[] propBuffer,
+            out uint requiredSize)
+        {
+            propType = 0;
+            requiredSize = 0;
+            propBuffer = new byte[1024];
+
+            if (SetupDiGetDeviceRegistryProperty(
+                    _devicesHandle,
+                    ref deviceInfoData,
+                    (uint)prop,
+                    out propType,
+                    propBuffer,
+                    (uint)propBuffer.Length,
+                    out requiredSize))
+            {
+                return true;
+            }
+
+            int error = Marshal.GetLastWin32Error();
+            if (error != ERROR_INSUFFICIENT_BUFFER || requiredSize == 0)
+            {
+                return false;
+            }
+
+            propBuffer = new byte[requiredSize];
+            return SetupDiGetDeviceRegistryProperty(
+                _devicesHandle,
+                ref deviceInfoData,
+                (uint)prop,
+                out propType,
+                propBuffer,
+                requiredSize,
+                out requiredSize);
+        }
+
+        private static List<string> GetHardwareIds(Dictionary<SetupDiGetDeviceRegistryPropertyEnum, string> properties)
+        {
+            if (!properties.TryGetValue(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_HARDWAREID, out var hwIdsRaw) ||
+                string.IsNullOrWhiteSpace(hwIdsRaw))
+            {
+                return new List<string>();
+            }
+
+            return hwIdsRaw
+                .Split('\0', StringSplitOptions.RemoveEmptyEntries)
+                .Select(id => id.Trim())
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .ToList();
+        }
+
+        private static bool ShouldIgnoreDevice(List<string> hardwareIds)
+        {
+            if (hardwareIds.Count == 0)
+            {
+                return false;
+            }
+
+            return hardwareIds.Any(id => IgnoredHardwareIds.Contains(id));
+        }
+
+        private static bool IsGhostDevice(ref SP_DEVINFO_DATA deviceInfoData, Dictionary<SetupDiGetDeviceRegistryPropertyEnum, string> properties)
+        {
+            if (CM_Get_DevNode_Status(out uint devNodeStatus, out _, deviceInfoData.devInst, 0) == CR_SUCCESS)
+            {
+                return (devNodeStatus & DN_PRESENT) == 0;
+            }
+
+            if (properties.TryGetValue(SetupDiGetDeviceRegistryPropertyEnum.SPDRP_INSTALL_STATE, out var installStateRaw) &&
+                uint.TryParse(installStateRaw, out uint installState))
+            {
+                return installState != 0;
+            }
+
+            return false;
         }
 
         [DllImport("setupapi.dll", SetLastError = true)]

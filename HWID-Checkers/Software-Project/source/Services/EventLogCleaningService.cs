@@ -1,12 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace HWIDChecker.Services
 {
     public class EventLogCleaningService
     {
+        private const int ProcessTimeoutMs = 60000;
+
         public event Action<string> OnStatusUpdate;
         public event Action<string, string> OnError;
 
@@ -206,7 +209,7 @@ namespace HWIDChecker.Services
 
         private record ProcessResult(string StdOut, string StdErr);
 
-        private async Task<ProcessResult> RunProcessAsync(string fileName, string arguments)
+        private async Task<ProcessResult> RunProcessAsync(string fileName, string arguments, int timeoutMs = ProcessTimeoutMs)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -219,39 +222,46 @@ namespace HWIDChecker.Services
             };
 
             using var process = new Process { StartInfo = startInfo };
-            var outputTcs = new TaskCompletionSource<string>();
-            var errorTcs = new TaskCompletionSource<string>();
-
-            process.OutputDataReceived += (s, e) =>
-            {
-                if (e.Data == null)
-                    outputTcs.TrySetResult(string.Empty);
-                else
-                    outputTcs.TrySetResult(e.Data);
-            };
-
-            process.ErrorDataReceived += (s, e) =>
-            {
-                if (e.Data == null)
-                    errorTcs.TrySetResult(string.Empty);
-                else
-                    errorTcs.TrySetResult(e.Data);
-            };
 
             bool started = process.Start();
             if (!started)
+            {
                 throw new InvalidOperationException($"Failed to start process: {fileName}");
+            }
 
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
+            var stdOutTask = process.StandardOutput.ReadToEndAsync();
+            var stdErrTask = process.StandardError.ReadToEndAsync();
 
-            await Task.WhenAll(
-                Task.Run(() => process.WaitForExit()),
-                outputTcs.Task,
-                errorTcs.Task
-            );
+            try
+            {
+                using var timeoutCts = new CancellationTokenSource(timeoutMs);
+                await process.WaitForExitAsync(timeoutCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+                }
+                catch
+                {
+                }
 
-            return new ProcessResult(outputTcs.Task.Result, errorTcs.Task.Result);
+                throw new TimeoutException($"Process timed out after {timeoutMs}ms: {fileName} {arguments}");
+            }
+
+            var stdOut = await stdOutTask;
+            var stdErr = await stdErrTask;
+
+            if (process.ExitCode != 0 && string.IsNullOrWhiteSpace(stdErr))
+            {
+                stdErr = $"Process exited with code {process.ExitCode}.";
+            }
+
+            return new ProcessResult(stdOut ?? string.Empty, stdErr ?? string.Empty);
         }
 
         public async Task CleanEventLogsAsync()

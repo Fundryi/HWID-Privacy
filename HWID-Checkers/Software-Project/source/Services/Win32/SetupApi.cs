@@ -24,6 +24,16 @@ namespace HWIDChecker.Services.Win32
         [DllImport("setupapi.dll", CharSet = CharSet.Auto, SetLastError = true)]
         public static extern bool SetupDiRemoveDevice(IntPtr DeviceInfoSet, ref SP_DEVINFO_DATA DeviceInfoData);
 
+        [DllImport("cfgmgr32.dll", SetLastError = true)]
+        public static extern int CM_Get_DevNode_Status(
+            out uint pulStatus,
+            out uint pulProblemNumber,
+            uint dnDevInst,
+            uint ulFlags);
+
+        public const int CR_SUCCESS = 0x00000000;
+        public const uint DN_PRESENT = 0x00000002;
+
         [StructLayout(LayoutKind.Sequential)]
         public struct SP_DEVINFO_DATA
         {

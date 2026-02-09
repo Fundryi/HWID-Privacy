@@ -6,7 +6,8 @@
 ## Execution Status (2026-02-09)
 - Phase 1: completed
 - Phase 2: completed
-- Phase 3-5: pending
+- Phase 3: completed (service hardening + cleanup)
+- Phase 4-5: pending
 
 ## Current-State Findings
 - Docs were partially out of sync with implementation (comparison references, old update mechanism details, stale paths).
