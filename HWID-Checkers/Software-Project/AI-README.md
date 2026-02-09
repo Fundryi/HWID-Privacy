@@ -5,20 +5,10 @@
 
 ---
 
-## ⚠️ UNUSED FILES (Safe to Delete)
+## Status
 
-| File | Reason |
-|------|--------|
-| `UI/Forms/MainForm.cs` | **UNUSED** - Old main form, replaced by `SectionedViewForm` |
-| `UI/Forms/MainFormLayout.cs` | **UNUSED** - Layout for old MainForm |
-| `UI/Forms/MainFormEventHandlers.cs` | **UNUSED** - Event handlers for old MainForm |
-| `UI/Forms/MainFormLoader.cs` | **UNUSED** - Loader for old MainForm |
-| `UI/Forms/MainFormInitializer.cs` | **UNUSED** - Initializer for old MainForm |
-| `UI/Forms/MainForm.resx` | **UNUSED** - Resource file for old MainForm |
-| `UI/DataHandlers/HardwareDataHandler.cs` | **UNUSED** - Base class for unused handlers |
-| `UI/DataHandlers/HardwareDataHandlerFactory.cs` | **UNUSED** - Factory never instantiated |
-| `UI/DataHandlers/NetworkInfoHandler.cs` | **UNUSED** - Handler never used |
-| `UI/DataHandlers/SystemInfoHandler.cs` | **UNUSED** - Handler never used |
+- Legacy `MainForm*` and `UI/DataHandlers/*` paths were removed in Phase 2 cleanup.
+- Active UI entry point is `UI/Forms/SectionedViewForm.cs`.
 
 ---
 
@@ -133,10 +123,6 @@ string SectionTitle { get; } // Display title for UI
 | `Forms/DeviceRemovalConfirmationForm.cs` | Confirmation dialog for device removal | None |
 | `Components/Buttons.cs` | Button styling utilities | None |
 | `Components/ThemeColors.cs` | Color constants for dark theme | None |
-
-**UNUSED FILES (See top of file):**
-- `Forms/MainForm.cs`, `MainFormLayout.cs`, `MainFormEventHandlers.cs`, `MainFormLoader.cs`, `MainFormInitializer.cs`, `MainForm.resx`
-- `DataHandlers/HardwareDataHandler.cs`, `HardwareDataHandlerFactory.cs`, `NetworkInfoHandler.cs`, `SystemInfoHandler.cs`
 
 ---
 
@@ -302,7 +288,7 @@ source/
 │   └── Win32/                          # Native Windows API
 └── UI/
     ├── Forms/
-    │   ├── SectionedViewForm.cs         # MAIN UI (replaces old MainForm)
+    │   ├── SectionedViewForm.cs         # MAIN UI
     │   ├── CleanDevicesForm.cs         # Device cleaning
     │   ├── CleanLogsForm.cs            # Log cleaning
     │   ├── WhitelistDevicesForm.cs     # Whitelist UI
@@ -310,7 +296,6 @@ source/
     ├── Components/                     # Reusable UI components
     │   ├── Buttons.cs
     │   └── ThemeColors.cs
-    └── DataHandlers/                   # UNUSED - See top of file
 ```
 
 ---

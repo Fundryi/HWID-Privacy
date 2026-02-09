@@ -127,8 +127,6 @@ HWID-Checkers/Software-Project/
 │   │   ├── Forms/CleanLogsForm.cs
 │   │   ├── Forms/WhitelistDevicesForm.cs
 │   │   ├── Forms/DeviceRemovalConfirmationForm.cs
-│   │   ├── Forms/MainForm*.cs                    # Legacy/unused path
-│   │   ├── DataHandlers/*.cs                     # Legacy/unused path
 │   │   └── Components/{Buttons.cs, ThemeColors.cs}
 │   └── Resources/app.ico
 ├── AI-README.md
