@@ -39,7 +39,7 @@ Output:
 
 ## Requirements
 
-- .NET 9.0 SDK
+- .NET 10.0 SDK
 - Windows 10/11 (x64)
 - Administrator privileges only for cleaning features (device/log cleaning)
 
