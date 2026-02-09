@@ -12,6 +12,7 @@
     - [Core Functionality](#core-functionality)
     - [Hardware Providers](#hardware-providers)
     - [System Services](#system-services)
+    - [Cleaning Actions](#cleaning-actions)
   - [Usage Instructions](#usage-instructions)
     - [GUI Version](#gui-version)
     - [Command Line Scripts](#command-line-scripts)
@@ -78,6 +79,31 @@ Current providers (12):
 - Event log cleaning
 - Auto-update check/download for `HWIDChecker.exe` from GitHub (SHA256 hash comparison)
 
+### Cleaning Actions
+
+`🧹 Clean Devices`:
+- Scans for non-present (ghost) devices only.
+- Shows full device details before removal (name, description, hardware ID, class).
+- Applies whitelist filtering before removal.
+- Removes only non-whitelisted ghost devices after confirmation.
+- Supports whitelist management (`Manage Whitelist`) and per-run review output.
+
+`📝 Clean Logs`:
+- Clears a curated standard set of Windows event channels first.
+- Optionally discovers additional active channels and clears them in the same run.
+- Uses deduplicated channel sets (case-insensitive) to avoid double processing.
+- Skips channels that are missing/disabled on the current system.
+- Shows live progress and a final summary block with:
+  - collected standard/additional totals
+  - attempted/cleared counts
+  - skipped (not found/disabled/duplicate)
+  - failed count
+- Window remains open after completion for manual review.
+
+Operational note:
+- Log cleaning is history-destructive by design (it removes event log records).
+- It does not modify hardware state; device cleaning and log cleaning are separate actions.
+
 ## Usage Instructions
 
 ### GUI Version
@@ -90,6 +116,9 @@ Current providers (12):
    - `💾 Export` to export all section data
    - `🧹 Clean Devices` / `📝 Clean Logs` for maintenance tasks (admin required)
    - `⟳ Updates` to check/download updates
+5. For cleaning:
+   - `Clean Devices` opens a device-focused cleanup flow with whitelist support.
+   - `Clean Logs` opens a log-focused cleanup flow with live progress and end-of-run overview.
 
 ### Command Line Scripts
 

@@ -13,10 +13,19 @@ namespace HWIDChecker.UI.Forms
     public partial class SectionedViewForm : Form
     {
         private const bool ENABLE_DEBUG_BUTTON = true; // Set to false to disable debug button
+        private const int DefaultWindowWidth = 1040;
+        private const int DefaultWindowHeight = 760;
+        private const int MinimumWindowWidth = 900;
+        private const int MinimumWindowHeight = 640;
+        private const int SidebarMinWidth = 240;
+        private const int SidebarMaxWidth = 360;
+        private const int SidebarWidthPercentage = 28;
         private readonly HardwareInfoManager hardwareInfoManager;
         private string currentHardwareData;
-        private Panel sidebarPanel;
+        private FlowLayoutPanel sidebarPanel;
         private Panel contentPanel;
+        private TableLayoutPanel mainLayout;
+        private FlowLayoutPanel actionButtonPanel;
         private TextBox currentContentTextBox;
         private Button refreshButton;
         private Button exportButton;
@@ -51,15 +60,17 @@ namespace HWIDChecker.UI.Forms
             Text = isMainWindow ? "HWID Checker" : "HWID Checker - Sectioned View";
             BackColor = Color.FromArgb(32, 32, 32); // Darker background
             ForeColor = Color.White;
-            FormBorderStyle = FormBorderStyle.FixedSingle; // Disable resizing
+            FormBorderStyle = FormBorderStyle.Sizable;
             StartPosition = isMainWindow ? FormStartPosition.CenterScreen : FormStartPosition.CenterParent;
             
             // CRITICAL: Ensure consistent DPI scaling across all containers
             AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new Size(920, 710);
+            ClientSize = new Size(DefaultWindowWidth, DefaultWindowHeight);
+            MinimumSize = new Size(MinimumWindowWidth, MinimumWindowHeight);
 
             // Subscribe to DPI changes for runtime handling
             DpiChanged += SectionedViewForm_DpiChanged;
+            Resize += SectionedViewForm_Resize;
 
             CreateModernLayout();
             
@@ -83,13 +94,19 @@ namespace HWIDChecker.UI.Forms
         {
             // Handle DPI changes at runtime
             this.PerformAutoScale();
+            UpdateResponsiveLayout();
             this.Invalidate();
+        }
+
+        private void SectionedViewForm_Resize(object sender, EventArgs e)
+        {
+            UpdateResponsiveLayout();
         }
 
         private void CreateModernLayout()
         {
             // Use TableLayoutPanel for proper DPI-aware layout
-            var mainLayout = new TableLayoutPanel
+            mainLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 2,
@@ -97,23 +114,24 @@ namespace HWIDChecker.UI.Forms
                 BackColor = Color.FromArgb(32, 32, 32)
             };
 
-            // Configure columns: sidebar (280px) and content (fill remaining)
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 285F));
+            // Configure columns: sidebar (adaptive width) and content (fill remaining)
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, GetSidebarWidth(ClientSize.Width)));
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             
-            // Configure rows: main content (fill) and buttons (60px)
+            // Configure rows: main content (fill) and button panel (auto-sized for wrapping)
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             // Create sidebar using FlowLayoutPanel for proper DPI scaling
             sidebarPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.TopDown,
-                AutoScroll = false,
+                AutoScroll = true,
                 AutoSize = false,
                 BackColor = Color.FromArgb(40, 40, 40),
-                WrapContents = false
+                WrapContents = false,
+                Padding = new Padding(0, 8, 0, 8)
             };
 
             // Create content panel with proper scaling
@@ -121,7 +139,7 @@ namespace HWIDChecker.UI.Forms
             {
                 Dock = DockStyle.Fill,
                 BackColor = Color.FromArgb(25, 25, 25),
-                Padding = new Padding(20)
+                Padding = new Padding(16)
             };
 
             // Create content textbox with proper DPI handling
@@ -130,7 +148,8 @@ namespace HWIDChecker.UI.Forms
                 Dock = DockStyle.Fill,
                 Multiline = true,
                 ReadOnly = true,
-                ScrollBars = ScrollBars.Vertical,
+                ScrollBars = ScrollBars.Both,
+                WordWrap = false,
                 BackColor = Color.FromArgb(35, 35, 35),
                 ForeColor = Color.FromArgb(220, 220, 220),
                 Font = new Font("Consolas", 10f),
@@ -140,13 +159,16 @@ namespace HWIDChecker.UI.Forms
             contentPanel.Controls.Add(currentContentTextBox);
 
             // Create button panel using FlowLayoutPanel for proper DPI scaling
-            var buttonPanel = new FlowLayoutPanel
+            actionButtonPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.LeftToRight,
                 BackColor = Color.FromArgb(45, 45, 45),
-                Padding = new Padding(10),
-                WrapContents = true
+                Padding = new Padding(12, 8, 12, 8),
+                WrapContents = true,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Margin = new Padding(0)
             };
 
             // Create loading label
@@ -188,7 +210,7 @@ namespace HWIDChecker.UI.Forms
                     buttonsToAdd.Add(debugButton);
                 }
 
-                buttonPanel.Controls.AddRange(buttonsToAdd.ToArray());
+                actionButtonPanel.Controls.AddRange(buttonsToAdd.ToArray());
             }
             else
             {
@@ -202,39 +224,39 @@ namespace HWIDChecker.UI.Forms
                 exportButton.Click += ExportButton_Click;
                 closeButton.Click += (s, e) => Close();
 
-                buttonPanel.Controls.AddRange(new Control[] { refreshButton, exportButton, closeButton });
+                actionButtonPanel.Controls.AddRange(new Control[] { refreshButton, exportButton, closeButton });
             }
 
             // Assemble the layout
             mainLayout.Controls.Add(sidebarPanel, 0, 0);
             mainLayout.Controls.Add(contentPanel, 1, 0);
-            mainLayout.Controls.Add(buttonPanel, 0, 1);
-            mainLayout.SetColumnSpan(buttonPanel, 2); // Span across both columns
+            mainLayout.Controls.Add(actionButtonPanel, 0, 1);
+            mainLayout.SetColumnSpan(actionButtonPanel, 2); // Span across both columns
 
             // Add main layout and loading label to form
             this.Controls.Add(mainLayout);
             this.Controls.Add(loadingLabel);
 
-            // Center loading label
-            loadingLabel.Location = new Point(
-                (ClientSize.Width - loadingLabel.Width) / 2,
-                (ClientSize.Height - loadingLabel.Height) / 2
-            );
+            UpdateResponsiveLayout();
         }
 
         private Button CreateModernButton(string text, Point location)
         {
-            return new Button
+            var button = new Button
             {
                 Location = location,
-                Size = new Size(110, 30),
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(120, 34),
                 Text = text,
-                BackColor = Color.FromArgb(0, 120, 215), // Modern blue
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 9f),
-                Cursor = Cursors.Hand
+                Cursor = Cursors.Hand,
+                Padding = new Padding(12, 4, 12, 4),
+                Margin = new Padding(0, 0, 8, 8)
             };
+
+            Buttons.ApplyStyle(button, Buttons.ButtonVariant.Primary);
+            return button;
         }
 
         private void ParseDataIntoSections(string allData)
@@ -289,13 +311,13 @@ namespace HWIDChecker.UI.Forms
             var titleLabel = new Label
             {
                 AutoSize = false,
-                Size = new Size(260, 30),
+                Size = new Size(GetSidebarControlWidth(), 32),
                 Text = "Hardware Sections",
                 Font = new Font("Segoe UI", 12f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(220, 220, 220),
                 BackColor = Color.Transparent,
                 TextAlign = ContentAlignment.MiddleLeft,
-                Margin = new Padding(10, 10, 10, 5)
+                Margin = new Padding(12, 0, 12, 8)
             };
             sidebarPanel.Controls.Add(titleLabel);
 
@@ -306,6 +328,8 @@ namespace HWIDChecker.UI.Forms
                 sectionButtons.Add(sectionButton);
                 sidebarPanel.Controls.Add(sectionButton);
             }
+
+            UpdateSidebarControlWidths();
         }
 
         private Button CreateSectionButton(string title, int index)
@@ -316,7 +340,7 @@ namespace HWIDChecker.UI.Forms
             var button = new Button
             {
                 AutoSize = false,
-                Size = new Size(260, 45),
+                Size = new Size(GetSidebarControlWidth(), 44),
                 Text = $"{icon} {title}",
                 BackColor = Color.FromArgb(50, 50, 50),
                 ForeColor = Color.FromArgb(200, 200, 200),
@@ -324,7 +348,7 @@ namespace HWIDChecker.UI.Forms
                 Font = new Font("Segoe UI", 10f),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(15, 0, 0, 0),
-                Margin = new Padding(10, 2, 10, 2),
+                Margin = new Padding(12, 0, 12, 6),
                 Cursor = Cursors.Hand,
                 Tag = index
             };
@@ -507,14 +531,75 @@ namespace HWIDChecker.UI.Forms
                 loadingLabel.Visible = show;
                 if (show)
                 {
-                    // Center the loading label
-                    loadingLabel.Location = new Point(
-                        (ClientSize.Width - loadingLabel.Width) / 2,
-                        (ClientSize.Height - loadingLabel.Height) / 2
-                    );
+                    UpdateLoadingLabelPosition();
                     loadingLabel.BringToFront();
                 }
             }
+        }
+
+        private void UpdateResponsiveLayout()
+        {
+            if (mainLayout == null || sidebarPanel == null)
+            {
+                return;
+            }
+
+            var sidebarWidth = GetSidebarWidth(ClientSize.Width);
+            if (mainLayout.ColumnStyles.Count > 0)
+            {
+                mainLayout.ColumnStyles[0].SizeType = SizeType.Absolute;
+                mainLayout.ColumnStyles[0].Width = sidebarWidth;
+            }
+
+            UpdateSidebarControlWidths();
+            UpdateLoadingLabelPosition();
+        }
+
+        private int GetSidebarWidth(int clientWidth)
+        {
+            var adaptiveWidth = (clientWidth * SidebarWidthPercentage) / 100;
+            return Math.Max(SidebarMinWidth, Math.Min(SidebarMaxWidth, adaptiveWidth));
+        }
+
+        private int GetSidebarControlWidth()
+        {
+            if (sidebarPanel == null)
+            {
+                return SidebarMinWidth - 24;
+            }
+
+            var scrollbarWidth = sidebarPanel.VerticalScroll.Visible ? SystemInformation.VerticalScrollBarWidth : 0;
+            var availableWidth = sidebarPanel.ClientSize.Width - sidebarPanel.Padding.Horizontal - scrollbarWidth - 24;
+            return Math.Max(160, availableWidth);
+        }
+
+        private void UpdateSidebarControlWidths()
+        {
+            if (sidebarPanel == null || sidebarPanel.Controls.Count == 0)
+            {
+                return;
+            }
+
+            var controlWidth = GetSidebarControlWidth();
+            foreach (Control control in sidebarPanel.Controls)
+            {
+                if (control is Label or Button)
+                {
+                    control.Width = controlWidth;
+                }
+            }
+        }
+
+        private void UpdateLoadingLabelPosition()
+        {
+            if (loadingLabel == null)
+            {
+                return;
+            }
+
+            loadingLabel.Location = new Point(
+                Math.Max(0, (ClientSize.Width - loadingLabel.Width) / 2),
+                Math.Max(0, (ClientSize.Height - loadingLabel.Height) / 2));
         }
 
         private async void RefreshButton_Click(object sender, EventArgs e)

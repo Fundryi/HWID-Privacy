@@ -4,16 +4,22 @@ using System.Drawing;
 using System.Collections.Generic;
 using HWIDChecker.Services;
 using HWIDChecker.Services.Models;
+using HWIDChecker.UI.Components;
 using System.Threading.Tasks;
 
 namespace HWIDChecker.UI.Forms
 {
     public class CleanDevicesForm : Form
     {
+        private const int DefaultWidth = 920;
+        private const int DefaultHeight = 640;
+        private const int MinimumWidth = 760;
+        private const int MinimumHeight = 500;
         private TextBox outputTextBox;
         private Button closeButton;
         private Button recleanButton;
         private Button whitelistButton;
+        private FlowLayoutPanel actionButtonPanel;
         private SystemCleaningService cleaningService;
         private DeviceWhitelistService whitelistService;
         private List<DeviceDetail> ghostDevices = null;
@@ -65,12 +71,15 @@ namespace HWIDChecker.UI.Forms
             this.Text = "Device Cleaning";
             
             // Use native .NET DPI handling
-            this.FormBorderStyle = FormBorderStyle.FixedSingle; // Disable resizing
-            this.StartPosition = FormStartPosition.CenterScreen;
-            this.MaximizeBox = false;
+            this.FormBorderStyle = FormBorderStyle.Sizable;
+            this.StartPosition = FormStartPosition.CenterParent;
+            this.MaximizeBox = true;
             this.MinimizeBox = false;
             this.AutoScaleMode = AutoScaleMode.Dpi;
-            this.ClientSize = new Size(800, 600);
+            this.ClientSize = new Size(DefaultWidth, DefaultHeight);
+            this.MinimumSize = new Size(MinimumWidth, MinimumHeight);
+            this.BackColor = ThemeColors.MainBackground;
+            this.ForeColor = ThemeColors.PrimaryText;
 
             // Subscribe to DPI changes for runtime handling
             this.DpiChanged += CleanDevicesForm_DpiChanged;
@@ -79,38 +88,24 @@ namespace HWIDChecker.UI.Forms
             {
                 Multiline = true,
                 ReadOnly = true,
-                ScrollBars = ScrollBars.Vertical,
+                ScrollBars = ScrollBars.Both,
+                WordWrap = false,
                 Dock = DockStyle.Fill,
-                BackColor = Color.Black,
-                ForeColor = Color.Lime,
+                BackColor = ThemeColors.TextBoxBackground,
+                ForeColor = ThemeColors.TextBoxText,
                 Font = new Font("Consolas", 9.75f, FontStyle.Regular)
             };
             
-            whitelistButton = new Button
-            {
-                Text = "Manage Whitelist",
-                Dock = DockStyle.Bottom,
-                Height = 30, // Windows Forms will scale automatically
-                Enabled = false
-            };
+            whitelistButton = CreateActionButton("Manage Whitelist", Buttons.ButtonVariant.Primary);
+            whitelistButton.Enabled = false;
             whitelistButton.Click += WhitelistButton_Click;
 
-            recleanButton = new Button
-            {
-                Text = "Reclean",
-                Dock = DockStyle.Bottom,
-                Height = 30, // Windows Forms will scale automatically
-                Enabled = false
-            };
+            recleanButton = CreateActionButton("Reclean", Buttons.ButtonVariant.Primary);
+            recleanButton.Enabled = false;
             recleanButton.Click += (s, e) => StartCleaningProcess();
 
-            closeButton = new Button
-            {
-                Text = "Close",
-                Dock = DockStyle.Bottom,
-                Height = 30, // Windows Forms will scale automatically
-                Enabled = false
-            };
+            closeButton = CreateActionButton("Close", Buttons.ButtonVariant.Primary);
+            closeButton.Enabled = false;
             closeButton.Click += (s, e) =>
             {
                 if (isProcessing)
@@ -124,20 +119,62 @@ namespace HWIDChecker.UI.Forms
                 this.Close();
             };
 
-            // Create panel for outputTextBox with padding
-            var panel = new Panel
+            // Output container
+            var outputPanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                Padding = new Padding(10)
+                Padding = new Padding(10),
+                BackColor = ThemeColors.MainBackground
             };
-            panel.Controls.Add(outputTextBox);
+            outputPanel.Controls.Add(outputTextBox);
 
-            this.Controls.Add(panel);
-            this.Controls.Add(whitelistButton);
-            this.Controls.Add(recleanButton);
-            this.Controls.Add(closeButton);
+            // Bottom action bar
+            actionButtonPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = false,
+                Padding = new Padding(10, 10, 10, 10),
+                BackColor = ThemeColors.ButtonPanelBackground
+            };
+            actionButtonPanel.Controls.Add(closeButton);
+            actionButtonPanel.Controls.Add(recleanButton);
+            actionButtonPanel.Controls.Add(whitelistButton);
+
+            // Root layout
+            var mainLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 2,
+                BackColor = ThemeColors.MainBackground
+            };
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 56F));
+            mainLayout.Controls.Add(outputPanel, 0, 0);
+            mainLayout.Controls.Add(actionButtonPanel, 0, 1);
+
+            this.Controls.Add(mainLayout);
 
             this.Load += CleanDevicesForm_Load;
+        }
+
+        private Button CreateActionButton(string text, Buttons.ButtonVariant variant)
+        {
+            var button = new Button
+            {
+                Text = text,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(130, 34),
+                Padding = new Padding(12, 4, 12, 4),
+                Margin = new Padding(0, 0, 8, 0),
+                UseVisualStyleBackColor = true
+            };
+
+            Buttons.ApplyStyle(button, variant);
+            return button;
         }
 
         private void CleanDevicesForm_Load(object sender, EventArgs e)

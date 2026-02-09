@@ -2,13 +2,19 @@ using System;
 using System.Windows.Forms;
 using System.Drawing;
 using HWIDChecker.Services;
+using HWIDChecker.UI.Components;
 using System.Threading.Tasks;
 
 namespace HWIDChecker.UI.Forms
 {
     public class CleanLogsForm : Form
     {
+        private const int DefaultWidth = 760;
+        private const int DefaultHeight = 460;
+        private const int MinimumWidth = 620;
+        private const int MinimumHeight = 380;
         private TextBox outputTextBox;
+        private Button closeButton;
         private SystemCleaningService cleaningService;
         private bool isProcessing;
 
@@ -55,33 +61,76 @@ namespace HWIDChecker.UI.Forms
         private void InitializeComponents()
         {
             this.Text = "Log Cleaning";
-            this.Width = 600;
-            this.Height = 400;
-            this.StartPosition = FormStartPosition.CenterScreen;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
-            this.MaximizeBox = false;
+            this.StartPosition = FormStartPosition.CenterParent;
+            this.FormBorderStyle = FormBorderStyle.Sizable;
+            this.MaximizeBox = true;
             this.MinimizeBox = false;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
+            this.ClientSize = new Size(DefaultWidth, DefaultHeight);
+            this.MinimumSize = new Size(MinimumWidth, MinimumHeight);
+            this.BackColor = ThemeColors.MainBackground;
+            this.ForeColor = ThemeColors.PrimaryText;
+            this.DpiChanged += CleanLogsForm_DpiChanged;
 
             outputTextBox = new TextBox
             {
                 Multiline = true,
                 ReadOnly = true,
-                ScrollBars = ScrollBars.Vertical,
+                ScrollBars = ScrollBars.Both,
+                WordWrap = false,
                 Dock = DockStyle.Fill,
-                BackColor = Color.Black,
-                ForeColor = Color.Lime,
+                BackColor = ThemeColors.TextBoxBackground,
+                ForeColor = ThemeColors.TextBoxText,
                 Font = new Font("Consolas", 9.75f, FontStyle.Regular)
             };
 
-            // Create panel for outputTextBox
-            var panel = new Panel
+            closeButton = new Button
+            {
+                Text = "Close",
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(110, 34),
+                Padding = new Padding(12, 4, 12, 4),
+                Margin = new Padding(0, 0, 8, 0),
+                Enabled = false
+            };
+            Buttons.ApplyStyle(closeButton, Buttons.ButtonVariant.Primary);
+            closeButton.Click += (s, e) => this.Close();
+
+            // Output container
+            var outputPanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                Padding = new Padding(10)
+                Padding = new Padding(10),
+                BackColor = ThemeColors.MainBackground
             };
-            panel.Controls.Add(outputTextBox);
+            outputPanel.Controls.Add(outputTextBox);
 
-            this.Controls.Add(panel);
+            // Bottom action bar
+            var actionButtonPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = false,
+                Padding = new Padding(10, 10, 10, 10),
+                BackColor = ThemeColors.ButtonPanelBackground
+            };
+            actionButtonPanel.Controls.Add(closeButton);
+
+            var mainLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 2,
+                BackColor = ThemeColors.MainBackground
+            };
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 56F));
+            mainLayout.Controls.Add(outputPanel, 0, 0);
+            mainLayout.Controls.Add(actionButtonPanel, 0, 1);
+
+            this.Controls.Add(mainLayout);
 
             this.Load += CleanLogsForm_Load;
         }
@@ -104,35 +153,32 @@ namespace HWIDChecker.UI.Forms
             try
             {
                 isProcessing = true;
+                closeButton.Enabled = false;
                 outputTextBox.Clear();
+                HandleStatusUpdate("Starting event log cleanup...");
+                HandleStatusUpdate("Enumerating and clearing logs. This may take a moment.\r\n");
 
                 // Clean event logs only
                 await cleaningService.CleanLogsAsync();
 
                 HandleStatusUpdate("\r\nLog cleaning process completed.");
-                
-                // Auto-close after 1 second
-                var closeTimer = new System.Windows.Forms.Timer { Interval = 1000 };
-                closeTimer.Tick += (s, e) =>
-                {
-                    closeTimer.Stop();
-                    closeTimer.Dispose();
-                    this.Close();
-                };
-                closeTimer.Start();
+                HandleStatusUpdate("Review the summary above. This window will stay open.");
             }
             catch (Exception ex)
             {
                 HandleError("Log Cleaning Process", ex.Message);
                 MessageBox.Show($"Error during log cleaning process: {ex.Message}",
                     "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                
-                // Close after error as well
-                this.Close();
+
+                HandleStatusUpdate("Log cleaning encountered an error. Review details above.");
             }
             finally
             {
                 isProcessing = false;
+                if (!this.IsDisposed)
+                {
+                    closeButton.Enabled = true;
+                }
             }
         }
 
@@ -151,6 +197,12 @@ namespace HWIDChecker.UI.Forms
                 isProcessing = false;
             }
             base.OnFormClosing(e);
+        }
+
+        private void CleanLogsForm_DpiChanged(object sender, DpiChangedEventArgs e)
+        {
+            this.PerformAutoScale();
+            this.Invalidate();
         }
     }
 }

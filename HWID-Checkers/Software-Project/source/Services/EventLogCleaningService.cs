@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -9,9 +11,45 @@ namespace HWIDChecker.Services
     public class EventLogCleaningService
     {
         private const int ProcessTimeoutMs = 60000;
+        private const int AdditionalLogListTimeoutMs = 20000;
+        private const int AdditionalLogInfoTimeoutMs = 5000;
+        private const int AdditionalDiscoveryMaxDegreeOfParallelism = 6;
+        private const int DiscoveryProgressReportInterval = 50;
 
         public event Action<string> OnStatusUpdate;
         public event Action<string, string> OnError;
+
+        private static string NormalizeLogName(string logName)
+        {
+            return (logName ?? string.Empty).Trim();
+        }
+
+        private static List<string> BuildUniqueLogList(IEnumerable<string> source, out int duplicatesRemoved)
+        {
+            var unique = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            duplicatesRemoved = 0;
+
+            foreach (var item in source)
+            {
+                var logName = NormalizeLogName(item);
+                if (string.IsNullOrEmpty(logName))
+                {
+                    continue;
+                }
+
+                if (seen.Add(logName))
+                {
+                    unique.Add(logName);
+                }
+                else
+                {
+                    duplicatesRemoved++;
+                }
+            }
+
+            return unique;
+        }
 
         private async Task<bool> ClearLogWithAdvancedMethodsAsync(string logName)
         {
@@ -268,65 +306,96 @@ namespace HWIDChecker.Services
         {
             try
             {
-                // Get standard Windows logs first
-                var logNames = new List<string>(StandardEventLogs);
+                OnStatusUpdate?.Invoke("Collecting standard event log channels...");
+                var logNames = BuildUniqueLogList(StandardEventLogs, out var standardDuplicatesRemoved);
+                var knownLogNames = new HashSet<string>(logNames, StringComparer.OrdinalIgnoreCase);
+                var processedLogNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-                // Then try to get any additional logs using wevtutil
-                var listResult = await RunProcessAsync("wevtutil.exe", "el");
-                if (string.IsNullOrEmpty(listResult.StdErr))
+                if (standardDuplicatesRemoved > 0)
                 {
-                    var additionalLogs = listResult.StdOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                    foreach (var log in additionalLogs)
+                    OnStatusUpdate?.Invoke($"Skipped {standardDuplicatesRemoved} duplicate standard channels.");
+                }
+                OnStatusUpdate?.Invoke($"Collected {logNames.Count} standard logs to process.");
+
+                int standardLogsCount = logNames.Count;
+                int additionalLogsCount = 0;
+                int attemptedLogs = 0;
+                int clearedLogs = 0;
+                int skippedNotFound = 0;
+                int skippedDisabled = 0;
+                int skippedDuplicate = 0;
+                var failedLogs = new List<(string Name, string Message)>();
+
+                async Task ProcessLogBatchAsync(IEnumerable<string> batch)
+                {
+                    foreach (var batchLogName in batch)
                     {
-                        if (!logNames.Contains(log))
+                        var logName = NormalizeLogName(batchLogName);
+                        if (string.IsNullOrEmpty(logName))
                         {
-                            // Check if the log has any records
-                            var infoResult = await RunProcessAsync("wevtutil.exe", $"gli \"{log}\"");
-                            if (!string.IsNullOrEmpty(infoResult.StdOut) &&
-                                !infoResult.StdOut.Contains("enabled: false") &&
-                                !infoResult.StdOut.Contains("recordCount: 0"))
+                            continue;
+                        }
+
+                        if (!processedLogNames.Add(logName))
+                        {
+                            skippedDuplicate++;
+                            OnStatusUpdate?.Invoke($"Skipped: {logName} (duplicate)");
+                            continue;
+                        }
+
+                        try
+                        {
+                            // First check if log exists and is enabled
+                            var logInfoResult = await RunProcessAsync("wevtutil.exe", $"gli \"{logName}\"");
+                            if (!string.IsNullOrEmpty(logInfoResult.StdErr))
                             {
-                                logNames.Add(log);
+                                OnStatusUpdate?.Invoke($"Skipped: {logName} (not found)");
+                                skippedNotFound++;
+                                continue;
                             }
+                            if (logInfoResult.StdOut.Contains("enabled: false"))
+                            {
+                                OnStatusUpdate?.Invoke($"Skipped: {logName} (disabled)");
+                                skippedDisabled++;
+                                continue;
+                            }
+
+                            attemptedLogs++;
+                            OnStatusUpdate?.Invoke($"Processing: {logName}");
+
+                            // Try to clear using our advanced methods (which includes standard clearing first)
+                            if (await ClearLogWithAdvancedMethodsAsync(logName))
+                            {
+                                clearedLogs++;
+                            }
+                            else
+                            {
+                                failedLogs.Add((logName, "Failed to clear log after trying all available methods"));
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            failedLogs.Add((logName, ex.Message));
+                            OnError?.Invoke(logName, ex.Message);
                         }
                     }
                 }
 
-                int clearedLogs = 0;
-                var failedLogs = new List<(string Name, string Message)>();
+                // Process standard logs first for immediate visible activity.
+                await ProcessLogBatchAsync(logNames);
 
-                foreach (string logName in logNames)
+                // Then collect additional logs as an optional enhancement.
+                OnStatusUpdate?.Invoke("Collecting additional event log channels...");
+                var additionalLogs = await TryCollectAdditionalLogsAsync(knownLogNames);
+                if (additionalLogs.Count > 0)
                 {
-                    try
-                    {
-                        // First check if log exists and is enabled
-                        var logInfoResult = await RunProcessAsync("wevtutil.exe", $"gli \"{logName}\"");
-                        if (!string.IsNullOrEmpty(logInfoResult.StdErr))
-                        {
-                            OnStatusUpdate?.Invoke($"Skipped: {logName} (not found)");
-                            continue;
-                        }
-                        if (logInfoResult.StdOut.Contains("enabled: false"))
-                        {
-                            OnStatusUpdate?.Invoke($"Skipped: {logName} (disabled)");
-                            continue;
-                        }
-
-                        // Try to clear using our advanced methods (which includes standard clearing first)
-                        if (await ClearLogWithAdvancedMethodsAsync(logName))
-                        {
-                            clearedLogs++;
-                        }
-                        else
-                        {
-                            failedLogs.Add((logName, "Failed to clear log after trying all available methods"));
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        failedLogs.Add((logName, ex.Message));
-                        OnError?.Invoke(logName, ex.Message);
-                    }
+                    additionalLogsCount = additionalLogs.Count;
+                    OnStatusUpdate?.Invoke($"Collected {additionalLogs.Count} additional logs to process.");
+                    await ProcessLogBatchAsync(additionalLogs);
+                }
+                else
+                {
+                    OnStatusUpdate?.Invoke("No additional event logs to process.");
                 }
 
                 string summary = $"Summary: {clearedLogs} logs cleared";
@@ -343,12 +412,127 @@ namespace HWIDChecker.Services
                 {
                     OnStatusUpdate?.Invoke($"{summary} successfully");
                 }
+
+                var totalCollected = standardLogsCount + additionalLogsCount;
+                OnStatusUpdate?.Invoke(string.Empty);
+                OnStatusUpdate?.Invoke("========== CLEAN LOGS OVERVIEW ==========");
+                OnStatusUpdate?.Invoke($"Collected logs (standard)  : {standardLogsCount}");
+                OnStatusUpdate?.Invoke($"Collected logs (additional): {additionalLogsCount}");
+                OnStatusUpdate?.Invoke($"Collected logs (total)     : {totalCollected}");
+                OnStatusUpdate?.Invoke($"Logs attempted             : {attemptedLogs}");
+                OnStatusUpdate?.Invoke($"Logs cleared               : {clearedLogs}");
+                OnStatusUpdate?.Invoke($"Skipped (not found)        : {skippedNotFound}");
+                OnStatusUpdate?.Invoke($"Skipped (disabled)         : {skippedDisabled}");
+                OnStatusUpdate?.Invoke($"Skipped (duplicate)        : {skippedDuplicate}");
+                OnStatusUpdate?.Invoke($"Failed                     : {failedLogs.Count}");
+                OnStatusUpdate?.Invoke("=========================================");
             }
             catch (Exception ex)
             {
                 OnError?.Invoke("Event Log Cleaning", ex.Message);
                 throw;
             }
+        }
+
+        private async Task<List<string>> TryCollectAdditionalLogsAsync(HashSet<string> knownLogNames)
+        {
+            var additionalLogs = new List<string>();
+
+            ProcessResult listResult;
+            try
+            {
+                listResult = await RunProcessAsync("wevtutil.exe", "el", AdditionalLogListTimeoutMs);
+            }
+            catch (Exception ex)
+            {
+                OnStatusUpdate?.Invoke($"Skipped additional log discovery: {ex.Message}");
+                return additionalLogs;
+            }
+
+            if (!string.IsNullOrEmpty(listResult.StdErr))
+            {
+                OnStatusUpdate?.Invoke("Skipped additional log discovery due wevtutil errors.");
+                return additionalLogs;
+            }
+
+            var discoveredLogs = listResult.StdOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(NormalizeLogName)
+                .Where(logName => !string.IsNullOrEmpty(logName))
+                .ToList();
+
+            var candidateLogs = new List<string>();
+            int duplicateDiscoveredChannels = 0;
+            var discoveredUnique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var log in discoveredLogs)
+            {
+                if (knownLogNames.Contains(log))
+                {
+                    duplicateDiscoveredChannels++;
+                    continue;
+                }
+
+                if (!discoveredUnique.Add(log))
+                {
+                    duplicateDiscoveredChannels++;
+                    continue;
+                }
+
+                candidateLogs.Add(log);
+            }
+
+            if (duplicateDiscoveredChannels > 0)
+            {
+                OnStatusUpdate?.Invoke($"Skipped {duplicateDiscoveredChannels} channels already known from standard/discovered sets.");
+            }
+
+            if (candidateLogs.Count == 0)
+            {
+                return additionalLogs;
+            }
+
+            OnStatusUpdate?.Invoke($"Probing {candidateLogs.Count} additional channels using {AdditionalDiscoveryMaxDegreeOfParallelism} workers...");
+
+            var additionalLogBag = new ConcurrentBag<string>();
+            int processedCount = 0;
+
+            await Parallel.ForEachAsync(
+                candidateLogs,
+                new ParallelOptions { MaxDegreeOfParallelism = AdditionalDiscoveryMaxDegreeOfParallelism },
+                async (log, cancellationToken) =>
+                {
+                    try
+                    {
+                        var infoResult = await RunProcessAsync("wevtutil.exe", $"gli \"{log}\"", AdditionalLogInfoTimeoutMs);
+                        if (!string.IsNullOrEmpty(infoResult.StdOut) &&
+                            !infoResult.StdOut.Contains("enabled: false") &&
+                            !infoResult.StdOut.Contains("recordCount: 0"))
+                        {
+                            additionalLogBag.Add(log);
+                        }
+                    }
+                    catch
+                    {
+                        // Skip channels that timeout or fail during metadata probe.
+                    }
+                    finally
+                    {
+                        var current = Interlocked.Increment(ref processedCount);
+                        if (current % DiscoveryProgressReportInterval == 0 || current == candidateLogs.Count)
+                        {
+                            OnStatusUpdate?.Invoke($"Discovering additional logs... {current}/{candidateLogs.Count}");
+                        }
+                    }
+                });
+
+            foreach (var log in additionalLogBag.OrderBy(log => log, StringComparer.OrdinalIgnoreCase))
+            {
+                if (knownLogNames.Add(log))
+                {
+                    additionalLogs.Add(log);
+                }
+            }
+
+            return additionalLogs;
         }
     }
 }
