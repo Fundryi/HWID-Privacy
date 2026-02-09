@@ -7,8 +7,8 @@ The HWID Checker includes an auto-update system that compares the local executab
 
 ### Update Detection
 - The updater downloads `HWIDChecker.exe` from GitHub (raw URL, cache-busted query string)
-- It computes SHA1 of the downloaded content
-- It computes SHA1 of the currently running executable
+- It computes SHA256 of the downloaded content
+- It computes SHA256 of the currently running executable
 - If hashes differ, it offers update/install
 
 ### Manual Update Check
@@ -17,7 +17,7 @@ The HWID Checker includes an auto-update system that compares the local executab
 - If no update is available, it displays an informational message
 
 ### Update Process
-1. **Detect**: Compare local SHA1 vs GitHub file SHA1
+1. **Detect**: Compare local SHA256 vs GitHub file SHA256
 2. **Prompt**: Ask user to confirm update
 3. **Download**: Stream new executable to temp path with progress UI
 4. **Replace**: Generate temporary batch script to replace the running exe
@@ -35,16 +35,16 @@ The HWID Checker includes an auto-update system that compares the local executab
 
 ### Update Logic
 ```csharp
-// Download GitHub file and compute SHA1
-var githubFileSha = await GetGitHubFileSha1Async();
+// Download GitHub file and compute SHA256
+var githubFileSha = await GetGitHubFileSha256Async();
 
-// Compute local executable SHA1
-var localFileSha = GetLocalFileSha();
+// Compute local executable SHA256
+var localFileSha = GetLocalFileSha256();
 
 // Update when hashes differ
 if (!localFileSha.Equals(githubFileSha, StringComparison.OrdinalIgnoreCase))
 {
-    return await PerformUpdateAsync(githubFileSha);
+    return await PerformUpdateAsync();
 }
 ```
 

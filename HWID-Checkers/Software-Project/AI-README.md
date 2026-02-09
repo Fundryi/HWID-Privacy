@@ -103,7 +103,7 @@ string SectionTitle { get; } // Display title for UI
 | `SystemCleaningService.cs` | Wrapper for async device cleaning operations | `DeviceCleaningService` |
 | `DeviceWhitelistService.cs` | Manages device whitelist for cleaning | None |
 | `EventLogCleaningService.cs` | Cleans Windows event logs | None |
-| `AutoUpdateService.cs` | Checks GitHub-hosted exe via SHA1 hash diff and auto-updates local exe | `HttpClient`, hashing, WinForms |
+| `AutoUpdateService.cs` | Checks GitHub-hosted exe via SHA256 hash diff and auto-updates local exe | `HttpClient`, hashing, WinForms |
 
 ### Services - Subdirectories
 
@@ -193,8 +193,8 @@ Constants at top:
 
 **Flow:**
 1. Download GitHub `HWIDChecker.exe` (raw URL with cache-busting query)
-2. Compute SHA1 of GitHub file
-3. Compute SHA1 of current local executable
+2. Compute SHA256 of GitHub file
+3. Compute SHA256 of current local executable
 4. If hashes differ, download update to temp file
 5. Create batch script to replace exe and restart app
 
