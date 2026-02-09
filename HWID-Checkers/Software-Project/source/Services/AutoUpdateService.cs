@@ -45,34 +45,34 @@ namespace HWIDChecker.Services
         {
             try
             {
-                // Get the GitHub file SHA1 hash by downloading content
-                var githubFileSha = await GetGitHubFileSha1Async();
+                // Get the GitHub file SHA256 hash by downloading content
+                var githubFileSha = await GetGitHubFileSha256Async();
                 if (string.IsNullOrEmpty(githubFileSha))
                 {
                     return UpdateResult.NoUpdateAvailable;
                 }
 
-                // Get current executable's SHA1 hash
-                var localFileSha = GetLocalFileSha();
+                // Get current executable's SHA256 hash
+                var localFileSha = GetLocalFileSha256();
                 
                 // Debug information (disabled for production - uncomment to troubleshoot)
                 /*
-                var message = $"Update Check Details (SHA1 Comparison):\n\n" +
-                             $"Local File SHA1: {localFileSha}\n" +
-                             $"GitHub File SHA1: {githubFileSha}\n" +
+                var message = $"Update Check Details (SHA256 Comparison):\n\n" +
+                             $"Local File SHA256: {localFileSha}\n" +
+                             $"GitHub File SHA256: {githubFileSha}\n" +
                              $"Hashes Match: {localFileSha.Equals(githubFileSha, StringComparison.OrdinalIgnoreCase)}\n\n";
                 */
                 
-                // Compare SHA1 hashes - if different, update is available
+                // Compare SHA256 hashes - if different, update is available
                 if (!localFileSha.Equals(githubFileSha, StringComparison.OrdinalIgnoreCase))
                 {
-                    // message += "Result: Update available (SHA1 hashes differ)!";
+                    // message += "Result: Update available (SHA256 hashes differ)!";
                     // MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return await PerformUpdateAsync();
                 }
                 else
                 {
-                    // message += "Result: No update needed (SHA1 hashes match)";
+                    // message += "Result: No update needed (SHA256 hashes match)";
                     // MessageBox.Show(message, "Update Check Debug", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return UpdateResult.NoUpdateAvailable;
                 }
@@ -85,37 +85,37 @@ namespace HWIDChecker.Services
             }
         }
 
-        private async Task<string> GetGitHubFileSha1Async()
+        private async Task<string> GetGitHubFileSha256Async()
         {
             try
             {
                 // Add timestamp to URL to bypass caching
                 var cacheBustingUrl = $"{GITHUB_RAW_URL}?cb={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
                 
-                // Download the file content from GitHub and compute SHA1 hash
+                // Download the file content from GitHub and compute SHA256 hash
                 var response = await httpClient.GetAsync(cacheBustingUrl);
                 response.EnsureSuccessStatusCode();
                 
                 using var contentStream = await response.Content.ReadAsStreamAsync();
-                using var sha1 = SHA1.Create();
-                var hash = sha1.ComputeHash(contentStream);
+                using var sha256 = SHA256.Create();
+                var hash = sha256.ComputeHash(contentStream);
                 return Convert.ToHexString(hash).ToLowerInvariant();
             }
             catch (Exception ex)
             {
-                throw new Exception($"Failed to get GitHub file SHA1 for HWIDChecker.exe: {ex.Message}");
+                throw new Exception($"Failed to get GitHub file SHA256 for HWIDChecker.exe: {ex.Message}");
             }
         }
 
-        private string GetLocalFileSha()
+        private string GetLocalFileSha256()
         {
             try
             {
                 if (File.Exists(currentExecutablePath))
                 {
-                    using var sha1 = SHA1.Create();
+                    using var sha256 = SHA256.Create();
                     using var stream = File.OpenRead(currentExecutablePath);
-                    var hash = sha1.ComputeHash(stream);
+                    var hash = sha256.ComputeHash(stream);
                     return Convert.ToHexString(hash).ToLowerInvariant();
                 }
                 

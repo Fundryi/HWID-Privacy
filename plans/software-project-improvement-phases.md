@@ -7,7 +7,8 @@
 - Phase 1: completed
 - Phase 2: completed
 - Phase 3: completed (service hardening + cleanup)
-- Phase 4-5: pending
+- Phase 4: completed (minimal hardening only; updater workflow kept simple)
+- Phase 5: pending
 
 ## Current-State Findings
 - Docs were partially out of sync with implementation (comparison references, old update mechanism details, stale paths).
@@ -71,9 +72,9 @@ Goal: Make updater safer and more deterministic.
 
 Tasks:
 1. Move from SHA1 to SHA256 for binary integrity checks.
-2. Add release-channel strategy (e.g., release asset URL or manifest file) instead of raw-main binary only.
-3. Add optional signature verification (Authenticode or detached signature manifest).
-4. Improve updater rollback behavior if replacement/restart fails.
+2. Keep existing workflow: commit `HWIDChecker.exe` and update via current update button path.
+3. Defer release-channel/signature/manifest complexity unless explicitly requested.
+4. Keep rollback/restart behavior unchanged unless reliability issues are observed.
 
 Validation:
 1. Update check still works with new hash scheme.
