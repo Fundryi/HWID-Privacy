@@ -46,9 +46,11 @@ public class NetworkInfo : IHardwareInfo
         string adapterType = nic["AdapterType"]?.ToString()?.ToUpper() ?? "";
         string name = nic["Name"]?.ToString()?.ToUpper() ?? "";
 
-        // Check PNPDeviceID for PCIe and USB identifiers
+        // Check PNPDeviceID for PCIe, USB, and Mellanox identifiers
         bool isPCIeOrUSB = pnpDeviceId.StartsWith("PCI\\") ||
                           pnpDeviceId.StartsWith("USB\\") ||
+                          pnpDeviceId.StartsWith("MLX4\\") ||
+                          pnpDeviceId.StartsWith("MLX5\\") ||
                           pnpDeviceId.Contains("PCI_") ||
                           pnpDeviceId.Contains("USB_");
 
