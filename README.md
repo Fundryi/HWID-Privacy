@@ -37,7 +37,7 @@
 
 #### Serial Spoofing
 
-- **Complete Guide**: [Motherboard Spoofing Guide](/guides/motherboard-spoofing/motherboard-spoofing.md)
+- **Complete Guide**: [Motherboard Spoofing Guide](guides/motherboard-spoofing/motherboard-spoofing.md)
 - **Key Points**:
   - Use **DMIEdit** (for AMI BIOS)
   - Change only 2–5 digits of original serial
@@ -58,13 +58,13 @@
 
 - **Controller**: Maxio MAP1202 needed
 - **How-To**:
-  - [M.2 SSD Spoofing](/guides/ssd-spoofing/ssd-spoofing.md/#m2-ssd-spoofing)
+  - [M.2 SSD Spoofing](guides/ssd-spoofing/ssd-spoofing.md/#m2-ssd-spoofing)
 
 #### SATA SSDs (2.5")
 
 - **Controller**: YANSEN SSD needed
 - **How-To**:
-  - [NORMAL 2.5' SSD Spoofing](/guides/ssd-spoofing/ssd-spoofing.md/#normal-25-ssd-spoofing)
+  - [NORMAL 2.5' SSD Spoofing](guides/ssd-spoofing/ssd-spoofing.md/#normal-25-ssd-spoofing)
 
 > Modifying these drives can void warranties.  
 > Software/BIOS-based RAID0 is generally virtual and unsafe for HWID evasion.
@@ -160,7 +160,7 @@
 
 ### 9. **TPM**
 
-- **Complete Guide**: [TPM Spoofing Guide](/guides/tpm-spoofing/tpm-spoofing.md)
+- **Complete Guide**: [TPM Spoofing Guide](guides/tpm-spoofing/tpm-spoofing.md)
 - **Warning**: dTPM is flagged by some strict telemetry stacks (e.g., 🍊).
 - **Current Recommendation**: Use **fTPM** for 🍊/🍒.
   - Since 2025-04-04, 🍒 enforces **fTPM** if you’re flagged; dTPM no longer works there.

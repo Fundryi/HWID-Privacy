@@ -255,7 +255,7 @@ graph TD
 
 **Before making ANY changes:**
 
-1. Read this file (`AI-README.md`)
+1. Read this file (`architecture.md`)
 2. Identify the modification pattern from the Quick Reference table
 3. Read the relevant files listed in that pattern
 4. Make changes to ALL files listed in the pattern
