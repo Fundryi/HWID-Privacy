@@ -1,0 +1,17 @@
+{
+  "folders": [
+    { "name": "Guides", "path": "guides" },
+    { "name": "App Source", "path": "app/src" },
+    { "name": "Scripts", "path": "app/scripts" },
+    { "name": "Docs & Plans", "path": "docs" },
+    { "name": "Project Root", "path": "." }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/obj": true,
+      "**/bin": true,
+      "**/.vs": true,
+      "**/build": true
+    }
+  }
+}
