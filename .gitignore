@@ -68,6 +68,11 @@ Desktop.ini
 *.lnk
 
 # Local-only docs & AI config
+docs/
+AGENTS.md
+AI_TOOLS.md
+CLAUDE.md
+RESTRUCTURE-PLAN.md
 
 # Misc
 *.txt
