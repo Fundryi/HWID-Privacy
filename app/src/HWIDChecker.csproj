@@ -22,8 +22,7 @@
     <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
     <UseSystemResourceKeys>true</UseSystemResourceKeys>
     <DebuggerSupport>false</DebuggerSupport>
-    <PublishReadyToRun>true</PublishReadyToRun>
-    <PublishReadyToRunShowWarnings>true</PublishReadyToRunShowWarnings>
+    <PublishReadyToRun>false</PublishReadyToRun>
     <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
