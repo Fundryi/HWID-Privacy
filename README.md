@@ -1,5 +1,8 @@
 # Hardware Identification (HWID) Privacy Guide
 
+> **Disclaimer:** This guide is for privacy research, hardware fingerprint testing, and education. It is not for violating any Terms of Service.
+> **What this guide is:** A deep, technical hardware privacy guide about spoofing/changing hardware identifiers to make a machine as unidentifiable and untraceable as possible under advanced fingerprinting.
+
 ---
 
 ## Table of Contents
@@ -22,8 +25,6 @@
     - [7. **EDID / Monitor Spoofing**](#7-edid--monitor-spoofing)
     - [8. **Router (ARP Table Isolation)**](#8-router-arp-table-isolation)
     - [9. **TPM**](#9-tpm)
-      - [✅ fTPM Spoofing](#-ftpm-spoofing)
-      - [⚠️ dTPM (Not Recommended)](#️-dtpm-not-recommended)
   - [HWID Checker References](#hwid-checker-references)
   - [Contribution \& Updates](#contribution--updates)
     - [Credits](#credits)
@@ -36,7 +37,7 @@
 
 #### Serial Spoofing
 
-- **Complete Guide**: [Motherboard Spoofing Guide](/Files/MOBO-Spoofing/MOBO-Spoofing.md)
+- **Complete Guide**: [Motherboard Spoofing Guide](guides/motherboard-spoofing/motherboard-spoofing.md)
 - **Key Points**:
   - Use **DMIEdit** (for AMI BIOS)
   - Change only 2–5 digits of original serial
@@ -45,9 +46,9 @@
 
 #### RGB Control/USB Serials
 
-- **Intel**: Disable USB ports used for RGB in your BIOS (some boards have per-port toggles).
+- **Intel**: Disable USB ports used for RGB in BIOS (some boards provide per-port toggles).
 - **AMD (AM4/AM5)**: Unplug RGB headers or use boards with hardware toggles (e.g., ASUS ROG, MSI).
-  - **Note**: Some RGB controllers (e.g., MSI Mystic Light) create distinct USB serials.
+  - **Note**: Some RGB controllers (e.g., MSI Mystic Light) expose distinct USB serials.
 
 ---
 
@@ -55,22 +56,22 @@
 
 #### NVMe SSDs (M.2)
 
-- **Controller**: Maxio MAP1202 NEEDED
+- **Controller**: Maxio MAP1202 needed
 - **How-To**:
-  - [M.2 SSD Spoofing](/Files/SSD-Spoofing/SSD-Spoofing.md/#m2-ssd-spoofing)
+  - [M.2 SSD Spoofing](guides/ssd-spoofing/ssd-spoofing.md/#m2-ssd-spoofing)
 
 #### SATA SSDs (2.5")
 
-- **Controller**: YANSEN SSD NEEDED
+- **Controller**: YANSEN SSD needed
 - **How-To**:
-  - [NORMAL 2.5' SSD Spoofing](/Files/SSD-Spoofing/SSD-Spoofing.md/#normal-25-ssd-spoofing)
+  - [NORMAL 2.5' SSD Spoofing](guides/ssd-spoofing/ssd-spoofing.md/#normal-25-ssd-spoofing)
 
 > Modifying these drives can void warranties.  
-> Software/Bios-based RAID0 is generally virtual and unsafe for HWID evasion.
+> Software/BIOS-based RAID0 is generally virtual and unsafe for HWID evasion.
 
 #### Hardware RAID
 
-- **Why**: A proper hardware RAID controller prevents the OS (and anti-cheats) from querying individual drive serials.
+- **Why**: A proper hardware RAID controller prevents the OS (and fingerprinting agents) from querying individual drive serials.
 - **Examples**:
   - **S322M225R** (for M.2 drives).
   - **LSI/MegaRAID** models for SATA/SAS drives.
@@ -82,12 +83,13 @@
 
 #### MAC Address Spoofing
 
-- **Internal NICs**: Permanent changes possible for both Intel and Realtek:
-  - [Intel NIC MAC Spoofing Guide](Files/MAC-Spoofing/MAC-Spoofing.md#intel-nics)
-  - [Realtek NIC MAC Spoofing Guide](Files/MAC-Spoofing/MAC-Spoofing.md#realtek-nics)
+- **Internal NICs**: Permanent changes possible for Intel, Realtek, and Mellanox:
+  - [Intel NIC MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#intel-nics)
+  - [Realtek NIC MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#realtek-nics)
+  - [Mellanox ConnectX-3 MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#mellanox-connectx-3-cx311a--mcx311a-xcat) — firmware-level, repeatable, 10 Gbps SFP+
   - Note: Certain models might not support flashing or may revert.
 - **USB NICs**: Both Realtek and ASIX adapters support MAC changes:
-  - [Complete USB NIC Guide](Files/MAC-Spoofing/MAC-Spoofing.md#usb-nics)
+  - [Complete USB NIC Guide](guides/mac-spoofing/mac-spoofing.md#usb-nics)
   - **Recommended**: [USB‑C 2.5GbE Adapter](https://uniaccessories.com/products/usb-c-to-ethernet-adapter-2500mbps) • [Amazon DE](https://www.amazon.de/-/en/dp/B0C2H9HVH3)
 - **Purchasable HWID Spoofers**: Some handle NIC spoofing, but certain NICs resist it, and they can produce questionable serial data in other areas.
 - **Best Practice**: Keep the first 6 digits (vendor ID), change only the last 6.
@@ -97,9 +99,8 @@
 ### 4. **GPU**
 
 - **NVIDIA**: UUID accessible via `nvidia-smi`.
-  - **No stable public spoofing guide** is widely known. Advanced hooking at the driver level may exist, but it's risky and can be flagged.
-    - (Just don't even think about it; get AMD if you cheat, unless you're ready to spend money.)
-    - nVidia GPU UUID are NOT unique, but still can be used to track you in some ways.
+  - **No stable public spoofing guide** is widely known. Advanced driver-level hooking may exist, but it's risky and can be flagged.
+  - NVIDIA GPU UUIDs are not always globally unique, but they can still be used for correlation.
 - **AMD**: No publicly documented UUID. Generally seen as safer for HWID privacy.
 
 ---
@@ -108,7 +109,7 @@
 
 - **Null Serials**:
   - Corsair DDR4/DDR5
-  - GEIL DDR4/DDR5DDR4/DDR5
+  - GEIL DDR4/DDR5
   - Trident Z G.Skill DDR4/DDR5
 
 ---
@@ -120,8 +121,8 @@
 - **USB Sticks**: Some “UDisk” drives default to `00000000`
   - Verify with **USBDeview**.
 - **Avoid**: Devices with hardcoded hardware serials you cannot edit.
-  - Don't fall for any spoofer/software that claims to hide it via REGEDITs; they are USELESS.
-  - Any smart AC/software would always get the serials directly from the USB protocol, which they do. Changing the registry to block reading them will NOT hide anything. You can try it yourself: hide your USB devices via regedit, then open a USB debugger; it will still show the serials.
+  - Don't trust software claiming to hide USB serials via registry edits; those methods are useless.
+  - Any advanced fingerprinting stack can pull serials directly from the USB protocol. Registry changes do not hide that data. You can validate this yourself: hide USB devices in the registry, then inspect traffic with a USB debugger; the serials still appear.
 
 ---
 
@@ -132,7 +133,7 @@
   - **Fuser** or **Dr.HDMI** ([4K version](https://www.hdfury.eu/shop/drhdmi4k/)).
   - EDID can be dumped, edited in a hex tool, and re-flashed via these devices.
 - **Result**: The monitor appears as a different device, reducing traceability.
-- Using a Fuser on Faceit is not recommended, even with EDID spoofing.
+- Using a Fuser on 🍊 is not recommended, even with EDID spoofing.
 
 ---
 
@@ -143,9 +144,9 @@
   - Change the router's MAC and hostname.
   - Change the MAC of the port you're using on the router.
     - (_This is different from the router's main MAC!_)
-  - Plug only your gaming PC into the router's LAN port.
+  - Plug only your target test machine into the router's LAN port.
   - Connect the router's WAN port to your home router.
-    - Avoid connecting other devices, so the ARP table shows only your gaming PC.
+    - Avoid connecting other devices, so the ARP table shows only your target test machine.
     - And don't worry about those ARP addresses; these are normal and not unique. They're created by Windows:
       - `224.0.0.22 01-00-5e-00-00-16 static`
       - `224.0.0.236 01-00-5e-00-00-ec static`
@@ -158,52 +159,19 @@
 ---
 
 ### 9. **TPM**
-- **Warning**: dTPM is flagged by some anti-cheats (e.g., FaceIT).
-- **Current Recommendation**: Use **fTPM** for FaceIT/VGK. 
-  - Since 04.04.25, VGK enforces **fTPM** if you're flagged, dTPM won't work there anymore.
 
-#### ✅ fTPM Spoofing
-- **Concept** (more complicated but might even more on AMD):
-  - [fTPM Spoof PoC by cycript](https://github.com/cycript/FTPM_POC)
-- **Simpler Working Method**:
-  - **Requirements**:
-    - Intel platform
-    - Motherboard with:
-      - Dedicated USB Flash port
-      - BIOS Flash Button
-        - Tested: MSI Z790
-        - Should work with all Intel boards since the 11th generation release, when the EK went offline.
-<details>
-  <summary>Intel Forum Confirmation</summary>
-
-  ![Intel Forum](./Files/fTPM/EK%20OFFLINE%20INTEL.png)
-
-</details>
-  &#8203;
-
-- **How it works**:
-  - Look for your manufacturer’s mobo manual for details
-  - Download and put the BIOS file on the stick and plug it into the correct USB slot
-    - Each manufacturer has their own way of flashing, many have YouTube videos with examples, please watch them or read their manuals to not mess it up :)
-  - Click the Flash Button and let it rewrite mobo sectors
-  - This regenerates the fTPM seed
-  - Results in a *new, unique fTPM serial* signed by EK
-- **Note: Doesn't work on AMD boards**
-
-#### ⚠️ dTPM (Not Recommended)
-- Buy a TPM module (e.g., from eBay)
-- Plug into your motherboard’s TPM header
-- In BIOS:
-  - Disable fTPM
-  - Enable dTPM
+- **Complete Guide**: [TPM Spoofing Guide](guides/tpm-spoofing/tpm-spoofing.md)
+- **Warning**: dTPM is flagged by some strict telemetry stacks (e.g., 🍊).
+- **Current Recommendation**: Use **fTPM** for 🍊/🍒.
+  - Since 2025-04-04, 🍒 enforces **fTPM** if you’re flagged; dTPM no longer works there.
 
 ---
 
 ## HWID Checker References
 
 - **UNIVERSAL**: [HWIDChecker.exe](/HWIDChecker.exe)
-- **Windows 10**: [HWID Checker Script](/HWID-Checkers/Bats/HWID%20CHECK%20W10.bat)
-- **Windows 11**: [HWID Checker Script](/HWID-Checkers/Bats/HWID%20CHECK%20W11.bat)
+- **Windows 10**: [HWID Checker Script](/app/scripts/hwid-check-w10.bat)
+- **Windows 11**: [HWID Checker Script](/app/scripts/hwid-check-w11.bat)
 
 ---
 
@@ -216,8 +184,8 @@
 
 ### Credits
 
-> Credits are a weird thing, not everything can be traced, a lot of work/info went into this guide from many many diffrent places and people.
-> I will only note the people that I KNOW helped or are resonpsible for these sections in the first place.
+> Credits are a weird thing: not everything can be traced, and a lot of work/info in this guide came from many different places and people.
+> I only list the people I know helped or are responsible for these sections in the first place.
 
 - Storage guide/info: [Priventive.de](https://priventive.de/)
 - Network guide/info: `fA`, and "`the collective hive mind of the internet`"

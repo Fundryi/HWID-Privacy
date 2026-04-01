@@ -1,3 +1,80 @@
-# Ignore all .txt files
+# Build outputs
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+build/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Ll]og/
+[Ll]ogs/
+
+# .NET
+*.user
+*.suo
+*.cache
+*.dll
+*.pdb
+*.nupkg
+*.snupkg
+project.lock.json
+**/packages/*
+!**/packages/build/
+*.nuget.props
+*.nuget.targets
+
+# IDE — Visual Studio
+.vs/
+*.rsuser
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+# IDE — JetBrains Rider
+.idea/
+*.sln.iml
+
+# IDE — ReSharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# Visual Studio profiler
+*.psess
+*.vsp
+*.vspx
+*.sap
+
+# Code coverage
+*.coverage
+*.coveragexml
+
+# OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Windows installer files
+*.cab
+*.msi
+*.msm
+*.msp
+
+# Windows shortcuts
+*.lnk
+
+# Local-only docs, AI config & scripts
+/docs/
+AGENTS.md
+AI_TOOLS.md
+CLAUDE.md
+RESTRUCTURE-PLAN.md
+release.ps1
+
+# Misc
 *.txt
 null
