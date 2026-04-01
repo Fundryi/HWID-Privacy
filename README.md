@@ -25,8 +25,6 @@
     - [7. **EDID / Monitor Spoofing**](#7-edid--monitor-spoofing)
     - [8. **Router (ARP Table Isolation)**](#8-router-arp-table-isolation)
     - [9. **TPM**](#9-tpm)
-      - [✅ fTPM Spoofing](#-ftpm-spoofing)
-      - [⚠️ dTPM (Not Recommended)](#️-dtpm-not-recommended)
   - [HWID Checker References](#hwid-checker-references)
   - [Contribution \& Updates](#contribution--updates)
     - [Credits](#credits)
@@ -39,7 +37,7 @@
 
 #### Serial Spoofing
 
-- **Complete Guide**: [Motherboard Spoofing Guide](/Files/MOBO-Spoofing/MOBO-Spoofing.md)
+- **Complete Guide**: [Motherboard Spoofing Guide](/guides/motherboard-spoofing/motherboard-spoofing.md)
 - **Key Points**:
   - Use **DMIEdit** (for AMI BIOS)
   - Change only 2–5 digits of original serial
@@ -60,13 +58,13 @@
 
 - **Controller**: Maxio MAP1202 needed
 - **How-To**:
-  - [M.2 SSD Spoofing](/Files/SSD-Spoofing/SSD-Spoofing.md/#m2-ssd-spoofing)
+  - [M.2 SSD Spoofing](/guides/ssd-spoofing/ssd-spoofing.md/#m2-ssd-spoofing)
 
 #### SATA SSDs (2.5")
 
 - **Controller**: YANSEN SSD needed
 - **How-To**:
-  - [NORMAL 2.5' SSD Spoofing](/Files/SSD-Spoofing/SSD-Spoofing.md/#normal-25-ssd-spoofing)
+  - [NORMAL 2.5' SSD Spoofing](/guides/ssd-spoofing/ssd-spoofing.md/#normal-25-ssd-spoofing)
 
 > Modifying these drives can void warranties.  
 > Software/BIOS-based RAID0 is generally virtual and unsafe for HWID evasion.
@@ -85,12 +83,13 @@
 
 #### MAC Address Spoofing
 
-- **Internal NICs**: Permanent changes possible for both Intel and Realtek:
-  - [Intel NIC MAC Spoofing Guide](Files/MAC-Spoofing/MAC-Spoofing.md#intel-nics)
-  - [Realtek NIC MAC Spoofing Guide](Files/MAC-Spoofing/MAC-Spoofing.md#realtek-nics)
+- **Internal NICs**: Permanent changes possible for Intel, Realtek, and Mellanox:
+  - [Intel NIC MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#intel-nics)
+  - [Realtek NIC MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#realtek-nics)
+  - [Mellanox ConnectX-3 MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#mellanox-connectx-3-cx311a--mcx311a-xcat) — firmware-level, repeatable, 10 Gbps SFP+
   - Note: Certain models might not support flashing or may revert.
 - **USB NICs**: Both Realtek and ASIX adapters support MAC changes:
-  - [Complete USB NIC Guide](Files/MAC-Spoofing/MAC-Spoofing.md#usb-nics)
+  - [Complete USB NIC Guide](guides/mac-spoofing/mac-spoofing.md#usb-nics)
   - **Recommended**: [USB‑C 2.5GbE Adapter](https://uniaccessories.com/products/usb-c-to-ethernet-adapter-2500mbps) • [Amazon DE](https://www.amazon.de/-/en/dp/B0C2H9HVH3)
 - **Purchasable HWID Spoofers**: Some handle NIC spoofing, but certain NICs resist it, and they can produce questionable serial data in other areas.
 - **Best Practice**: Keep the first 6 digits (vendor ID), change only the last 6.
@@ -160,52 +159,19 @@
 ---
 
 ### 9. **TPM**
+
+- **Complete Guide**: [TPM Spoofing Guide](/guides/tpm-spoofing/tpm-spoofing.md)
 - **Warning**: dTPM is flagged by some strict telemetry stacks (e.g., 🍊).
 - **Current Recommendation**: Use **fTPM** for 🍊/🍒.
-  - Since 2025-04-04, 🍒 enforces **fTPM** if you're flagged; dTPM no longer works there.
-
-#### ✅ fTPM Spoofing
-- **Concept** (more complicated, and may be more relevant on AMD):
-  - [fTPM Spoof PoC by cycript](https://github.com/cycript/FTPM_POC)
-- **Simpler Working Method**:
-  - **Requirements**:
-    - Intel platform
-    - Motherboard with:
-      - Dedicated USB Flash port
-      - BIOS Flash Button
-        - Tested: MSI Z790
-        - Should work with all Intel boards since the 11th-generation release, when the EK went offline.
-<details>
-  <summary>Intel Forum Confirmation</summary>
-
-  ![Intel Forum](./Files/fTPM/EK%20OFFLINE%20INTEL.png)
-
-</details>
-  &#8203;
-
-- **How it works**:
-  - Check your motherboard manual for the exact flash procedure.
-  - Place the BIOS file on the USB stick, then insert it into the designated flash USB port.
-    - Each vendor has a different flash process; follow official documentation closely to avoid a bad flash.
-  - Press the Flash Button and let it rewrite motherboard sectors.
-  - This regenerates the fTPM seed
-  - Results in a *new, unique fTPM serial* signed by EK
-- **Note: Doesn't work on AMD boards**
-
-#### ⚠️ dTPM (Not Recommended)
-- Buy a TPM module (e.g., from eBay)
-- Plug into your motherboard’s TPM header
-- In BIOS:
-  - Disable fTPM
-  - Enable dTPM
+  - Since 2025-04-04, 🍒 enforces **fTPM** if you’re flagged; dTPM no longer works there.
 
 ---
 
 ## HWID Checker References
 
 - **UNIVERSAL**: [HWIDChecker.exe](/HWIDChecker.exe)
-- **Windows 10**: [HWID Checker Script](/HWID-Checkers/Bats/HWID%20CHECK%20W10.bat)
-- **Windows 11**: [HWID Checker Script](/HWID-Checkers/Bats/HWID%20CHECK%20W11.bat)
+- **Windows 10**: [HWID Checker Script](/app/scripts/hwid-check-w10.bat)
+- **Windows 11**: [HWID Checker Script](/app/scripts/hwid-check-w11.bat)
 
 ---
 
