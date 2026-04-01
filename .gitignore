@@ -67,12 +67,13 @@ Desktop.ini
 # Windows shortcuts
 *.lnk
 
-# Local-only docs & AI config
+# Local-only docs, AI config & scripts
 /docs/
 AGENTS.md
 AI_TOOLS.md
 CLAUDE.md
 RESTRUCTURE-PLAN.md
+release.ps1
 
 # Misc
 *.txt
