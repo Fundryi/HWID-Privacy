@@ -20,6 +20,7 @@ namespace HWIDChecker.UI.Forms
         private CancellationTokenSource cleaningCancellationTokenSource;
         private bool isProcessing;
         private bool forceClosingRequested;
+        private bool isUpdatingStatus;
 
         public CleanLogsForm()
         {
@@ -42,7 +43,13 @@ namespace HWIDChecker.UI.Forms
             outputTextBox.AppendText(message + "\r\n");
             outputTextBox.SelectionStart = outputTextBox.TextLength;
             outputTextBox.ScrollToCaret();
-            Application.DoEvents();
+
+            if (!isUpdatingStatus)
+            {
+                isUpdatingStatus = true;
+                Application.DoEvents();
+                isUpdatingStatus = false;
+            }
         }
 
         private void HandleError(string source, string error)
@@ -58,7 +65,13 @@ namespace HWIDChecker.UI.Forms
             outputTextBox.AppendText($"Error in {source}: {error}\r\n");
             outputTextBox.SelectionStart = outputTextBox.TextLength;
             outputTextBox.ScrollToCaret();
-            Application.DoEvents();
+
+            if (!isUpdatingStatus)
+            {
+                isUpdatingStatus = true;
+                Application.DoEvents();
+                isUpdatingStatus = false;
+            }
         }
 
         private void InitializeComponents()
@@ -198,12 +211,7 @@ namespace HWIDChecker.UI.Forms
             }
         }
 
-        private bool IsAdministrator()
-        {
-            var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
-            var principal = new System.Security.Principal.WindowsPrincipal(identity);
-            return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
-        }
+        private static bool IsAdministrator() => SecurityHelper.IsAdministrator();
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {

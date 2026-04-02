@@ -14,6 +14,7 @@ namespace HWIDChecker.Services
         private const int AdditionalLogListTimeoutMs = 20000;
         private const int AdditionalLogInfoTimeoutMs = 5000;
         private const int AdditionalDiscoveryMaxDegreeOfParallelism = 6;
+        private const int LogCleaningMaxDegreeOfParallelism = 5;
         private const int DiscoveryProgressReportInterval = 50;
 
         public event Action<string> OnStatusUpdate;
@@ -349,71 +350,83 @@ namespace HWIDChecker.Services
                 int skippedNotFound = 0;
                 int skippedDisabled = 0;
                 int skippedDuplicate = 0;
-                var failedLogs = new List<(string Name, string Message)>();
+                var failedLogs = new ConcurrentBag<(string Name, string Message)>();
 
-                async Task ProcessLogBatchAsync(IEnumerable<string> batch, CancellationToken token)
+                async Task ProcessLogBatchAsync(IEnumerable<string> batch, bool skipExistenceProbe, CancellationToken token)
                 {
+                    // Pre-filter duplicates before parallel execution (processedLogNames is not thread-safe)
+                    var filteredBatch = new List<string>();
                     foreach (var batchLogName in batch)
                     {
-                        token.ThrowIfCancellationRequested();
-
                         var logName = NormalizeLogName(batchLogName);
                         if (string.IsNullOrEmpty(logName))
-                        {
                             continue;
-                        }
 
                         if (!processedLogNames.Add(logName))
                         {
-                            skippedDuplicate++;
+                            Interlocked.Increment(ref skippedDuplicate);
                             OnStatusUpdate?.Invoke($"Skipped: {logName} (duplicate)");
                             continue;
                         }
-
-                        try
-                        {
-                            // First check if log exists and is enabled
-                            var logInfoResult = await RunProcessAsync("wevtutil.exe", $"gli \"{logName}\"", cancellationToken: token);
-                            if (!string.IsNullOrEmpty(logInfoResult.StdErr))
-                            {
-                                OnStatusUpdate?.Invoke($"Skipped: {logName} (not found)");
-                                skippedNotFound++;
-                                continue;
-                            }
-                            if (logInfoResult.StdOut.Contains("enabled: false"))
-                            {
-                                OnStatusUpdate?.Invoke($"Skipped: {logName} (disabled)");
-                                skippedDisabled++;
-                                continue;
-                            }
-
-                            attemptedLogs++;
-                            OnStatusUpdate?.Invoke($"Processing: {logName}");
-
-                            // Try to clear using our advanced methods (which includes standard clearing first)
-                            if (await ClearLogWithAdvancedMethodsAsync(logName, token))
-                            {
-                                clearedLogs++;
-                            }
-                            else
-                            {
-                                failedLogs.Add((logName, "Failed to clear log after trying all available methods"));
-                            }
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            throw;
-                        }
-                        catch (Exception ex)
-                        {
-                            failedLogs.Add((logName, ex.Message));
-                            OnError?.Invoke(logName, ex.Message);
-                        }
+                        filteredBatch.Add(logName);
                     }
+
+                    int batchTotal = filteredBatch.Count;
+                    int batchProcessed = 0;
+
+                    await Parallel.ForEachAsync(
+                        filteredBatch,
+                        new ParallelOptions
+                        {
+                            MaxDegreeOfParallelism = LogCleaningMaxDegreeOfParallelism,
+                            CancellationToken = token
+                        },
+                        async (logName, loopToken) =>
+                        {
+                            try
+                            {
+                                if (!skipExistenceProbe)
+                                {
+                                    var logInfoResult = await RunProcessAsync("wevtutil.exe", $"gli \"{logName}\"", cancellationToken: loopToken);
+                                    if (!string.IsNullOrEmpty(logInfoResult.StdErr))
+                                    {
+                                        Interlocked.Increment(ref skippedNotFound);
+                                        return;
+                                    }
+                                    if (logInfoResult.StdOut.Contains("enabled: false"))
+                                    {
+                                        Interlocked.Increment(ref skippedDisabled);
+                                        return;
+                                    }
+                                }
+
+                                Interlocked.Increment(ref attemptedLogs);
+                                var current = Interlocked.Increment(ref batchProcessed);
+                                OnStatusUpdate?.Invoke($"Clearing log {current}/{batchTotal}: {logName}");
+
+                                if (await ClearLogWithAdvancedMethodsAsync(logName, loopToken))
+                                {
+                                    Interlocked.Increment(ref clearedLogs);
+                                }
+                                else
+                                {
+                                    failedLogs.Add((logName, "Failed to clear log after trying all available methods"));
+                                }
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                throw;
+                            }
+                            catch (Exception ex)
+                            {
+                                failedLogs.Add((logName, ex.Message));
+                                OnError?.Invoke(logName, ex.Message);
+                            }
+                        });
                 }
 
-                // Process standard logs first for immediate visible activity.
-                await ProcessLogBatchAsync(logNames, cancellationToken);
+                // Process standard logs first — skip existence probe (well-known channels).
+                await ProcessLogBatchAsync(logNames, skipExistenceProbe: true, cancellationToken);
 
                 // Then collect additional logs as an optional enhancement.
                 cancellationToken.ThrowIfCancellationRequested();
@@ -423,19 +436,20 @@ namespace HWIDChecker.Services
                 {
                     additionalLogsCount = additionalLogs.Count;
                     OnStatusUpdate?.Invoke($"Collected {additionalLogs.Count} additional logs to process.");
-                    await ProcessLogBatchAsync(additionalLogs, cancellationToken);
+                    await ProcessLogBatchAsync(additionalLogs, skipExistenceProbe: false, cancellationToken);
                 }
                 else
                 {
                     OnStatusUpdate?.Invoke("No additional event logs to process.");
                 }
 
+                var failedLogsList = failedLogs.ToList();
                 string summary = $"Summary: {clearedLogs} logs cleared";
-                if (failedLogs.Count > 0)
+                if (failedLogsList.Count > 0)
                 {
-                    summary += $", {failedLogs.Count} failed";
+                    summary += $", {failedLogsList.Count} failed";
                     OnStatusUpdate?.Invoke(summary);
-                    foreach (var (name, message) in failedLogs)
+                    foreach (var (name, message) in failedLogsList)
                     {
                         OnStatusUpdate?.Invoke($"Failed: {name} - {message}");
                     }
@@ -456,7 +470,7 @@ namespace HWIDChecker.Services
                 OnStatusUpdate?.Invoke($"Skipped (not found)        : {skippedNotFound}");
                 OnStatusUpdate?.Invoke($"Skipped (disabled)         : {skippedDisabled}");
                 OnStatusUpdate?.Invoke($"Skipped (duplicate)        : {skippedDuplicate}");
-                OnStatusUpdate?.Invoke($"Failed                     : {failedLogs.Count}");
+                OnStatusUpdate?.Invoke($"Failed                     : {failedLogsList.Count}");
                 OnStatusUpdate?.Invoke("=========================================");
             }
             catch (OperationCanceledException)

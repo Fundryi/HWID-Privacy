@@ -53,37 +53,5 @@ namespace HWIDChecker.Services
         {
             await Task.Run(() => _deviceCleaner.RemoveGhostDevices(devices));
         }
-
-        // For backward compatibility, use the same field layout as the shared model
-        public struct DeviceDetail
-        {
-            private readonly Models.DeviceDetail _detail;
-
-            public string Name => _detail.Name;
-            public string Description => _detail.Description;
-            public string HardwareId => _detail.HardwareId;
-            public string Class => _detail.Class;
-            public Win32.SetupApi.SP_DEVINFO_DATA DeviceInfoData => _detail.DeviceInfoData;
-
-            public DeviceDetail(string name, string description, string hardwareId, string deviceClass, Win32.SetupApi.SP_DEVINFO_DATA deviceInfoData)
-            {
-                _detail = new Models.DeviceDetail(name, description, hardwareId, deviceClass, deviceInfoData);
-            }
-
-            public static implicit operator DeviceDetail(Models.DeviceDetail detail)
-            {
-                return new DeviceDetail(
-                    detail.Name,
-                    detail.Description,
-                    detail.HardwareId,
-                    detail.Class,
-                    detail.DeviceInfoData);
-            }
-
-            public static implicit operator Models.DeviceDetail(DeviceDetail detail)
-            {
-                return detail._detail;
-            }
-        }
     }
 }

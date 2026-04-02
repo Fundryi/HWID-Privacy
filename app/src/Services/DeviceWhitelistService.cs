@@ -10,6 +10,7 @@ namespace HWIDChecker.Services
     public class DeviceWhitelistService
     {
         private readonly string _whitelistPath;
+        private List<DeviceDetail> _cachedWhitelist;
 
         public DeviceWhitelistService()
         {
@@ -18,6 +19,8 @@ namespace HWIDChecker.Services
 
         public List<DeviceDetail> LoadWhitelistedDevices()
         {
+            _cachedWhitelist = null;
+
             if (!File.Exists(_whitelistPath))
             {
                 return new List<DeviceDetail>();
@@ -41,6 +44,7 @@ namespace HWIDChecker.Services
 
         public void SaveWhitelistedDevices(List<DeviceDetail> devices)
         {
+            _cachedWhitelist = null;
             var options = new JsonSerializerOptions
             {
                 WriteIndented = true,
@@ -52,12 +56,18 @@ namespace HWIDChecker.Services
 
         public bool IsDeviceWhitelisted(DeviceDetail device)
         {
-            var whitelistedDevices = LoadWhitelistedDevices();
-            return whitelistedDevices.Exists(d => d.HardwareId == device.HardwareId);
+            _cachedWhitelist ??= LoadWhitelistedDevices();
+            return _cachedWhitelist.Exists(d => d.HardwareId == device.HardwareId);
+        }
+
+        public void InvalidateCache()
+        {
+            _cachedWhitelist = null;
         }
 
         public void ResetWhitelist()
         {
+            _cachedWhitelist = null;
             if (File.Exists(_whitelistPath))
             {
                 File.Delete(_whitelistPath);

@@ -21,7 +21,14 @@ namespace HWIDChecker.Services
         {
             var devices = new List<DeviceDetail>();
             var setupClass = Guid.Empty;
-            
+
+            // Release any previous handle to prevent leaking on repeated scans
+            if (_devicesHandle != IntPtr.Zero && _devicesHandle.ToInt64() != -1)
+            {
+                SetupDiDestroyDeviceInfoList(_devicesHandle);
+                _devicesHandle = IntPtr.Zero;
+            }
+
             // Store the device info set handle as a class field
             _devicesHandle = SetupDiGetClassDevs(ref setupClass, IntPtr.Zero, IntPtr.Zero, (uint)DiGetClassFlags.DIGCF_ALLCLASSES);
 

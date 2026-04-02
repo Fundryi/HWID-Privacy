@@ -24,6 +24,7 @@ namespace HWIDChecker.UI.Forms
         private DeviceWhitelistService whitelistService;
         private List<DeviceDetail> ghostDevices = null;
         private bool isProcessing;
+        private bool isUpdatingStatus;
 
         public CleanDevicesForm()
         {
@@ -47,7 +48,13 @@ namespace HWIDChecker.UI.Forms
             outputTextBox.AppendText(message + "\r\n");
             outputTextBox.SelectionStart = outputTextBox.TextLength;
             outputTextBox.ScrollToCaret();
-            Application.DoEvents();
+
+            if (!isUpdatingStatus)
+            {
+                isUpdatingStatus = true;
+                Application.DoEvents();
+                isUpdatingStatus = false;
+            }
         }
 
         private void HandleError(string source, string error)
@@ -63,7 +70,13 @@ namespace HWIDChecker.UI.Forms
             outputTextBox.AppendText($"Error in {source}: {error}\r\n");
             outputTextBox.SelectionStart = outputTextBox.TextLength;
             outputTextBox.ScrollToCaret();
-            Application.DoEvents();
+
+            if (!isUpdatingStatus)
+            {
+                isUpdatingStatus = true;
+                Application.DoEvents();
+                isUpdatingStatus = false;
+            }
         }
 
         private void InitializeComponents()
@@ -243,17 +256,8 @@ namespace HWIDChecker.UI.Forms
                         {
                             await cleaningService.RemoveGhostDevicesAsync(nonWhitelistedDevices);
                             HandleStatusUpdate("\r\nDevice cleaning process completed.");
-                            
-                            // Auto-close after 1 second
-                            var closeTimer = new System.Windows.Forms.Timer { Interval = 1000 };
-                            closeTimer.Tick += (s, e) =>
-                            {
-                                closeTimer.Stop();
-                                closeTimer.Dispose();
-                                this.Close();
-                            };
-                            closeTimer.Start();
-                            return; // Exit early to avoid the completion message below
+                            ScheduleAutoClose();
+                            return;
                         }
                         else if (result == DeviceRemovalConfirmationForm.ConfirmationResult.Yes)
                         {
@@ -267,33 +271,15 @@ namespace HWIDChecker.UI.Forms
                     else
                     {
                         HandleStatusUpdate("\r\nAll devices are whitelisted. No devices need to be cleaned.");
-                        
-                        // Auto-close after 1 second when all devices are whitelisted
-                        var closeTimer = new System.Windows.Forms.Timer { Interval = 1000 };
-                        closeTimer.Tick += (s, e) =>
-                        {
-                            closeTimer.Stop();
-                            closeTimer.Dispose();
-                            this.Close();
-                        };
-                        closeTimer.Start();
-                        return; // Exit early to avoid showing completion message
+                        ScheduleAutoClose();
+                        return;
                     }
                 }
                 else
                 {
                     HandleStatusUpdate("No non-present devices were found.");
-                    
-                    // Auto-close after 1 second when no devices found
-                    var closeTimer = new System.Windows.Forms.Timer { Interval = 1000 };
-                    closeTimer.Tick += (s, e) =>
-                    {
-                        closeTimer.Stop();
-                        closeTimer.Dispose();
-                        this.Close();
-                    };
-                    closeTimer.Start();
-                    return; // Exit early to avoid showing completion message
+                    ScheduleAutoClose();
+                    return;
                 }
 
                 HandleStatusUpdate("\r\nDevice cleaning process completed.");
@@ -313,12 +299,7 @@ namespace HWIDChecker.UI.Forms
             }
         }
 
-        private bool IsAdministrator()
-        {
-            var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
-            var principal = new System.Security.Principal.WindowsPrincipal(identity);
-            return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
-        }
+        private static bool IsAdministrator() => SecurityHelper.IsAdministrator();
 
         private void WhitelistButton_Click(object sender, EventArgs e)
         {
@@ -340,6 +321,18 @@ namespace HWIDChecker.UI.Forms
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
             }
+        }
+
+        private void ScheduleAutoClose(int delayMs = 1000)
+        {
+            var closeTimer = new System.Windows.Forms.Timer { Interval = delayMs };
+            closeTimer.Tick += (s, e) =>
+            {
+                closeTimer.Stop();
+                closeTimer.Dispose();
+                this.Close();
+            };
+            closeTimer.Start();
         }
 
         private void CleanDevicesForm_DpiChanged(object sender, DpiChangedEventArgs e)
