@@ -24,6 +24,7 @@ namespace HWIDChecker.Hardware
             {
                 new DiskDriveInfo(textFormatter),
                 new MotherboardInfo(textFormatter),
+                new ChassisInfo(textFormatter),
                 new BiosInfo(textFormatter),
                 new SystemInfo(textFormatter),
                 new RamInfo(textFormatter),
