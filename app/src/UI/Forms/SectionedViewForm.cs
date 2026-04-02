@@ -14,9 +14,9 @@ namespace HWIDChecker.UI.Forms
     {
         private const bool ENABLE_DEBUG_BUTTON = true; // Set to false to disable debug button
         private const int DefaultWindowWidth = 1040;
-        private const int DefaultWindowHeight = 760;
+        private const int DefaultWindowHeight = 850;
         private const int MinimumWindowWidth = 900;
-        private const int MinimumWindowHeight = 640;
+        private const int MinimumWindowHeight = 750;
         private const int SidebarMinWidth = 240;
         private const int SidebarMaxWidth = 360;
         private const int SidebarWidthPercentage = 28;
