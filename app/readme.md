@@ -55,17 +55,19 @@ Output:
 
 ### Hardware Providers
 
-Current providers (12):
+Current providers (14):
 
 - Disk drives
 - Motherboard
 - (SM)BIOS
+- Chassis (SMBIOS Type 3)
 - System information
 - RAM modules
 - CPU
 - TPM modules
 - USB devices
 - GPU info
+- Bluetooth devices
 - Monitor information
 - Network adapters
 - ARP info/cache
@@ -76,7 +78,8 @@ Current providers (12):
 - Output formatting (`TextFormattingService`)
 - File export (`FileExportService`)
 - Device cleaning + whitelist management
-- Event log cleaning
+- Event log cleaning (P/Invoke-based discovery, privilege elevation, OS-locked log skipping)
+- Admin check helper (`SecurityHelper`)
 - Auto-update check/download for `HWIDChecker.exe` from GitHub (SHA256 hash comparison)
 
 ### Cleaning Actions
@@ -90,13 +93,17 @@ Current providers (12):
 
 `📝 Clean Logs`:
 - Clears a curated standard set of Windows event channels first.
-- Optionally discovers additional active channels and clears them in the same run.
+- Discovers additional active channels via Wevtapi.dll P/Invoke (zero process spawns).
+- Elevates `SeSecurityPrivilege` and `SeBackupPrivilege` for protected log access.
+- Handles Analytic/Debug channels with a disable-clear-re-enable cycle.
+- Skips 23 OS-locked channels (kernel/driver/service-held) to avoid wasted fallback attempts.
 - Uses deduplicated channel sets (case-insensitive) to avoid double processing.
 - Skips channels that are missing/disabled on the current system.
 - Shows live progress and a final summary block with:
   - collected standard/additional totals
   - attempted/cleared counts
   - skipped (not found/disabled/duplicate)
+  - skipped unclearable (OS-locked)
   - failed count
 - Window remains open after completion for manual review.
 
@@ -139,17 +146,18 @@ app/
 │   ├── Hardware/
 │   │   ├── IHardwareInfo.cs
 │   │   ├── HardwareInfoManager.cs
-│   │   └── *Info.cs (12 providers)
+│   │   └── *Info.cs (14 providers)
 │   ├── Services/
 │   │   ├── AutoUpdateService.cs
 │   │   ├── DeviceCleaningService.cs
 │   │   ├── DeviceWhitelistService.cs
 │   │   ├── EventLogCleaningService.cs
 │   │   ├── FileExportService.cs
+│   │   ├── SecurityHelper.cs
 │   │   ├── SystemCleaningService.cs
 │   │   ├── TextFormattingService.cs
 │   │   ├── Models/DeviceDetail.cs
-│   │   └── Win32/{SetupApi.cs, StorageDeviceIdQuery.cs}
+│   │   └── Win32/{EventLogApi.cs, FirmwareTable.cs, IpHlpApi.cs, SetupApi.cs, StorageDeviceIdQuery.cs}
 │   ├── UI/
 │   │   ├── Forms/SectionedViewForm.cs            # Active main UI
 │   │   ├── Forms/CleanDevicesForm.cs
@@ -158,10 +166,6 @@ app/
 │   │   ├── Forms/DeviceRemovalConfirmationForm.cs
 │   │   └── Components/{Buttons.cs, ThemeColors.cs}
 │   └── Resources/app.ico
-├── docs/
-│   ├── architecture.md
-│   ├── auto-update.md
-│   └── readme.md
 └── HWID-CHECKER.sln
 ```
 

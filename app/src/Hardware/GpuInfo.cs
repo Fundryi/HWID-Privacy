@@ -65,6 +65,18 @@ public class GpuInfo : IHardwareInfo
                         }
                     }
                 }
+                // Try NVAPI for board part number (separate identifier from UUID)
+                try
+                {
+                    if (NvApi.TryGetBoardInfo(out string boardPartNumber) &&
+                        !string.IsNullOrEmpty(boardPartNumber))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine($"Board Part Number: {boardPartNumber}");
+                    }
+                }
+                catch { }
+
                 return sb.ToString().TrimEnd();
             }
         }
