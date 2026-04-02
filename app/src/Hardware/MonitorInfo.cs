@@ -80,7 +80,7 @@ public class MonitorInfo : IHardwareInfo
 
                     // Try to enrich with EDID numeric serial from registry
                     var edidSerial = TryGetEdidNumericSerial(manufacturer, model);
-                    if (edidSerial.HasValue && edidSerial.Value != 0 && edidSerial.Value != 0xFFFFFFFF)
+                    if (edidSerial.HasValue && !IsEdidSerialPlaceholder(edidSerial.Value))
                         monitorDetails.Add(("EDID Serial (numeric)", $"0x{edidSerial.Value:X8}"));
 
                     monitorInfos.Add(monitorDetails.ToArray());
@@ -220,7 +220,7 @@ public class MonitorInfo : IHardwareInfo
                     }
 
                     uint numericSerial = BitConverter.ToUInt32(edid, 12);
-                    if (numericSerial != 0 && numericSerial != 0xFFFFFFFF)
+                    if (!IsEdidSerialPlaceholder(numericSerial))
                         details.Add(("EDID Serial (numeric)", $"0x{numericSerial:X8}"));
 
                     if (details.Count > 0)
@@ -231,5 +231,15 @@ public class MonitorInfo : IHardwareInfo
         catch { }
 
         return result;
+    }
+
+    /// <summary>
+    /// Common placeholder values manufacturers use instead of real EDID serials.
+    /// </summary>
+    private static bool IsEdidSerialPlaceholder(uint serial)
+    {
+        return serial == 0x00000000
+            || serial == 0xFFFFFFFF
+            || serial == 0x01010101;
     }
 }
