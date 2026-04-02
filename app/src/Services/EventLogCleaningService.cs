@@ -10,11 +10,11 @@ namespace HWIDChecker.Services
 {
     public class EventLogCleaningService
     {
-        private const int ProcessTimeoutMs = 60000;
+        private const int ProcessTimeoutMs = 15000;
         private const int AdditionalLogListTimeoutMs = 20000;
         private const int AdditionalLogInfoTimeoutMs = 5000;
-        private const int AdditionalDiscoveryMaxDegreeOfParallelism = 6;
-        private const int LogCleaningMaxDegreeOfParallelism = 5;
+        private const int AdditionalDiscoveryMaxDegreeOfParallelism = 12;
+        private const int LogCleaningMaxDegreeOfParallelism = 10;
         private const int DiscoveryProgressReportInterval = 50;
 
         public event Action<string> OnStatusUpdate;
@@ -56,7 +56,7 @@ namespace HWIDChecker.Services
         {
             try
             {
-                // Try standard clearing first
+                // Method 1: Try standard clearing first
                 var clearResult = await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"", cancellationToken: cancellationToken);
                 if (string.IsNullOrEmpty(clearResult.StdErr))
                 {
@@ -68,33 +68,34 @@ namespace HWIDChecker.Services
                 string logFileName = logName.Replace("/", "%4").Replace("-", "_").Replace(" ", "_") + ".evtx";
                 string logPath = $@"{Environment.GetFolderPath(Environment.SpecialFolder.Windows)}\System32\Winevt\Logs\{logFileName}";
 
-                // Method 1: Take ownership and set permissions if file exists
+                // Method 2: Fix permissions then retry cl
                 if (System.IO.File.Exists(logPath))
                 {
                     await RunProcessAsync("takeown.exe", $"/f \"{logPath}\" /A", cancellationToken: cancellationToken);
                     await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r Administrators:(F) /T", cancellationToken: cancellationToken);
                     await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r SYSTEM:(F) /T", cancellationToken: cancellationToken);
                     await RunProcessAsync("icacls.exe", $"\"{logPath}\" /grant:r \"{Environment.UserName}\":(F) /T", cancellationToken: cancellationToken);
+
+                    // Retry clear now that permissions are fixed
+                    var retryResult = await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"", cancellationToken: cancellationToken);
+                    if (string.IsNullOrEmpty(retryResult.StdErr))
+                    {
+                        OnStatusUpdate?.Invoke($"Cleared: {logName}");
+                        return true;
+                    }
                 }
 
-                // Method 2: Try PowerShell Clear-EventLog with fallback
-                var psScript = $@"
-                    $log = '{logName}'
-                    try {{
-                        Clear-EventLog -LogName $log -ErrorAction Stop
-                    }} catch {{
-                        # Try WevtUtil if Clear-EventLog fails
-                        & wevtutil.exe cl $log
-                    }}
-                ";
-                await RunProcessAsync("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{psScript}\"", cancellationToken: cancellationToken);
-
-                // Method 3: Try export and clear approach
+                // Method 3: Export then clear (forces the log handle to release)
                 string tempFile = System.IO.Path.GetTempFileName();
                 try
                 {
                     await RunProcessAsync("wevtutil.exe", $"epl \"{logName}\" \"{tempFile}\"", cancellationToken: cancellationToken);
-                    await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"", cancellationToken: cancellationToken);
+                    var eplClearResult = await RunProcessAsync("wevtutil.exe", $"cl \"{logName}\"", cancellationToken: cancellationToken);
+                    if (string.IsNullOrEmpty(eplClearResult.StdErr))
+                    {
+                        OnStatusUpdate?.Invoke($"Cleared: {logName}");
+                        return true;
+                    }
                 }
                 finally
                 {
@@ -105,27 +106,18 @@ namespace HWIDChecker.Services
                     }
                 }
 
-                // Method 4: Force delete if file exists (last resort)
+                // Method 4: Force delete the .evtx file (last resort)
                 if (System.IO.File.Exists(logPath))
                 {
                     try
                     {
                         System.IO.File.Delete(logPath);
-                        await RunProcessAsync("wevtutil.exe", "cl System", cancellationToken: cancellationToken); // Force refresh
+                        OnStatusUpdate?.Invoke($"Cleared: {logName}");
+                        return true;
                     }
                     catch { /* Ignore delete errors */ }
                 }
 
-                // Verify if log was cleared
-                var verifyResult = await RunProcessAsync("wevtutil.exe", $"gli \"{logName}\"", cancellationToken: cancellationToken);
-                bool cleared = verifyResult.StdOut.Contains("recordCount: 0") || !System.IO.File.Exists(logPath);
-                
-                if (cleared)
-                {
-                    OnStatusUpdate?.Invoke($"Cleared: {logName}");
-                    return true;
-                }
-                
                 return false;
             }
             catch (OperationCanceledException)
@@ -425,13 +417,16 @@ namespace HWIDChecker.Services
                         });
                 }
 
-                // Process standard logs first — skip existence probe (well-known channels).
-                await ProcessLogBatchAsync(logNames, skipExistenceProbe: true, cancellationToken);
+                // Run standard cleaning and additional log discovery in parallel.
+                // Discovery is pure read (wevtutil gli probes) and doesn't depend on standard cleaning.
+                var standardCleaningTask = ProcessLogBatchAsync(logNames, skipExistenceProbe: true, cancellationToken);
+                OnStatusUpdate?.Invoke("Discovering additional event log channels in background...");
+                var discoveryTask = TryCollectAdditionalLogsAsync(knownLogNames, cancellationToken);
 
-                // Then collect additional logs as an optional enhancement.
-                cancellationToken.ThrowIfCancellationRequested();
-                OnStatusUpdate?.Invoke("Collecting additional event log channels...");
-                var additionalLogs = await TryCollectAdditionalLogsAsync(knownLogNames, cancellationToken);
+                // Wait for both to complete before processing additional logs.
+                await standardCleaningTask;
+                var additionalLogs = await discoveryTask;
+
                 if (additionalLogs.Count > 0)
                 {
                     additionalLogsCount = additionalLogs.Count;
