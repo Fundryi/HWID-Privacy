@@ -45,14 +45,9 @@ public class ArpInfo : IHardwareInfo
         // Resolve interface index to friendly name
         var interfaceNames = GetInterfaceNames();
 
-        // Group by interface, skip virtual/loopback adapters
+        // Group by interface
         var grouped = entries
             .GroupBy(e => e.InterfaceIndex)
-            .Where(g =>
-            {
-                if (!interfaceNames.TryGetValue(g.Key, out var name)) return true;
-                return !IsVirtualInterface(name);
-            })
             .OrderBy(g => g.Key);
 
         foreach (var group in grouped)
@@ -61,7 +56,12 @@ public class ArpInfo : IHardwareInfo
                 ? name
                 : $"Interface #{group.Key}";
 
-            sb.AppendLine($"[{ifName}]");
+            // Tag virtual interfaces so they're instantly recognizable
+            string label = IsVirtualInterface(ifName)
+                ? $"[{ifName}] (Virtual)"
+                : $"[{ifName}]";
+
+            sb.AppendLine(label);
 
             // IPv4 entries first, then IPv6
             var ipv4 = group.Where(e => !e.IsIpv6).OrderBy(e => e.IpAddress);
