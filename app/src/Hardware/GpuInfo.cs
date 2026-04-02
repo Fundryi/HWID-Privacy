@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Management;
 using System.Text;
 using HWIDChecker.Services;
+using HWIDChecker.Services.Win32;
 
 namespace HWIDChecker.Hardware;
 
@@ -78,14 +79,28 @@ public class GpuInfo : IHardwareInfo
             return "No GPU detected.";
         }
 
+        Dictionary<string, string> hwIdMap = null;
+        try { hwIdMap = SetupApi.GetHardwareIdMap(); } catch { }
+
         for (int i = 0; i < gpus.Count; i++)
         {
             var gpu = gpus[i];
             var name = gpu["Name"]?.ToString() ?? "Unknown";
-            
+            var pnpId = gpu["PNPDeviceID"]?.ToString() ?? "Unknown";
+
             sb.AppendLine($"GPU {i}");
             sb.AppendLine($"└── {name}");
-            sb.AppendLine($"    └── {gpu["PNPDeviceID"]?.ToString() ?? "Unknown"}");
+
+            // Show Hardware ID from SetupAPI if available, otherwise PNPDeviceID
+            if (hwIdMap != null && hwIdMap.TryGetValue(pnpId, out var hwId))
+            {
+                sb.AppendLine($"    ├── {pnpId}");
+                sb.AppendLine($"    └── Hardware ID: {hwId}");
+            }
+            else
+            {
+                sb.AppendLine($"    └── {pnpId}");
+            }
 
             // Add a line break between GPUs except for the last one
             if (i < gpus.Count - 1)

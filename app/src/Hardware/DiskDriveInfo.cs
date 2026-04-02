@@ -25,9 +25,16 @@ public class DiskDriveInfo : IHardwareInfo
         public string Model { get; set; } = "";
         public string SerialNumber { get; set; } = "";
         public string FirmwareVersion { get; set; } = "";
-        public string WwnHex { get; set; } = "";
-        public string WwnDecoded { get; set; } = "";
+        public string UniqueIdWmiHex { get; set; } = "";
+        public string UniqueIdWmi { get; set; } = "";
+        public string UniqueIdIoctlHex { get; set; } = "";
+        public string UniqueIdIoctlDecoded { get; set; } = "";
         public bool WwnFromRawIoctl { get; set; } = false;
+        public string PartitionStyle { get; set; } = "";
+        public string DiskSignature { get; set; } = "";
+        public List<string> PartitionGuids { get; set; } = new();
+        public bool IsGptDisk => PartitionStyle == "GPT";
+        public string HardwareId { get; set; } = "";
     }
 
     private string FormatAsTable(List<DiskInfo> disks)
@@ -53,27 +60,53 @@ public class DiskDriveInfo : IHardwareInfo
             sb.AppendLine($"    ├── Drive: {disk.DriveLetter}");
             sb.AppendLine($"    │   └── Volume-SN: {disk.VolumeSerial}");
             
-            // Model, Serial, and Firmware info
+            // Model, Serial, Hardware ID, and Firmware info
             sb.AppendLine($"    ├── Model: {disk.Model}");
             sb.AppendLine($"    ├── Serial: {disk.SerialNumber}");
-            
-            // Firmware info (end of tree if no WWN data)
-            if (string.IsNullOrEmpty(disk.WwnHex))
+            if (!string.IsNullOrEmpty(disk.HardwareId))
+            {
+                sb.AppendLine($"    ├── Hardware ID: {disk.HardwareId}");
+            }
+
+            var detailLines = new List<(string Label, string Value)>();
+            if (!string.IsNullOrEmpty(disk.UniqueIdIoctlHex))
+            {
+                detailLines.Add(("UniqueId (IOCTL)", disk.UniqueIdIoctlHex));
+                detailLines.Add(("UniqueId (IOCTL) decoded",
+                    string.IsNullOrEmpty(disk.UniqueIdIoctlDecoded) ? "<empty>" : disk.UniqueIdIoctlDecoded));
+            }
+            if (!string.IsNullOrEmpty(disk.UniqueIdWmiHex))
+            {
+                detailLines.Add(("UniqueId (WMI)", disk.UniqueIdWmiHex));
+                detailLines.Add(("UniqueId (WMI) decoded",
+                    string.IsNullOrEmpty(disk.UniqueIdWmi) ? "<empty>" : disk.UniqueIdWmi));
+            }
+            if (!string.IsNullOrEmpty(disk.PartitionStyle))
+            {
+                var label = disk.IsGptDisk
+                    ? $"Partition Style: {disk.PartitionStyle} | Disk GUID"
+                    : $"Partition Style: {disk.PartitionStyle} | Disk Signature";
+                detailLines.Add((label, disk.DiskSignature));
+
+                foreach (var partGuid in disk.PartitionGuids)
+                {
+                    detailLines.Add(("  Partition GUID", partGuid));
+                }
+            }
+
+            // Firmware info (end of tree if no detail data)
+            if (detailLines.Count == 0)
             {
                 sb.AppendLine($"    └── Firmware: {disk.FirmwareVersion}");
             }
             else
             {
-                // Has WWN data - add Firmware and WWN lines
                 sb.AppendLine($"    ├── Firmware: {disk.FirmwareVersion}");
-                sb.AppendLine($"    ├── WWN (StorageDeviceIdProperty): {disk.WwnHex}");
-                if (!string.IsNullOrEmpty(disk.WwnDecoded))
+                for (int lineIndex = 0; lineIndex < detailLines.Count; lineIndex++)
                 {
-                    sb.AppendLine($"    └── WWN decoded: {disk.WwnDecoded}");
-                }
-                else
-                {
-                    sb.AppendLine($"    └── WWN decoded: <empty>");
+                    var prefix = lineIndex == detailLines.Count - 1 ? "    └──" : "    ├──";
+                    var line = detailLines[lineIndex];
+                    sb.AppendLine($"{prefix} {line.Label}: {line.Value}");
                 }
             }
             
@@ -91,6 +124,9 @@ public class DiskDriveInfo : IHardwareInfo
     {
         var disks = new List<DiskInfo>();
         var logicalDrives = GetLogicalDrives();
+        var physicalDiskUniqueIdMap = GetPhysicalDiskUniqueIdMap();
+        Dictionary<string, string> hwIdMap = null;
+        try { hwIdMap = SetupApi.GetHardwareIdMap(); } catch { }
 
         using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_DiskDrive");
         foreach (ManagementObject disk in searcher.Get())
@@ -110,6 +146,8 @@ public class DiskDriveInfo : IHardwareInfo
             // Find associated logical drive
             var logicalDrive = logicalDrives.FirstOrDefault(d => d.PhysicalDrive == deviceId);
             
+            var pnpDeviceId = disk["PNPDeviceID"]?.ToString() ?? "";
+
             var diskInfo = new DiskInfo
             {
                 DeviceId = deviceId,
@@ -119,15 +157,46 @@ public class DiskDriveInfo : IHardwareInfo
                 SerialNumber = serial,
                 FirmwareVersion = firmware
             };
-            
-            // Try to get WWN information - use PowerShell directly (most reliable method)
+
+            // SetupAPI Hardware ID
+            if (hwIdMap != null && !string.IsNullOrEmpty(pnpDeviceId) &&
+                hwIdMap.TryGetValue(pnpDeviceId, out var hwId))
+            {
+                diskInfo.HardwareId = hwId;
+            }
+
             if (diskIndex >= 0)
             {
-                var physicalDiskUniqueIdMap = GetPhysicalDiskUniqueIdMap();
+                if (StorageDeviceIdQuery.TryGetWwnHexFromPhysicalDrive(diskIndex, out var wwnHex, out var decoded))
+                {
+                    diskInfo.UniqueIdIoctlHex = wwnHex;
+                    diskInfo.UniqueIdIoctlDecoded = decoded;
+                    diskInfo.WwnFromRawIoctl = true;
+                }
+
+                var layout = StorageDeviceIdQuery.TryGetDiskLayout(diskIndex);
+                if (layout != null)
+                {
+                    diskInfo.PartitionStyle = layout.IsGpt ? "GPT" : "MBR";
+                    diskInfo.DiskSignature = layout.IsGpt
+                        ? layout.DiskGuid?.ToString("D").ToUpper() ?? ""
+                        : $"0x{layout.MbrSignature:X8}";
+                    if (layout.IsGpt && layout.PartitionGuids.Count > 0)
+                    {
+                        diskInfo.PartitionGuids = layout.PartitionGuids
+                            .Select(g => g.ToString("D").ToUpper())
+                            .ToList();
+                    }
+                }
+            }
+
+            // Try to get UniqueId information - use WMI/PowerShell directly (existing fallback)
+            if (diskIndex >= 0)
+            {
                 if (physicalDiskUniqueIdMap.TryGetValue(diskIndex, out var uniqueIdInfo))
                 {
-                    diskInfo.WwnHex = uniqueIdInfo.UniqueIdHex;
-                    diskInfo.WwnDecoded = uniqueIdInfo.UniqueId;
+                    diskInfo.UniqueIdWmiHex = uniqueIdInfo.UniqueIdHex;
+                    diskInfo.UniqueIdWmi = uniqueIdInfo.UniqueId;
                 }
             }
             

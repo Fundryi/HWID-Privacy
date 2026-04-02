@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Security.Principal;
 using System.Windows.Forms;
 using HWIDChecker.UI.Forms;
 using HWIDChecker.Hardware;
@@ -20,7 +21,20 @@ static class Program
         // Then enable visual styles
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        
+
+        using var identity = WindowsIdentity.GetCurrent();
+        var principal = new WindowsPrincipal(identity);
+        if (!principal.IsInRole(WindowsBuiltInRole.Administrator))
+        {
+            MessageBox.Show(
+                "HWIDChecker requires administrator privileges.",
+                "Elevation Required",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            Environment.Exit(1);
+            return;
+        }
+
         try
         {
             using (var stream = typeof(Program).Assembly.GetManifestResourceStream("HWIDChecker.Resources.app.ico"))

@@ -33,6 +33,7 @@ namespace HWIDChecker.Hardware
                 new GpuInfo(textFormatter),
                 new MonitorInfo(textFormatter),
                 new NetworkInfo(textFormatter),
+                new BluetoothInfo(textFormatter),
                 new ArpInfo(textFormatter)
             };
         }
