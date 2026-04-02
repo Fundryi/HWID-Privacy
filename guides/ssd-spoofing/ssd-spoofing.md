@@ -54,7 +54,7 @@ Follow these steps carefully to spoof your M.2 SSD.
 1. **Plug the M.2 into a USB adapter.**  
    ![Step 1](./m2-nvme/Images/image_1.png)
 
-2. **Connect the USB adapter to your SECOND PC** (ensure **NO ANTICHEAT** is installed).  
+2. **Connect the USB adapter to your SECOND PC** (make sure **NO ANTICHEAT** is installed).  
    ![Step 2](./m2-nvme/Images/image_2.png)
 
 3. **Open the MXMPTool_MAP1202_USB_V0_01_009d.exe** (previously downloaded from the link in Prerequisites).

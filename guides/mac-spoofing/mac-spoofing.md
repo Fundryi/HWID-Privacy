@@ -16,7 +16,7 @@ This guide provides instructions for spoofing MAC addresses on different network
 | **System/PCIe** | [Realtek NICs](#realtek-nics) | 1-2.5 GbE | Medium - tools are trial-and-error; depends on chipset | eFuse Programmer |
 | **PCIe** | [Mellanox ConnectX-3](#mellanox-connectx-3-cx311a--mcx311a-xcat) | 10 GbE | Easy spoof, harder sourcing - commands are simple but finding the right card takes research | WinMFT flint (firmware flash) |
 | **USB** | [Realtek USB NICs](#realtek-usb-nics-update) | 2.5 GbE | Easy - plug in, run tool, done | Realtek USB PG Tool |
-| **USB** | [ASIX AX88179](#asix-ax88179ab-now-too) | 1 GbE | Easy - widely available, straightforward tool | ASIXFlash / Captain Mac Tool |
+| **USB** | [ASIX AX88179](#asix-ax88179ab-now-too) | 1 GbE | Easy - widely available, simple tool | ASIXFlash / Captain Mac Tool |
 
 ---
 
@@ -173,7 +173,7 @@ For Realtek network adapters, you can modify the MAC address using the Realtek e
 
 - Quick Programming Steps (Windows):
   - Open the USB PG Tool from “LATEST_PUB_WIN_USB_PGTOOL_v2.0.22_V2”.
-  - Select your device and ensure mode is set to EFUSE.
+  - Select your device and make sure mode is set to EFUSE.
   - Click “DUMP” to read current settings and confirm the tool returns “PASS”.
 ![DUMP/Read section](./images/Realtek%20USB1.png)
   - Set “CURRENT MAC” to your desired value (preserve vendor OUI if possible).
@@ -211,7 +211,7 @@ For Realtek network adapters, you can modify the MAC address using the Realtek e
 
 ## Mellanox ConnectX-3 (CX311A / MCX311A-XCAT)
 
-> **Verified working procedure** — tested on Windows 10 with a real CX311A single-port SFP+ card.
+> **Verified working procedure** - tested on Windows 10 with a real CX311A single-port SFP+ card.
 > The MAC change here is **device-level and persistent** (burned into NIC firmware), not an OS-level override.
 > Unlike Intel X550 which has one-time-lock behavior, **ConnectX-3 supports repeated MAC changes**.
 
@@ -237,14 +237,14 @@ For Realtek network adapters, you can modify the MAC address using the Realtek e
 ### Prerequisites
 
 - **OS**: Windows 10 / Windows 11 (the tested procedure below was on Windows 10, but the WinOF 5.50 driver and WinMFT 4.13 package are also known to work on Windows 11)
-- **Driver**: WinOF 5.50.53000 — **not** WinOF-2 (ConnectX-3 is on the older WinOF branch)
+- **Driver**: WinOF 5.50.53000 - **not** WinOF-2 (ConnectX-3 is on the older WinOF branch)
 - **Firmware Tools**: WinMFT 4.13.3
 
 Download both installers:
-- [MLNX_VPI_WinOF-5_50_53000_All_Win2019_x64.zip](mellanox-connectx/MLNX_VPI_WinOF-5_50_53000_All_Win2019_x64.zip) — WinOF driver package
-- [WinMFT_x64_4_13_3_6.zip](mellanox-connectx/WinMFT_x64_4_13_3_6.zip) — firmware tools (flint, mst, etc.)
+- [MLNX_VPI_WinOF-5_50_53000_All_Win2019_x64.zip](mellanox-connectx/MLNX_VPI_WinOF-5_50_53000_All_Win2019_x64.zip) - WinOF driver package
+- [WinMFT_x64_4_13_3_6.zip](mellanox-connectx/WinMFT_x64_4_13_3_6.zip) - firmware tools (flint, mst, etc.)
 
-> **Note**: The WinOF installer filename says "Win2019" — this refers to the build target (Windows Server 2019), but the driver installs and works correctly on Windows 10 and Windows 11 desktop as well.
+> **Note**: The WinOF installer filename says "Win2019" - this refers to the build target (Windows Server 2019), but the driver installs and works correctly on Windows 10 and Windows 11 desktop as well.
 
 > **Important**: ConnectX-3 / ConnectX-3 EN requires **WinOF** (not WinOF-2). WinOF-2 is for ConnectX-4 and newer. Using the wrong driver package will fail silently or cause detection issues.
 
@@ -269,7 +269,7 @@ Download both installers:
 
 > **Important**: `mstflint.exe` does **not** exist as a standalone binary in this Windows install. Use `flint.bat` (which calls `flint_ext.exe`) for all flint commands. If you see guides referencing `mstflint`, substitute `.\flint.bat` instead.
 
-### Step 1 — Discover the Device
+### Step 1: Discover the Device
 
 Open **PowerShell as Administrator**:
 
@@ -289,7 +289,7 @@ MST devices:
 
 > Use `mt4099_pci_cr0` as the device path for all subsequent commands. This is the preferred path that was tested successfully. Do **not** use `pciconf0` unless you have a specific reason.
 
-### Step 2 — Query Current Firmware and MAC
+### Step 2: Query Current Firmware and MAC
 
 ```powershell
 .\flint.bat -d mt4099_pci_cr0 q
@@ -313,7 +313,7 @@ PSID:                  MT_1170110023
 
 > **Why two MACs on a single-port card?** This is normal. `flint` uses a **base MAC** and auto-assigns Port2 as base+1. Port1 is your active real NIC port. Port2 is stored in firmware metadata but not physically used. Do not panic when you see two MAC values on a single-port card.
 
-### Step 3 — Verify MAC in Windows
+### Step 3: Verify MAC in Windows
 
 Run these commands to confirm the Windows-visible MAC matches Port1 from flint:
 
@@ -352,13 +352,13 @@ Ethernet        Mellanox ConnectX-3 Ethernet Adapter E4-1D-2D-A1-B2-C0 Up     10
 
 > Always verify that Windows MAC and flint Port1 MAC match before proceeding.
 
-### Step 4 — Back Up Firmware Image
+### Step 4: Back Up Firmware Image
 
 ```powershell
 .\flint.bat -d mt4099_pci_cr0 ri cx311a-backup.bin
 ```
 
-This reads the full firmware image from flash memory to a local file. **Keep this backup safe** — it is your recovery path if anything goes wrong.
+This reads the full firmware image from flash memory to a local file. **Keep this backup safe** - it is your recovery path if anything goes wrong.
 
 Make a copy for testing:
 
@@ -366,7 +366,7 @@ Make a copy for testing:
 Copy-Item .\cx311a-backup.bin .\cx311a-test.bin
 ```
 
-### Step 5 — Test New MAC on Image File Only (Strongly Recommended)
+### Step 5: Test New MAC on Image File Only (Strongly Recommended)
 
 Before touching real hardware, test the MAC change on the backup image file. This proves the edit logic works without any risk to the card.
 
@@ -420,7 +420,7 @@ PSID:                  MT_1170110023
 
 > The image file now shows the new MAC values. This confirms the edit logic is correct before touching real hardware.
 
-### Step 6 — Flash the New MAC to the Real Card
+### Step 6: Flash the New MAC to the Real Card
 
 ```powershell
 .\flint.bat -d mt4099_pci_cr0 -mac 0xE41D2DA1B2C2 sg
@@ -445,16 +445,16 @@ Burning FS2 FW image without signatures - OK
 Restoring signature                     - OK
 ```
 
-> The message “re-burning image with the new GUIDs” is normal — it means GUIDs were already set and are being preserved.
+> The message “re-burning image with the new GUIDs” is normal - it means GUIDs were already set and are being preserved.
 > **Success indicators**: `Burning FS2 FW image without signatures - OK` and `Restoring signature - OK`.
 
-### Step 7 — Reboot
+### Step 7: Reboot
 
 ```powershell
 shutdown /r /t 0
 ```
 
-### Step 8 — Verify After Reboot
+### Step 8: Verify After Reboot
 
 Open **PowerShell as Administrator** again:
 
@@ -512,7 +512,7 @@ Ethernet        Mellanox ConnectX-3 Ethernet Adapter E4-1D-2D-A1-B2-C2 Up     10
 
 **Confirmed results:**
 1. The MAC change succeeded permanently on the NIC firmware.
-2. Windows picked up the new flashed MAC automatically — no driver or OS-level configuration needed.
+2. Windows picked up the new flashed MAC automatically - no driver or OS-level configuration needed.
 3. The link remained up at 10 Gbps after the flash.
 4. Repeated permanent MAC rewriting works on this ConnectX-3 setup.
 
@@ -531,9 +531,9 @@ The initial test above changed only one nibble as a minimal-risk proof of functi
 
 > Using a `02:xx:xx:xx:xx:xx` prefix marks the address as locally administered per IEEE standards, avoiding collisions with real vendor OUIs.
 
-> **Why `02:xx` instead of keeping the vendor OUI?** For USB NICs the general best practice is to preserve the original vendor OUI (first 3 bytes) and only change the last 3 — this avoids standing out as an unusual device in network logs. For a firmware-level flash like this, the situation is different: you are rewriting the actual base MAC in NIC firmware, not applying an OS-level override. Using a locally administered `02:xx` prefix is the IEEE-correct way to assign a self-chosen address and avoids accidentally duplicating a real Mellanox-assigned MAC that exists on another card somewhere. Both approaches work technically — choose based on your threat model.
+> **Why `02:xx` instead of keeping the vendor OUI?** For USB NICs the general best practice is to preserve the original vendor OUI (first 3 bytes) and only change the last 3 - this avoids standing out as an unusual device in network logs. For a firmware-level flash like this, the situation is different: you are rewriting the actual base MAC in NIC firmware, not applying an OS-level override. Using a locally administered `02:xx` prefix is the IEEE-correct way to assign a self-chosen address and avoids accidentally duplicating a real Mellanox-assigned MAC that exists on another card somewhere. Both approaches work technically - choose based on your threat model.
 
-### Quick Reference — Changing MAC Again Later
+### Quick Reference: Changing MAC Again Later
 
 ```powershell
 cd “C:\Program Files\Mellanox\WinMFT”
@@ -554,13 +554,13 @@ Replace `0xNEWMAC` with your desired MAC in hex format (e.g., `0x021122334455`).
 ### Troubleshooting
 
 1. **`mstflint` is “not recognized”**
-   - On this Windows install, the relevant executables are `mst.exe`, `flint.bat`, and `flint_ext.exe` — **not** `mstflint.exe`. Use `.\flint.bat` for all flint operations.
+   - On this Windows install, the relevant executables are `mst.exe`, `flint.bat`, and `flint_ext.exe` - **not** `mstflint.exe`. Use `.\flint.bat` for all flint operations.
 
 2. **`mst status -v` shows nothing**
    - Check that WinOF driver is installed correctly
    - Reboot the system
    - Reinstall WinOF, then reinstall WinMFT
-   - Ensure you are running PowerShell **as Administrator**
+   - Make sure you are running PowerShell **as Administrator**
 
 3. **Card works in Windows but flint commands fail**
    - Use `mt4099_pci_cr0` as the device path, not `pciconf0`, unless you have a specific reason
@@ -604,6 +604,6 @@ Then reboot:
 shutdown /r /t 0
 ```
 
-> This writes the full original firmware image back to the card. The `b` flag means "burn" — it flashes the entire image from the file to the device. After reboot, the card will have its original MAC and firmware state restored.
+> This writes the full original firmware image back to the card. The `b` flag means "burn" - it flashes the entire image from the file to the device. After reboot, the card will have its original MAC and firmware state restored.
 
 ---

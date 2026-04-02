@@ -86,7 +86,7 @@
 - **Internal NICs**: Permanent changes possible for Intel, Realtek, and Mellanox:
   - [Intel NIC MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#intel-nics)
   - [Realtek NIC MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#realtek-nics)
-  - [Mellanox ConnectX-3 MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#mellanox-connectx-3-cx311a--mcx311a-xcat) — firmware-level, repeatable, 10 Gbps SFP+
+  - [Mellanox ConnectX-3 MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#mellanox-connectx-3-cx311a--mcx311a-xcat) - firmware-level, repeatable, 10 Gbps SFP+
   - Note: Certain models might not support flashing or may revert.
 - **USB NICs**: Both Realtek and ASIX adapters support MAC changes:
   - [Complete USB NIC Guide](guides/mac-spoofing/mac-spoofing.md#usb-nics)
