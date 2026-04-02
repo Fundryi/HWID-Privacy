@@ -8,6 +8,18 @@ This guide provides instructions for spoofing MAC addresses on different network
 
 ---
 
+## Quick Navigation
+
+| Category | NIC | Speed | Difficulty | Method |
+|---|---|---|---|---|
+| **System** | [Intel NICs](#intel-nics) | 1 GbE | Hard - requires DOS boot, BIOS changes; may fail on some chipsets | EEUPDATE via DOS boot USB |
+| **System/PCIe** | [Realtek NICs](#realtek-nics) | 1-2.5 GbE | Medium - tools are trial-and-error; depends on chipset | eFuse Programmer |
+| **PCIe** | [Mellanox ConnectX-3](#mellanox-connectx-3-cx311a--mcx311a-xcat) | 10 GbE | Easy spoof, harder sourcing - commands are simple but finding the right card takes research | WinMFT flint (firmware flash) |
+| **USB** | [Realtek USB NICs](#realtek-usb-nics-update) | 2.5 GbE | Easy - plug in, run tool, done | Realtek USB PG Tool |
+| **USB** | [ASIX AX88179](#asix-ax88179ab-now-too) | 1 GbE | Easy - widely available, straightforward tool | ASIXFlash / Captain Mac Tool |
+
+---
+
 ## Intel NICs
 
 ### Prerequisites
