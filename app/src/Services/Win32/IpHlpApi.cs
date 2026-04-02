@@ -126,8 +126,9 @@ internal static class IpHlpApi
         Marshal.Copy(IntPtr.Add(rowPtr, 40), macBytes, 0, (int)macLength);
         string mac = string.Join(":", macBytes.Select(b => b.ToString("X2")));
 
-        // Filter broadcast and multicast
+        // Filter broadcast, multicast, and zero MACs (incomplete/unresolved entries)
         if (mac == "FF:FF:FF:FF:FF:FF") return null;
+        if (macBytes.All(b => b == 0)) return null;
         if (macBytes.Length > 0 && (macBytes[0] & 0x01) != 0) return null; // Multicast bit set
 
         return new NeighborEntry

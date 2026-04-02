@@ -80,7 +80,7 @@ public class MonitorInfo : IHardwareInfo
 
                     // Try to enrich with EDID numeric serial from registry
                     var edidSerial = TryGetEdidNumericSerial(manufacturer, model);
-                    if (edidSerial.HasValue && edidSerial.Value != 0)
+                    if (edidSerial.HasValue && edidSerial.Value != 0 && edidSerial.Value != 0xFFFFFFFF)
                         monitorDetails.Add(("EDID Serial (numeric)", $"0x{edidSerial.Value:X8}"));
 
                     monitorInfos.Add(monitorDetails.ToArray());
@@ -220,7 +220,7 @@ public class MonitorInfo : IHardwareInfo
                     }
 
                     uint numericSerial = BitConverter.ToUInt32(edid, 12);
-                    if (numericSerial != 0)
+                    if (numericSerial != 0 && numericSerial != 0xFFFFFFFF)
                         details.Add(("EDID Serial (numeric)", $"0x{numericSerial:X8}"));
 
                     if (details.Count > 0)
