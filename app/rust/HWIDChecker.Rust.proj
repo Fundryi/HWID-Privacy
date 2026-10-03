@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.Build.NoTargets/3.7.134">
+  <PropertyGroup>
+    <!-- NoTargets imports the .NET SDK; restore needs framework metadata even though no assembly is compiled. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <Configurations>Release</Configurations>
+    <Platforms>x64</Platforms>
+  </PropertyGroup>
+  <Target Name="CargoBuild" AfterTargets="Build">
+    <Exec Command="cargo build --release --locked" WorkingDirectory="$(MSBuildThisFileDirectory)" />
+  </Target>
+  <Target Name="CargoClean" AfterTargets="Clean">
+    <Exec Command="cargo clean --locked" WorkingDirectory="$(MSBuildThisFileDirectory)" />
+  </Target>
+</Project>
