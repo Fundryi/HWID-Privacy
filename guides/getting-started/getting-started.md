@@ -31,6 +31,7 @@ Each procedure carries a status line naming who tested it. Risk boxes mark perma
 - [Device restrictions](#device-restrictions)
 - [Safety checklist](#safety-checklist)
 - [Take before and after snapshots](#take-before-and-after-snapshots)
+- [Keep changed values plausible](#keep-changed-values-plausible)
 - [Clean Windows reinstall checklist](#clean-windows-reinstall-checklist)
 - [Known-spoofable hardware](#known-spoofable-hardware)
 - [Reported anti-cheat status](#reported-anti-cheat-status)
@@ -183,6 +184,50 @@ Use [the Windows 10 script](/app/scripts/hwid-check-w10.bat) or [the Windows 11 
 
 The batch scripts are not equivalent to the GUI. They omit the dedicated **CHASSIS** and **BLUETOOTH ADAPTERS** sections, do not collect MachineGuid or the hardware-profile GUID, use legacy WMI/WMIC paths in their export routines, and expose fewer low-level storage and TPM details. Use one method consistently for both snapshots.
 
+## Keep changed values plausible
+
+A changed value that no real device could have is its own signal. Real devices report specific formats, placeholders, and relationships between fields. Keep a changed identifier inside them. The rules below come from the project's plausibility research (2026-10-03; local copy in `docs/research/`).
+
+> [!NOTE]
+> **Record the baseline first.** Before you change anything, record the current identifiers of every part you plan to touch: the full HWIDChecker export plus the per-part values from the part guide. The original values are your revert target. If a write goes wrong, a service misbehaves, or you sell the part, you can restore the factory state. Without the baseline, the old identity is gone forever. How to capture it: [Take before and after snapshots](#take-before-and-after-snapshots).
+
+| Identifier class | Plausible changed value | Anomaly to avoid | Evidence |
+|---|---|---|---|
+| SMBIOS | Keep the OEM's field lengths and patterns. Nonzero 16-byte UUID in the correct byte order | All-zero or all-`FF` UUID, invented marketing string, one serial copied into Type 1, 2, and 3 | UUID sentinel rule **[A]**; placeholders on shipping boards **[C]**; UUID-version or serial-grammar check: no public evidence found |
+| NVMe / SATA disk | Printable ASCII SN (20 bytes) and MN (40 bytes), space-padded. Real model, firmware, and capacity together | NUL bytes, blank or repeated `000000000000` SN, impossible model/capacity pair, duplicate GPT GUIDs, stale GPT CRCs | **[A]**; retail-model serial prefix rule: no public evidence found |
+| NIC / MAC | Unicast address. Local: `(first octet & 0x03) == 0x02`. Factory-looking: real assigned OUI, new suffix | Multicast bit set, all-zero or broadcast, unregistered OUI as a factory address | Address bits **[A]**; OUI-to-PCI-vendor check: no public evidence found |
+| GPU | Keep the driver-produced value. AMD `unique_id` exists on GFX9 and newer only | Random NVIDIA `GPU-...` UUID that does not match its PDI and chip ID, invented board serial where `N/A` is normal | **[A]** |
+| EDID / monitor | Registered PNP code, valid product code, optional serial, valid date, checksums correct | Unregistered PNP code, week outside `0`, `1..54`, `0xFF`, future year, bad checksum | Rules **[A]**; zero serial common in a real-device corpus **[C]** |
+| RAM / SPD | Unique four-byte serial. Manufacturer, part number, date, and location kept together | Serial unrelated to vendor or part, changed CRC-covered bytes without a CRC update | **[A]**; `00000000` on real modules **[C]** |
+| USB | `iSerialNumber=0`, or a printable serial unique per VID/PID/revision | Control characters or comma, one fake serial shared across units, `MI_00` or `MSFT100` treated as a serial | **[A]**; zero-filled strings on real devices **[C]** |
+| TPM | Real EK public key. Certificate can be missing on some fTPMs until fetched online | Empty EK public key on a ready TPM, EK key and certificate mismatch, fabricated chain | **[A]**; Intel 11th Gen On-Die CA transition **[C]** |
+| Windows state | Unique, nonzero canonical GUID, for example `MachineGuid` | Empty, zero, malformed, or cloned GUID; only MachineGuid changed while hardware stays the same | Microsoft-documented consumers **[A]**; MachineGuid validation contract: no public evidence found |
+
+Null values that are normal on real hardware:
+
+- A RAM serial of `00000000`. Real Corsair and SK hynix-family modules report it through SMBIOS and CPU-Z. It is a real-world exception, not the JEDEC ideal. **[C]**
+- USB `iSerialNumber=0`. It means "this device has no serial" and is normal for hubs, HID devices, and low-cost peripherals. **[A]**
+- An EDID numeric serial of zero. EDID allows it, and internal laptop panels often have no serial at all. **[A]** **[C]**
+- `To Be Filled By O.E.M.`, `Default string`, or a blank SMBIOS serial. These ship on real DIY and white-box boards. **[C]**
+
+Null values that are never normal:
+
+- An empty EK public key on a Windows-ready TPM. It points to failed or incomplete provisioning, not privacy. **[A]**
+- An all-zero or all-`FF` SMBIOS UUID on a fully provisioned PC. DMTF conformance forbids both. **[A]**
+- NUL bytes in an NVMe SN or MN. NVMe ASCII allows only bytes `0x20` to `0x7E`. **[A]**
+
+### Per-tool traps
+
+| Tool | Anomaly it can create | Rule |
+|---|---|---|
+| AMI DMIEdit / AMIDEWIN | Arbitrary text, same value in unrelated structures, sentinel UUID | Change only the device-specific suffix. Keep each field's format. Keep the UUID nonzero |
+| SSD MP tools | Blank or all-zero native serial, invented model on a real controller | Keep the real model, firmware, and capacity family. Use a printable 20-byte SN |
+| EDID editors | Unregistered PNP code, only one of two serials changed, stale checksum | Change numeric and text serials together. Recheck every 128-byte checksum |
+| SPD programmers | All-zero or reused serial, trusting the CRC as proof | Use a unique four-byte serial. The CRC does not cover or validate the serial |
+| Windows `NetworkAddress` | Multicast first octet, fake universal OUI, duplicate MAC | Use local-unicast bits, or keep the original OUI and change only the suffix |
+
+Sampling a field is not proof that a validator checks its format. The public EAC reversing artifacts show which fields are collected, not that a format is rejected. They are community reversing artifacts **[S]**. A claim that an anti-cheat checks a model prefix, UUID version, or NIC OUI match has no public evidence found. (Section 10 of the plausibility research, local copy in `docs/research/`.)
+
 ## Clean Windows reinstall checklist
 
 A clean install removes personal files, apps, settings, and manufacturer customizations. Microsoft calls it an advanced option. **[A]** [Microsoft clean-install instructions](https://support.microsoft.com/en-us/windows/deployment/install-upgrade/reinstall-windows-with-the-installation-media)
@@ -243,7 +288,7 @@ This table separates what each vendor states from what the community reports. Ev
 
 | Anti-cheat / game | Official hardware-ban statement | Current requirements (2026-10) | Vendor-disclosed identifier classes | Community-reported candidates | Spoofer-tool detection |
 |---|---|---|---|---|---|
-| EAC / Fortnite | Yes. Epic names hardware bans **[A]** | Game-dependent | Device identifiers and hardware/software specifications, no field list **[A]** | Rust/EOS sample: MAC, MBR disk signature, partition number, disk LUN **[C]** ([artifact](https://github.com/goldzik1/eac-eos-driver-analysis/blob/main/EVIDENCE.md)). Broader disk, SMBIOS, GPU, EDID, MachineGuid, NVRAM list **[S]** | Yes. Epic warns about tools that hide or change identifiers **[A]** |
+| EAC / Fortnite | Yes. Epic names hardware bans **[A]** | Game-dependent | Device identifiers and hardware/software specifications, no field list **[A]** | Rust/EOS sample: MAC, MBR disk signature, partition number, disk LUN, community reversing artifact **[S]** ([artifact](https://github.com/goldzik1/eac-eos-driver-analysis/blob/main/EVIDENCE.md)). Broader disk, SMBIOS, GPU, EDID, MachineGuid, NVRAM list **[S]** | Yes. Epic warns about tools that hide or change identifiers **[A]** |
 | EAC / Rust | No Rust vendor field formula. A 2026 ban on a freshly reinstalled used PC is reported **[S]** | TPM 2.0 + Secure Boot on Secure servers, expanding in October 2026, not global yet **[A]** | Same Epic categories **[A]** | Same Rust/EOS sample **[C]**. RAID 0 physical-serial claim: no confirmation found | Yes, at the EAC tool level **[A]** |
 | BattlEye | Game- or publisher-specific, not universal **[A]** | No product-wide requirement found | Hardware identifiers including serial numbers, IP and account, processes, drivers, executable code **[A]** | CPUID, SMBIOS, disk, MAC, GPU lists **[S]** | Yes. Collects processes, drivers, and executable code **[A]** |
 | Vanguard / VALORANT | Yes. VAN 152 is a hardware-ID ban **[A]** | May require TPM 2.0, Secure Boot, IOMMU, VBS/HVCI by configuration. Pre-Check baseline: Windows 11 25H2 + TPM 2.0 + Secure Boot + IOMMU + VBS + HVCI **[A]** | Unique device IDs, manufacturer, model, specifications **[A]** | Disk, SMBIOS, TPM, MachineGuid, GPT, EDID, UEFI **[S]** | Yes. Validates memory and system state **[A]** |
@@ -303,3 +348,13 @@ These statuses are community-reported. This project has not verified them. Every
 - [Epic Games: hardware identifiers help page](https://www.epicgames.com/help/c-34254770/c-40491939/a12518314?lang=en-US)
 - [Steam Support: Valve Anti-Cheat (VAC)](https://help.steampowered.com/en/faqs/view/571A-97DA-70E9-FF74)
 - [EAC/EOS driver analysis evidence (community artifact)](https://github.com/goldzik1/eac-eos-driver-analysis/blob/main/EVIDENCE.md)
+- [adrianyy/EACReversing hwid.c (community artifact)](https://github.com/adrianyy/EACReversing/blob/master/EasyAntiCheat.sys/hwid.c)
+- [HWID-Privacy: plausibility rules for changed identifiers (research report)](https://github.com/Fundryi/HWID-Privacy/blob/main/docs/research/2026-10-03-plausibility-rules.md)
+- [DMTF SMBIOS Specification 3.8.0](https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_3.8.0.pdf)
+- [NVM Express Base Specification 2.0c](https://www.nvmexpress.org/wp-content/uploads/NVM-Express-Base-Specification-2.0c-2022.10.04-Ratified.pdf)
+- [IEEE: Guidelines for EUI, OUI, and local-address bits](https://standards.ieee.org/wp-content/uploads/import/documents/tutorials/eui.pdf)
+- [NVIDIA open GPU kernel modules: GPU UUID derivation](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/main/src/nvidia/src/kernel/gpu/gpu_uuid.c) and [Linux AMDGPU unique_id](https://docs.kernel.org/gpu/amdgpu/driver-misc.html)
+- [UEFI PNP ID registry](https://uefi.org/PNP_ID_List) and [linuxhw/EDID real-device corpus](https://github.com/linuxhw/EDID)
+- [JEDEC DDR4 SPD Annex L](https://www.jedec.org/sites/default/files/docs/4_01_02_AnnexL-3R25.pdf)
+- [Microsoft: USB serial number rules](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/usb-faq--introductory-level)
+- [Microsoft: Get-TpmEndorsementKeyInfo](https://learn.microsoft.com/en-us/powershell/module/trustedplatformmodule/get-tpmendorsementkeyinfo) and [Windows Autopilot TPM requirements](https://learn.microsoft.com/en-us/autopilot/requirements)

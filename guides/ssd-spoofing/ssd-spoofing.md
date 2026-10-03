@@ -24,6 +24,8 @@ Changing one value does not change every identifier below it. **[A]**
 
 The NVMe specification defines SN and MN for the NVM subsystem. A Controller ID identifies a controller within that subsystem. EUI-64, NGUID, and Namespace UUID identify namespaces. Windows exposes separate views: `Win32_DiskDrive` includes model, serial, firmware revision, and PnP device ID, while `IOCTL_STORAGE_QUERY_PROPERTY` can return identifiers supplied by the storage stack. **[A]**
 
+NVMe 2.1 requires every namespace to expose at least one persistent namespace identifier: EUI-64, NGUID, or Namespace UUID. Windows protocol-specific storage queries can return the Identify Controller and Identify Namespace data. **[A]** This is a version-specific requirement. Older devices and USB bridges may not return all three fields, and a namespace ID (an access handle) or an empty bridge view does not count as one.
+
 The Windows volume serial is assigned when a volume is formatted. Formatting, repartitioning, or changing a volume serial therefore does not rewrite the manufacturer-assigned drive serial. **[A]**
 
 ## Which controller do I have?
@@ -54,6 +56,8 @@ The Windows volume serial is assigned when a volume is formatted. Formatting, re
 ## M.2 SSD SPOOFING
 
 **Status:** tested by the project owner on real hardware (MAP1202). **[C]** No public controller manual exists for it, so follow the steps exactly.
+
+Before the first step, write down the drive's current model, firmware, and serial (HWIDChecker export, or the tool's own readout). The current values are your revert target: if the new identity ever causes problems, you can restore the original values exactly.
 
 > [!CAUTION]
 > The project owner confirmed this procedure on real hardware, but it has not been independently repeated. Assume it destroys all data on the SSD. Back up and verify the backup first. Do not continue if the tool reports a different controller, capacity, or NAND configuration than expected.
@@ -140,6 +144,20 @@ Silicon Motion documents the SM2263XT hardware as a DRAM-less PCIe Gen3 x4, NVMe
 7. Save the configuration, reopen it, and verify every value before starting the write. Do not interrupt power during programming.
 8. After the utility reports success, shut down fully, remove power, reinstall the drive normally, recreate partitions if required, and compare every identifier listed in [Verify the result](#verify-the-result).
 
+## Research candidates
+
+**Status:** not guide-supported. Bring-up confirmed **[C]**; identity persistence unverified **[S]**.
+
+These controllers have public evidence that an MP tool brought a drive up. None has a published before/after native NVMe capture of a chosen SN and MN, followed by reboot and cold-boot readback. Until that exists, they stay out of [Hardware that works](#hardware-that-works).
+
+| Controller | NAND | Tool | Evidence |
+|---|---|---|---|
+| Maxio MAP1602 | YMTC X3-9070 | `MXMPTool_MAP1602` | Bring-up confirmed **[C]**. Serial and model settings reported **[S]**. Identity persistence unverified |
+| Silicon Motion SM2269XT | Micron B47R; YMTC X2-9060 / TAS packages listed | `SM2269XT_MPTool_ADATA.exe` | B47R bring-up confirmed **[C]**. Model and SN fields reported **[S]**. Identity persistence unverified |
+| InnoGrit IG5236 | YMTC X2-9060 | IG5236 MPUtility | Recovery only: 2 GB recovery mode back to full capacity **[C]**. No serial or model editing shown |
+
+Realtek NVMe controllers (RTS5765, RTS5766DL) and Phison E13, E18, E19, E21, and E26 are not supported for identity change. No inspectable identity-change and cold-boot readback was found, and current Phison cases show firmware or NAND mismatch and failures. **[S]**
+
 ## USB NVMe enclosures and bridge serials
 
 **Status:** untested by this project. **[S]**
@@ -149,6 +167,8 @@ The Sabrent EC-SNVE is a USB enclosure for M.2 NVMe and SATA drives. Sabrent's F
 One community repository contains RTL9210 configuration examples with separate `MANUFACTURE`, `PRODUCT`, `SCSI_VENDOR`, `SCSI_PRODUCT`, and `SERIAL` fields. Whether a changed `SERIAL` becomes the value Windows reports depends on the enclosure firmware and transport and is not verified here. **[S]**
 
 Programming a USB bridge is different from programming the SSD. A bridge configuration change does not prove that the SSD's native NVMe SN, EUI-64, NGUID, firmware, or SMART / Health data changed. Verify the drive once through the enclosure and again in a native M.2 slot. **[A]**
+
+A vendor-documented example: TI's TUSB926x Flash Burner documentation supports editing the USB descriptors and the device serial of that bridge. It changes the bridge identity only, not the drive behind it. **[A]**
 
 > [!CAUTION]
 > The bridge-flashing procedure below is untested by this project and graded **[S]**. Flashing the wrong RTL9210A/RTL9210B firmware or another enclosure's configuration can disable USB access. Preserve a full factory dump before changing anything.
@@ -162,6 +182,8 @@ Programming a USB bridge is different from programming the SSD. A bridge configu
 ## NORMAL 2.5' SSD SPOOFING
 
 **Status:** tested by the project owner on real hardware (YANSEN / KingSpec). **[C]** No public controller manual exists for it, so follow the steps exactly.
+
+Before the first step, write down the drive's current model, firmware, and serial (HWIDChecker export, or the tool's own readout). The current values are your revert target: if the new identity ever causes problems, you can restore the original values exactly.
 
 > [!CAUTION]
 > The project owner confirmed this procedure on real hardware, but it has not been independently repeated. Assume that pressing **Update** can erase the SSD or make it inaccessible. Back up and verify the backup first. Confirm both the SSD controller and the ASMT 2115 bridge before continuing.
@@ -232,6 +254,9 @@ Creating a Windows Storage Spaces virtual disk, changing the partition layout, o
 A reported anti-cheat issue involved RAID 0; see the [Reported anti-cheat status](../getting-started/getting-started.md#reported-anti-cheat-status). Whether anti-cheats still read member serials through an array is reported both ways; the reports conflict and none includes a versioned test.
 
 > [!NOTE]
+> **Sampled EAC observation.** One hash-identified Rust/EOS driver sample contains machine-ID format strings for only these fields: MAC, MBR signature, partition number, and disk LUN. ([goldzik1 evidence](https://github.com/goldzik1/eac-eos-driver-analysis/blob/main/EVIDENCE.md)) This is a community reversing artifact **[S]**. It is not proof that EAC reads member-drive serials through RAID. It does not show every EAC integration, future builds, or server-side ban weights.
+
+> [!NOTE]
 > Software/BIOS-based RAID0 is generally virtual and unsafe for HWID evasion.
 
 ## Verify the result
@@ -300,3 +325,17 @@ cmd /c vol C:
 - [Microsoft: vol command](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/vol)
 - [HWID-Privacy: current DiskDriveInfo source](https://github.com/Fundryi/HWID-Privacy/blob/main/app/src/Hardware/DiskDriveInfo.cs)
 - [bensuperpc/rtl9210 community firmware and configuration reference](https://github.com/bensuperpc/rtl9210)
+- [NVM Express Base Specification 2.1](https://nvmexpress.org/wp-content/uploads/NVM-Express-Base-Specification-Revision-2.1-2024.08.05-Ratified.pdf)
+- [Microsoft: Working with NVMe drives](https://learn.microsoft.com/en-us/windows/win32/fileio/working-with-nvme-devices)
+- [TI: TUSB926x Flash Burner user guide](https://www.ti.com/tw/lit/pdf/sllu125)
+- [itho.cn: MAP1602 + YMTC X3-9070 build log](https://itho.cn/notes/616.html)
+- [eefocus: MAP1602 serial, manufacturer, and capacity settings](https://www.eefocus.com/article/1890080.html)
+- [flash.itho.cn: MAP1602 MP package catalog](https://flash.itho.cn/MPTool/Maxio/MAP1602/MAP1602-X3_9070-SN11296)
+- [tfl-asp: SM2269XT 2230 B47R build](https://tfl-asp.github.io/2025/69xt/)
+- [liangchanba: SM2269XT package and NAND list](https://club.liangchanba.com/thread-1696-1-1.html)
+- [flashinfo: SM2269XT archive metadata (model and SN fields)](https://www.harbor.flashinfo.top/MPTool/Detail/1397)
+- [Reddit r/ssd: IG5236 recovery report](https://www.reddit.com/r/ssd/comments/1uw4zq3/innogrit_ig5236_ant_esports_690_neo_ultra_1tb/)
+- [InnoGrit: client SSD controllers](https://www.innogritcorp.com/ssdcontrollers/client/)
+- [ZOL forum: Realtek MPTool tutorial](https://bbs.zol.com.cn/diybbs/d231_886908_back.html)
+- [Elektroda: Phison E13T firmware mismatch example](https://www.elektroda.com/rtvforum/topic4182968.html)
+- [goldzik1: EAC/EOS driver analysis evidence (community artifact)](https://github.com/goldzik1/eac-eos-driver-analysis/blob/main/EVIDENCE.md)

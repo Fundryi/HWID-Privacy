@@ -773,8 +773,13 @@ shutdown /r /t 0
 | ASIX AX88179A | Embedded eFuse for device data and external SPI flash for firmware customization | Do not assume that changing flash also replaces data stored in eFuse. [A] |
 | ASIX AX88179B | Embedded eFuse for device data; optional external SPI flash for firmware customization | ASIX documents MAC customization through its eFuse programming tools. Treat it as permanent. [A] |
 | Mellanox ConnectX-3 | Firmware image, as exercised by the tested workflow above | The documented backup-and-restore workflow is repeatable on the tested CX311A. [C] |
+| Realtek RTL8126 | eFuse MAC; factory PGtool path with `8126EF.CFG` programs MAC, SVID/SMID, and LED | Factory provisioning only. Retail end-user rewriting is unconfirmed. Do not reuse the RTL8125 recipe. [C] |
 
 The words `DUMP`, `READ`, or `BACKUP` do not guarantee reversibility. For OTP/eFuse, a backup records the original state but does not reset already programmed bits. [A]
+
+**Marvell / Aquantia AQC113: firmware recovery only.** `flashUpdate2.exe` with signed agent and image files can update, reflash, and recover an AQC113. It matches images by the exact four-part PCI ID. [C] The public notes show no MAC-edit operation. [S] A successful firmware flash is not MAC-edit support. Older AQC107 DIAG results, both successes and "maximum number of MAC addresses programmed" failures, do not prove AQC113 compatibility. [C]
+
+**NIC identifiers beyond the MAC.** A NIC can expose more than its MAC. Intel i226 `ADAPTERINFO` output shows ETrackID, firmware version, NVM version, MAC, and a serial number. In that output the serial is the MAC with `ffff` inserted, so it is derived from the MAC, not independent. Software can still read and compare it. [C] PCI vendor, device, subsystem, and revision IDs identify the controller or board class, not normally one unit. [A] Some adapters also expose PCIe VPD (Vital Product Data) fields such as part number and serial; an AQC113 FreeBSD probe shows a VPD part number. [C] Which of these fields exist is controller- and family-specific. For ConnectX-3 PSID and firmware data, see [Hardware Details](#hardware-details). If you change only the MAC, a MAC-derived serial can still show the old value or a mismatch.
 
 ## Verification Checklist
 
@@ -859,3 +864,9 @@ A changed current address after only a driver restart proves a software-visible 
 - [Intel: Ethernet Controller Products 25.2 release notes](https://cdrdv2-public.intel.com/630597/630597%20-%20Software_Release_25_2_v_1_1_External.pdf)
 - [Intel: Ethernet Adapters and Devices User Guide](https://edc.intel.com/output/DownloadPdfDocument?id=10427)
 - [HWID-Privacy: NetworkInfo.cs](https://github.com/Fundryi/HWID-Privacy/blob/main/app/src/Hardware/NetworkInfo.cs)
+- [Intel Community: i226 EEUPDATE ADAPTERINFO output (ETrackID, NVM, serial)](https://community.intel.com/t5/Ethernet-Products/i226-LM-and-i-226V-NIC-NVM-cannot-be-updated-on-DFI-motherboard/m-p/1672867)
+- [KevinYSH: Realtek LAN chip PGtool user guide (UEFI), RTL8126 `8126EF.CFG`](https://github.com/KevinYSH/document/blob/master/DE-LDRET004_Realtek_LAN_Chip_PGtool_UserGuide_UEFI.md)
+- [NVIDIA Developer Forums: RTL8126 MAC from eFuse](https://forums.developer.nvidia.com/t/technical-inquiry-regarding-mac-address-provisioning-for-custom-jetson-carrier-board-with-multi-nic-aqr113c-dp83867-rtl8126/368972)
+- [coronas2k: AQC113 flashUpdate2 firmware update and recovery notes](https://gist.github.com/coronas2k/c7d3a37ca04da2f15783da3cc8cf3702)
+- [InsanelyMac: Aquantia AQC107 DIAG thread](https://www.insanelymac.com/forum/topic/330614-marvell-aquantia-10-gb-ethernet-support-thread/page/9/) and [ndoo.sg: Aquantia homelab notes](https://ndoo.sg/projects%3Ahomelab%3Aaquantia)
+- [FreeBSD freebsd-net list: AQC113 probe with PCIe VPD](https://lists.freebsd.org/archives/freebsd-net/2025-October/007734.html)

@@ -120,7 +120,7 @@ Changes the MAC address the network sees. A Windows `NetworkAddress` override is
   - [Complete USB NIC Guide](guides/mac-spoofing/mac-spoofing.md#usb-nics)
   - **Recommended**: [USB‑C 2.5GbE Adapter](https://uniaccessories.com/products/usb-c-to-ethernet-adapter-2500mbps) • [Amazon DE](https://www.amazon.de/-/en/dp/B0C2H9HVH3)
 - **Purchasable HWID Spoofers**: Some handle NIC spoofing, but certain NICs resist it, and they can produce questionable serial data in other areas.
-- **Best Practice**: Keep the first 6 digits (vendor ID), change only the last 6.
+- **Best Practice**: Keep the first 6 digits (vendor ID), change only the last 6. For a self-chosen address, the IEEE-correct form is a locally administered unicast address (first octet with the local bit set, multicast bit clear, for example `02:`); Windows, Android, and Apple all use this form for randomized Wi-Fi. **[A]**
 
 ---
 
@@ -145,7 +145,7 @@ No verified persistent-change method for current cards. Both vendors document a 
 
 ### 5. **RAM**
 
-RAM modules carry a serial in SPD storage. Modules that ship with null serials need no write; otherwise an external programmer can edit the SPD identity fields.
+RAM modules carry a serial in SPD storage. Modules that ship with null serials need no write; otherwise an external programmer can edit the SPD identity fields. A null serial is a real-world exception, not the JEDEC-compliant norm (unique serials required).
 
 - **Complete Guide**: [RAM Guide](guides/ram-spoofing/ram-spoofing.md)
 - **Null Serials**:

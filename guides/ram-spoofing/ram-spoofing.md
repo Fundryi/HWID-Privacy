@@ -139,6 +139,8 @@ A successful read therefore proves only read access. It does not prove that the 
 
 The lowest-risk choice is a module that already reports an empty or non-unique serial in the observation layer you care about. Verify it with the read-only checks below. No SPD write is then needed.
 
+One nuance: JEDEC requires a unique manufacturer-assigned module serial, so an all-zero value is a real-world exception (seen on some Corsair and SK hynix-family modules, possibly a firmware substitution), not the compliant norm. A null serial is common enough to be unremarkable in an inventory, but do not describe it as the standard. **[A]** for the JEDEC rule, **[C]** for the observed exceptions
+
 Replacing a module is safer than rewriting it. An external write is justified only when you can identify the exact SPD device, save a complete dump, verify support, and recover the module without booting it.
 
 > [!WARNING]

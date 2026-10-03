@@ -20,6 +20,7 @@ Evidence grades appear inline. See [How to read these guides](../getting-started
 - [What this changes](#what-this-changes)
 - [Requirements and recovery preparation](#requirements-and-recovery-preparation)
 - [AMIDEWIN and DMIEdit workflow notes](#amidewin-and-dmiedit-workflow-notes)
+- [Insyde H2OSDE and OEM provisioning tools](#insyde-h2osde-and-oem-provisioning-tools)
 - [ASUS-specific procedure boundary](#asus-specific-procedure-boundary)
 - [Verify with HWIDChecker](#verify-with-hwidchecker)
 - [Troubleshooting](#troubleshooting)
@@ -96,7 +97,7 @@ The owner's tested workflow uses the AMI DMIEdit utility on an AMI BIOS board; s
 
 ## Important Notes
 
-- Always backup your original serial numbers
+- Always backup your original serial numbers. They are your revert target: if a changed value causes problems, you can restore the factory values exactly. Without the backup, the original identity is gone for good
 - Changes may require BIOS reflash to persist
 - Some motherboards may have additional protection - check your manufacturer's documentation
 - For MSI motherboards, see `MSI AMIDEINx64 spoof befehle cmd.rtf` for additional commands
@@ -169,6 +170,20 @@ The automatic manager offers to make a backup and prints the AMIDEWIN commands f
 
 Keep using the local read-only collection batch. Review the change batch line by line. Retain the before-and-after output.
 
+## Insyde H2OSDE and OEM provisioning tools
+
+**Status:** research route, not tested by this project. Tool existence **[A]**; end-user availability **[S]**.
+
+DMIEdit is an AMI tool. Insyde firmware has its own SMBIOS editor, H2OSDE (SMBIOS Data Editor). Insyde lists provisioning tools that edit UEFI variables and SMBIOS data. **[A]** TQ's support documentation describes H2OSDE edits of the current runtime DMI data, a DMI file, or the BIOS-image defaults, from EFI Shell, Windows, or Linux. It covers Type 1 system fields, Type 2 baseboard fields, Type 3 chassis fields, and UUID replacement or auto-generation. **[A]**
+
+Acer's lifecycle guide shows an OEM example. Its H2OSDE-based `HUAQINDMI.exe` reads and writes manufacturer, product, finished-goods serial, mainboard serial, UUID, and asset tag, with a reboot and readback after each operation. **[A]**
+
+- These tools are normally OEM-only or available on request, and platform-specific. TQ says its BIOS tools are available on request. **[A]** Whether an end user can get a working copy for a given board is **[S]**.
+- H2OSDE support depends on the Insyde firmware build and its provisioning hooks. A copy found on a forum does not prove that a random laptop or board accepts writes. **[A]**
+- No current general Phoenix SecureCore workflow was confirmed. **[S]**
+
+Decision rule: if DMIEdit writes only the live table, is rejected, or the value reverts after a cold boot, stop. Use the firmware vendor's or OEM's provisioning tool for that exact model, or leave the path unsupported. Verify every write with a reboot and a cold-boot readback, as in [Verify with HWIDChecker](#verify-with-hwidchecker).
+
 ## ASUS-specific procedure boundary
 
 ASUS USB BIOS FlashBack is a board-specific recovery/update feature. ASUS requires the BIOS file for the exact board model, the correct filename, the dedicated USB port, and uninterrupted power until the FlashBack light goes out. **[A]** The official instructions describe vendor firmware. They do not validate a modified ROM image.
@@ -237,3 +252,7 @@ Stop further writes. Use only the exact board vendor's documented recovery metho
 - [AMI: AFU for Aptio V](https://www.ami.com/resources/ami-firmware-utility-afu-a-secure-update-utility-for-aptio-v-uefi-bios-firmware/)
 - [ASUS: How to use USB BIOS FlashBack](https://www.asus.com/support/faq/1038568/)
 - [Fundryi/HWID-Privacy HWIDChecker source](https://github.com/Fundryi/HWID-Privacy/tree/main/app/src/Hardware)
+- [Insyde: development tools](https://www.insyde.com/products/development-tools/)
+- [TQ: TQMxE39M BIOS tools (H2OSDE)](https://support.tq-group.com/en/x86/tqmxe39m/bios/bios_tools)
+- [TQ: TQMxE38C BIOS tools (H2OSDE)](https://support.tq-group.com/en/x86/tqmxe38c/bios/bios_tools)
+- [Acer: Lifecycle Extension Guide (HUAQINDMI.exe workflow)](https://global-download.acer.com/GDFiles/Document/Lifecycle%20Ext.%20Guide/Lifecycle%20Ext.%20Guide_Acer_1.0_A_A.pdf)
