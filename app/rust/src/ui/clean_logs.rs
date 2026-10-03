@@ -60,10 +60,12 @@ pub fn show(owner: HWND) {
     }
     if let Err(error) = run(owner, eventlog::clean) {
         win::record(error.clone());
-        window::show_error(
+        msgbox::show(
             owner,
             &format!("Error opening log cleaning: {error}"),
             "Log Cleaning Error",
+            Buttons::Ok,
+            Icon::Error,
         );
     }
 }
@@ -167,10 +169,12 @@ fn finish(form: &Form, state: &State, outcome: CleanOutcome) {
                 &[&format!("Error in Log Cleaning Process: {error}\r\n")],
             );
             // Raised after the worker result: the box belongs to the active window (8.5).
-            window::show_error(
+            msgbox::show(
                 msgbox::active_window(),
                 &format!("Error during log cleaning process: {error}"),
                 "Error",
+                Buttons::Ok,
+                Icon::Error,
             );
             form.edit_append_batch(
                 OUTPUT,
@@ -349,9 +353,9 @@ mod tests {
             Foundation::{LPARAM, RECT, WPARAM},
             System::Threading::GetCurrentThreadId,
             UI::WindowsAndMessaging::{
-                BM_CLICK, EnumThreadWindows, GetDlgItem, GetWindowRect, HWND_TOPMOST, IDNO, IDYES,
-                IsWindow, PostMessageW, SC_CLOSE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, WM_CLOSE,
-                WM_SYSCOMMAND, WM_TIMER,
+                BM_CLICK, EnumThreadWindows, GetWindowRect, HWND_TOPMOST, IDNO, IDYES, IsWindow,
+                PostMessageW, SC_CLOSE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, WM_SYSCOMMAND,
+                WM_TIMER,
             },
         },
         core::BOOL,
@@ -500,11 +504,15 @@ mod tests {
                 wait_for(|| dialog(ui_thread, "Administrator Rights Required").is_some());
                 let box_hwnd =
                     dialog(ui_thread, "Administrator Rights Required").expect("admin box");
+                let press = msgbox::testing::PressOnDrop {
+                    dialog: box_hwnd,
+                    id: windows::Win32::UI::WindowsAndMessaging::IDOK,
+                };
                 assert!(dialog(ui_thread, "Log Cleaning").is_none());
-                screenshot(box_hwnd, "admin-refusal");
-                // SAFETY: Closing an OK-only message box dismisses it; only our test dialog is targeted.
-                unsafe { PostMessageW(Some(box_hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) }
-                    .expect("dismiss admin box");
+                if let Err(panic) = win::catch_panic(|| screenshot(box_hwnd, "admin-refusal")) {
+                    println!("screenshot failed: {panic}");
+                }
+                drop(press);
             });
             show(HWND::default());
             driver.join().expect("admin driver");
@@ -598,10 +606,16 @@ mod tests {
                 if driver_case == "failed" || driver_case == "panic" {
                     wait_for(|| dialog(ui_thread, "Error").is_some());
                     let error = dialog(ui_thread, "Error").expect("error box");
-                    screenshot(error, &format!("{driver_case}-error"));
-                    // SAFETY: Closing an OK-only message box dismisses it; only our test dialog is targeted.
-                    unsafe { PostMessageW(Some(error), WM_CLOSE, WPARAM(0), LPARAM(0)) }
-                        .expect("dismiss error box");
+                    let press = msgbox::testing::PressOnDrop {
+                        dialog: error,
+                        id: windows::Win32::UI::WindowsAndMessaging::IDOK,
+                    };
+                    if let Err(panic) =
+                        win::catch_panic(|| screenshot(error, &format!("{driver_case}-error")))
+                    {
+                        println!("screenshot failed: {panic}");
+                    }
+                    drop(press);
                 }
                 if driver_case == "done" || driver_case == "failed" || driver_case == "panic" {
                     wait_for(|| super::super::controls::text(close) == "Close");
@@ -639,9 +653,17 @@ mod tests {
                             wait_for(|| dialog(ui_thread, "Confirm Stop").is_some());
                             let question =
                                 dialog(ui_thread, "Confirm Stop").expect("stop question");
-                            screenshot(question, &format!("{driver_case}-confirm-{}", answer.0));
-                            // SAFETY: Standard Yes/No button of this test's own confirmation box.
-                            click(unsafe { GetDlgItem(Some(question), answer.0) }.expect("answer"));
+                            // The answer is pressed by HWND even if the capture fails.
+                            let press = msgbox::testing::PressOnDrop {
+                                dialog: question,
+                                id: answer,
+                            };
+                            if let Err(panic) = win::catch_panic(|| {
+                                screenshot(question, &format!("{driver_case}-confirm-{}", answer.0))
+                            }) {
+                                println!("screenshot failed: {panic}");
+                            }
+                            drop(press);
                             wait_for(|| dialog(ui_thread, "Confirm Stop").is_none());
                             if answer == IDNO {
                                 // SAFETY: Read-only validity query on our form.

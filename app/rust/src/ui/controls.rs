@@ -64,9 +64,8 @@ use windows::{
                 BPBF_COMPATIBLEBITMAP, BeginBufferedPaint, BufferedPaintInit, BufferedPaintUnInit,
                 CloseThemeData, DRAWITEMSTRUCT, DrawThemeBackground, EM_REPLACESEL, EM_SCROLLCARET,
                 EM_SETLIMITTEXT, EM_SETSEL, EndBufferedPaint, HTHEME, ODS_FOCUS, ODS_NOFOCUSRECT,
-                ODS_SELECTED, OpenThemeData, PBM_GETPOS, PBM_SETMARQUEE, PBM_SETPOS,
-                PBM_SETRANGE32, PBS_MARQUEE, PBS_SMOOTH, PROGRESS_CLASSW, WC_BUTTONW, WC_EDITW,
-                WC_LISTBOXW, WC_STATICW, WM_MOUSELEAVE,
+                ODS_SELECTED, OpenThemeData, WC_BUTTONW, WC_EDITW, WC_LISTBOXW, WC_STATICW,
+                WM_MOUSELEAVE,
             },
             Input::KeyboardAndMouse::{
                 EnableWindow, GetFocus, GetKeyState, IsWindowEnabled, SetFocus, TME_LEAVE,
@@ -77,19 +76,18 @@ use windows::{
             WindowsAndMessaging::{
                 BM_GETSTATE, BN_CLICKED, BN_DBLCLK, BS_OWNERDRAW, CreateWindowExW,
                 DLGC_WANTALLKEYS, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY,
-                GA_ROOT, GWL_STYLE, GetAncestor, GetClientRect, GetNextDlgTabItem, GetParent,
-                GetPropW, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-                HMENU, HTCLIENT, IDC_HAND, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETTEXT,
-                LB_GETTEXTLEN, LB_RESETCONTENT, LB_SETITEMHEIGHT, LBN_DBLCLK, LBN_SELCHANGE,
-                LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LBS_OWNERDRAWFIXED,
-                LBS_WANTKEYBOARDINPUT, LoadCursorW, RemovePropW, SendMessageW, SetCursor, SetPropW,
-                SetWindowLongPtrW, SetWindowTextW, UISF_HIDEACCEL, UISF_HIDEFOCUS, WINDOW_EX_STYLE,
-                WINDOW_STYLE, WM_CHAR, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
-                WM_DRAWITEM, WM_ERASEBKGND, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS,
-                WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCPAINT, WM_PAINT, WM_QUERYUISTATE,
-                WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_UPDATEUISTATE,
-                WM_VKEYTOITEM, WS_BORDER, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_HSCROLL,
-                WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                GA_ROOT, GetAncestor, GetClientRect, GetNextDlgTabItem, GetParent, GetPropW,
+                GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU, HTCLIENT, IDC_HAND,
+                LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT,
+                LB_SETITEMHEIGHT, LBN_DBLCLK, LBN_SELCHANGE, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT,
+                LBS_NOTIFY, LBS_OWNERDRAWFIXED, LBS_WANTKEYBOARDINPUT, LoadCursorW, RemovePropW,
+                SM_CXVSCROLL, SendMessageW, SetCursor, SetPropW, SetWindowTextW, UISF_HIDEACCEL,
+                UISF_HIDEFOCUS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR, WM_CTLCOLOREDIT,
+                WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_ERASEBKGND, WM_GETDLGCODE,
+                WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCPAINT,
+                WM_PAINT, WM_QUERYUISTATE, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW,
+                WM_SIZE, WM_TIMER, WM_UPDATEUISTATE, WM_VKEYTOITEM, WS_BORDER, WS_CHILD,
+                WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_HSCROLL, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -143,6 +141,8 @@ pub struct ButtonSpec {
     pub kind: ButtonKind,
     /// `TextAlign`.
     pub align: Align,
+    /// Icon-font glyph drawn before the text (`DESIGN.md` section 14), tinted like the text.
+    pub icon: Option<char>,
 }
 
 impl ButtonSpec {
@@ -152,7 +152,14 @@ impl ButtonSpec {
             font: theme::BUTTON_FONT,
             kind,
             align: Align::MiddleCenter,
+            icon: None,
         }
+    }
+
+    /// Adds an icon glyph before the text.
+    pub fn icon(mut self, glyph: char) -> Self {
+        self.icon = Some(glyph);
+        self
     }
 
     /// The window's main action (`Buttons.ApplyStyle(button, ButtonVariant.Primary)`).
@@ -193,6 +200,9 @@ pub struct LabelSpec {
     pub align: Align,
     /// `AutoEllipsis`.
     pub ellipsis: bool,
+    /// Every character is an icon-font glyph drawn centered on the same spot (a layered
+    /// status icon, `DESIGN.md` 15).
+    pub stacked: bool,
 }
 
 impl LabelSpec {
@@ -205,7 +215,14 @@ impl LabelSpec {
             fore,
             align: Align::MiddleLeft,
             ellipsis: false,
+            stacked: false,
         }
+    }
+
+    /// Draws the characters stacked on one spot (icon-font layers).
+    pub fn stacked(mut self) -> Self {
+        self.stacked = true;
+        self
     }
 
     /// Sets `TextAlign`.
@@ -298,6 +315,11 @@ pub enum Ctl {
     CheckedList(ListSpec),
     /// `ProgressBar` with `ProgressBarStyle.Continuous`, range 0 to 100.
     Progress,
+    /// The loading indicator (`DESIGN.md` 8.9): a ring with a turning arc, drawn by the form's
+    /// timer; static when Windows animations are off.
+    Spinner,
+    /// The app icon (resource 1) at the node's size.
+    AppIcon,
 }
 
 impl Ctl {
@@ -308,7 +330,15 @@ impl Ctl {
             Ctl::Label(l) => l.font,
             Ctl::Edit(e) => e.font,
             Ctl::CheckedList(l) => l.font,
-            Ctl::Progress => theme::DEFAULT_FONT,
+            Ctl::Progress | Ctl::Spinner | Ctl::AppIcon => theme::DEFAULT_FONT,
+        }
+    }
+
+    /// The icon font of a button with an icon.
+    pub fn icon_font(&self) -> Option<FontSpec> {
+        match self {
+            Ctl::Button(b) if b.icon.is_some() => Some(theme::icon_font(theme::ICON_PX)),
+            _ => None,
         }
     }
 
@@ -320,6 +350,20 @@ impl Ctl {
             Ctl::Edit(_) => (theme::DEFAULT_MARGIN, theme::TEXT_BOX_DEFAULT_SIZE),
             Ctl::CheckedList(_) => (theme::DEFAULT_MARGIN, theme::LIST_BOX_DEFAULT_SIZE),
             Ctl::Progress => (theme::DEFAULT_MARGIN, theme::PROGRESS_BAR_DEFAULT_SIZE),
+            Ctl::Spinner => (
+                theme::NO_PAD,
+                Size {
+                    w: theme::SPINNER_SIZE,
+                    h: theme::SPINNER_SIZE,
+                },
+            ),
+            Ctl::AppIcon => (
+                theme::NO_PAD,
+                Size {
+                    w: theme::UPDATE_ICON_SIZE,
+                    h: theme::UPDATE_ICON_SIZE,
+                },
+            ),
         }
     }
 }
@@ -759,6 +803,25 @@ fn draw_text(
     }
 }
 
+/// Draws one icon-font glyph centered in `bounds` (no WinForms overhang margins).
+fn draw_glyph(hdc: HDC, glyph: char, font: HFONT, bounds: Rect, color: Color) {
+    let mut buf: Vec<u16> = glyph.to_string().encode_utf16().collect();
+    let _sel = Select::new(hdc, font);
+    let mut rc = rect(bounds);
+    // SAFETY: Plain DC state changes and a draw call with valid buffers.
+    unsafe {
+        SetTextColor(hdc, color.colorref());
+        SetBkMode(hdc, TRANSPARENT);
+        DrawTextExW(
+            hdc,
+            &mut buf,
+            &mut rc,
+            DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX,
+            None,
+        );
+    }
+}
+
 /// Paints into an off-screen buffer and copies it to `hdc` in one step (no flicker).
 fn buffered(hdc: HDC, area: Rect, paint: impl FnOnce(HDC)) {
     BUFFERED_PAINT.with(|_| {});
@@ -917,6 +980,20 @@ pub(crate) fn paint_focus_ring(parent: HWND, hdc: HDC, background: Color) {
     );
 }
 
+/// Paints a container as a card: `fill` with a 1 px `BORDER` outline, rounded by `radius`
+/// device pixels, over `outer` (the parent's color under the corners).
+pub(crate) fn paint_card(hwnd: HWND, hdc: HDC, outer: Color, fill_color: Color, radius: i32) {
+    let area = client(hwnd);
+    rounded_rect(
+        hdc,
+        area,
+        radius,
+        outer,
+        Some(fill_color),
+        Some(theme::BORDER),
+    );
+}
+
 /// The focus ring rectangle (parent coordinates) of a kit button that has the focus, for the
 /// layout pass to repaint when the button moves.
 pub(crate) fn focused_ring(hwnd: HWND) -> Option<RECT> {
@@ -942,12 +1019,33 @@ struct ButtonData {
     hover: Cell<bool>,
     /// Sidebar item of the shown section (C# finds it by its `BackColor`).
     active: Cell<bool>,
+    /// Sidebar item whose section is not collected yet (`FAINT` text while loading).
+    pending: Cell<bool>,
 }
 
 struct EditData {
     spec: EditSpec,
     brush: Brush,
+    /// Widest line in device pixels (kept while appending; remeasured on a text change).
+    longest: Cell<i32>,
+    /// Re-entrancy guard: showing a bar sends WM_SIZE to the edit.
+    updating_bars: Cell<bool>,
 }
+
+struct SpinnerData {
+    /// Windows "Show animations" at creation; false = the arc stays at its start angle.
+    animate: bool,
+}
+
+struct ProgressData {
+    /// `ProgressBar.Value` (0 to 100).
+    pos: Cell<i32>,
+    /// `ProgressBarStyle.Marquee`: a control timer repaints the moving block.
+    marquee: Cell<bool>,
+}
+
+/// The marquee timer id on a progress control.
+const MARQUEE_TIMER: usize = 1;
 
 struct ListData {
     spec: ListSpec,
@@ -961,7 +1059,9 @@ enum Data {
     Label(RefCell<LabelSpec>),
     Edit(EditData),
     List(ListData),
-    Progress,
+    Progress(ProgressData),
+    Spinner(SpinnerData),
+    AppIcon,
 }
 
 /// Per-control state, owned by the control's subclass (dropped on `WM_NCDESTROY`).
@@ -969,10 +1069,30 @@ pub(crate) struct CtlState {
     id: u16,
     hwnd: HWND,
     font: Cell<HFONT>,
+    /// The icon font of a button with an icon (0 otherwise).
+    icon_font: Cell<HFONT>,
     dpi: Cell<u32>,
     padding: Cell<Pad>,
     back: Cell<Color>,
     data: Data,
+}
+
+/// Windows "Show animations in Windows" (`SPI_GETCLIENTAREAANIMATION`); true when unknown.
+pub fn animations_enabled() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+    };
+    let mut on = windows::core::BOOL(1);
+    // SAFETY: Writable BOOL out-parameter sized as the query requires.
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some((&mut on as *mut windows::core::BOOL).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    ok.is_err() || on.as_bool()
 }
 
 /// Returns the state of a kit control, or `None` for any other window.
@@ -1004,6 +1124,7 @@ pub(crate) fn create(
     node: &Node,
     back: Color,
     font: HFONT,
+    icon_font: HFONT,
     dpi: u32,
 ) -> win::Result<HWND> {
     let Kind::Leaf(ctl) = &node.kind else {
@@ -1026,6 +1147,7 @@ pub(crate) fn create(
                 spec: RefCell::new(b.clone()),
                 hover: Cell::new(false),
                 active: Cell::new(false),
+                pending: Cell::new(false),
             }),
         ),
         Ctl::Label(l) => (
@@ -1058,6 +1180,8 @@ pub(crate) fn create(
                 Data::Edit(EditData {
                     spec: e.clone(),
                     brush: Brush::new(e.back),
+                    longest: Cell::new(0),
+                    updating_bars: Cell::new(false),
                 }),
             )
         }
@@ -1082,12 +1206,25 @@ pub(crate) fn create(
             }),
         ),
         Ctl::Progress => (
-            PROGRESS_CLASSW,
+            WC_STATICW,
             "",
-            base | WINDOW_STYLE(PBS_SMOOTH),
+            base,
             WINDOW_EX_STYLE(0),
-            Data::Progress,
+            Data::Progress(ProgressData {
+                pos: Cell::new(0),
+                marquee: Cell::new(false),
+            }),
         ),
+        Ctl::Spinner => (
+            WC_STATICW,
+            "",
+            base,
+            WINDOW_EX_STYLE(0),
+            Data::Spinner(SpinnerData {
+                animate: animations_enabled(),
+            }),
+        ),
+        Ctl::AppIcon => (WC_STATICW, "", base, WINDOW_EX_STYLE(0), Data::AppIcon),
     };
     let text = to_wide(text);
     // SAFETY: Class names are static, the text buffer is NUL-terminated and outlives the call,
@@ -1113,6 +1250,7 @@ pub(crate) fn create(
         id,
         hwnd,
         font: Cell::new(font),
+        icon_font: Cell::new(icon_font),
         dpi: Cell::new(dpi),
         padding: Cell::new(padding),
         back: Cell::new(back),
@@ -1150,14 +1288,13 @@ pub(crate) fn create(
     match ctl {
         Ctl::Edit(_) => {
             send(hwnd, EM_SETLIMITTEXT, 0, 0);
+            edit_set_margins(hwnd, dpi);
+            edit_update_bars(hwnd);
         }
         Ctl::CheckedList(_) => {
             if let Some(st) = state_of(hwnd) {
                 st.update_item_height();
             }
-        }
-        Ctl::Progress => {
-            send(hwnd, PBM_SETRANGE32, 0, 100);
         }
         _ => {}
     }
@@ -1227,13 +1364,32 @@ impl CtlState {
                 invalidate_ring(self);
                 None
             }
-            (Data::Button(_) | Data::Label(_) | Data::Progress, WM_ERASEBKGND) => Some(LRESULT(1)),
+            (
+                Data::Button(_)
+                | Data::Label(_)
+                | Data::Progress(_)
+                | Data::Spinner(_)
+                | Data::AppIcon,
+                WM_ERASEBKGND,
+            ) => Some(LRESULT(1)),
             (Data::Label(_), WM_PAINT) => {
                 self.paint_label();
                 Some(LRESULT(0))
             }
-            (Data::Progress, WM_PAINT) => {
-                self.paint_progress();
+            (Data::Progress(p), WM_PAINT) => {
+                self.paint_progress(p);
+                Some(LRESULT(0))
+            }
+            (Data::Progress(_), WM_TIMER) => {
+                invalidate(hwnd);
+                Some(LRESULT(0))
+            }
+            (Data::Spinner(s), WM_PAINT) => {
+                self.paint_spinner(s);
+                Some(LRESULT(0))
+            }
+            (Data::AppIcon, WM_PAINT) => {
+                self.paint_app_icon();
                 Some(LRESULT(0))
             }
             (Data::Edit(_) | Data::List(_), WM_NCPAINT) => {
@@ -1291,6 +1447,15 @@ impl CtlState {
                 // C# parity: TextBox handles Ctrl+A as select all.
                 send(hwnd, EM_SETSEL, 0, -1);
                 Some(LRESULT(0))
+            }
+            (Data::Edit(_), WM_SIZE | WM_SETFONT) => {
+                // The native edit re-shows its scroll bars and resets its margins on both.
+                let r = def(hwnd, msg, wparam, lparam);
+                if msg == WM_SETFONT {
+                    edit_set_margins(hwnd, self.dpi.get());
+                }
+                edit_update_bars(hwnd);
+                Some(r)
             }
             (Data::Edit(_), WM_CHAR) if wparam.0 == 1 => Some(LRESULT(0)),
             (Data::List(l), WM_LBUTTONDOWN) => {
@@ -1430,6 +1595,8 @@ impl CtlState {
                 },
                 if b.active.get() {
                     theme::SIDEBAR_ITEM_ACTIVE_TEXT
+                } else if b.pending.get() {
+                    theme::DISABLED_TEXT
                 } else {
                     theme::SIDEBAR_ITEM_TEXT
                 },
@@ -1437,30 +1604,83 @@ impl CtlState {
             ),
         };
         let bs = theme::BUTTON_BORDER_SIZE;
-        let radius = dpi::scale(theme::BUTTON_RADIUS, self.dpi.get());
+        let dpi = self.dpi.get();
+        let radius = dpi::scale(theme::BUTTON_RADIUS, dpi);
         buffered(hdc, area, |hdc| {
             rounded_rect(hdc, area, radius, container, Some(fill_color), border);
+            if spec.kind == ButtonKind::Sidebar && b.active.get() {
+                // The accent bar of the active item (DESIGN.md 6): inside the item's left edge.
+                let inset = dpi::scale(theme::SIDEBAR_ACCENT_INSET, dpi);
+                let bar = Rect {
+                    x: area.x,
+                    y: area.y + inset,
+                    w: dpi::scale(theme::SIDEBAR_ACCENT_WIDTH, dpi),
+                    h: (area.h - 2 * inset).max(0),
+                };
+                rounded_rect(hdc, bar, 1, fill_color, Some(theme::TEXT), None);
+            }
             // Text layout: Client = client - Padding; Face = Client - border; Field = Face - 2.
+            // A sidebar item has no border and no WinForms image inset: its padding is the
+            // whole inset, so the caption gets the full width (DESIGN.md 11.3).
             let pad = self.padding.get();
-            let field = area.deflate(pad).deflate(Pad {
-                l: bs + 2,
-                t: bs + 2,
-                r: bs + 2,
-                b: bs + 2,
+            let inset = if spec.kind == ButtonKind::Sidebar {
+                0
+            } else {
+                bs + 2 + TEXT_IMAGE_INSET
+            };
+            let mut max_bounds = area.deflate(pad).deflate(Pad {
+                l: inset,
+                t: inset,
+                r: inset,
+                b: inset,
             });
-            let max_bounds = field.deflate(Pad {
-                l: TEXT_IMAGE_INSET,
-                t: TEXT_IMAGE_INSET,
-                r: TEXT_IMAGE_INSET,
-                b: TEXT_IMAGE_INSET,
-            });
-            let mut flags = align_flags(spec.align) | DT_WORDBREAK | DT_EDITCONTROL;
+            // Sidebar items are one line with an end ellipsis (DESIGN.md 8.7, 11.3); other
+            // buttons keep the WinForms word break.
+            let mut flags = if spec.kind == ButtonKind::Sidebar {
+                align_flags(spec.align) | DT_SINGLELINE | DT_END_ELLIPSIS
+            } else {
+                align_flags(spec.align) | DT_WORDBREAK | DT_EDITCONTROL
+            };
             if !show_accel {
                 flags |= DT_HIDEPREFIX;
             }
             let font = self.font.get();
-            let size = measure_text(hdc, &spec.text, font, max_bounds.size(), flags);
-            let text_bounds = align_in(size, max_bounds, spec.align);
+            let icon = spec.icon.filter(|_| !self.icon_font.get().is_invalid());
+            let icon_w = if icon.is_some() {
+                dpi::scale(theme::ICON_PX, dpi) + dpi::scale(theme::ICON_GAP, dpi)
+            } else {
+                0
+            };
+            let text_avail = Size {
+                w: (max_bounds.w - icon_w).max(1),
+                h: max_bounds.h,
+            };
+            let size = measure_text(hdc, &spec.text, font, text_avail, flags);
+            // Icon and text are placed as one block (centered or left, per TextAlign).
+            let block = align_in(
+                Size {
+                    w: (size.w + icon_w).min(max_bounds.w),
+                    h: size.h,
+                },
+                max_bounds,
+                spec.align,
+            );
+            if let Some(glyph) = icon {
+                let icon_px = dpi::scale(theme::ICON_PX, dpi);
+                let icon_rect = Rect {
+                    x: block.x,
+                    y: max_bounds.y + (max_bounds.h - icon_px) / 2,
+                    w: icon_px,
+                    h: icon_px,
+                };
+                draw_glyph(hdc, glyph, self.icon_font.get(), icon_rect, text_color);
+                max_bounds.x = block.x + icon_w;
+                max_bounds.w = (block.right() - max_bounds.x).max(1);
+            } else {
+                max_bounds.x = block.x;
+                max_bounds.w = block.w;
+            }
+            let text_bounds = align_in(size, max_bounds, Align::MiddleLeft);
             draw_text(hdc, &spec.text, font, text_bounds, text_color, flags);
         });
     }
@@ -1501,6 +1721,12 @@ impl CtlState {
         let back = self.back.get();
         buffered(hdc, area, |hdc| {
             fill(hdc, area, back);
+            if spec.stacked {
+                for glyph in spec.text.chars() {
+                    draw_glyph(hdc, glyph, self.font.get(), face, spec.fore);
+                }
+                return;
+            }
             let flags = self.label_flags(&spec, hdc, face.size());
             draw_text(hdc, &spec.text, self.font.get(), face, spec.fore, flags);
         });
@@ -1508,17 +1734,15 @@ impl CtlState {
 
     // -- progress --------------------------------------------------------------------------
 
-    /// `HOVER` track and `TEXT` fill (the themed bar ignores colors, the classic one adds a
-    /// sunken edge). The native control still owns the value and the marquee timer; a marquee
-    /// shows a third-width block that moves with the clock.
-    fn paint_progress(&self) {
+    /// A pill: `HOVER` track and `TEXT` fill, both rounded by half the height (the themed bar
+    /// ignores colors, the classic one adds a sunken edge). The native control still owns the
+    /// value and the marquee timer; a marquee shows a third-width block that moves with the
+    /// clock.
+    fn paint_progress(&self, p: &ProgressData) {
         let paint = Paint::begin(self.hwnd);
         let area = client(self.hwnd);
-        let pos = send(self.hwnd, PBM_GETPOS, 0, 0).0.clamp(0, 100) as i32;
-        // SAFETY: Reads the style of our own control.
-        let marquee =
-            unsafe { GetWindowLongPtrW(self.hwnd, GWL_STYLE) } & PBS_MARQUEE as isize != 0;
-        let bar = if marquee {
+        let pos = p.pos.get().clamp(0, 100);
+        let bar = if p.marquee.get() {
             let block = area.w / 3;
             // SAFETY: Plain tick count query.
             let tick = unsafe { GetTickCount() } as i32;
@@ -1539,10 +1763,170 @@ impl CtlState {
                 h: area.h,
             }
         };
+        let container = self.back.get();
         buffered(paint.hdc(), area, |hdc| {
-            fill(hdc, area, theme::PROGRESS_TRACK);
-            fill(hdc, bar, theme::PROGRESS_FILL);
+            let Some(mut pixmap) =
+                tiny_skia::Pixmap::new(area.w.max(0) as u32, area.h.max(0) as u32)
+            else {
+                return;
+            };
+            pixmap.fill(skia_color(container));
+            let id = tiny_skia::Transform::identity();
+            let radius = area.h / 2;
+            if let Some(track) = rounded(area, radius, 0.0) {
+                pixmap.fill_path(
+                    &track,
+                    &skia_paint(theme::PROGRESS_TRACK),
+                    tiny_skia::FillRule::Winding,
+                    id,
+                    None,
+                );
+                // The fill is clipped by the track's own shape (a mask of the track path).
+                let visible = Rect {
+                    x: bar.x.max(0),
+                    y: 0,
+                    w: (bar.right().min(area.w) - bar.x.max(0)).max(0),
+                    h: area.h,
+                };
+                if visible.w > 0
+                    && let Some(fill_path) = rounded(visible, radius, 0.0)
+                    && let Some(mut mask) = tiny_skia::Mask::new(pixmap.width(), pixmap.height())
+                {
+                    mask.fill_path(&track, tiny_skia::FillRule::Winding, true, id);
+                    pixmap.fill_path(
+                        &fill_path,
+                        &skia_paint(theme::PROGRESS_FILL),
+                        tiny_skia::FillRule::Winding,
+                        id,
+                        Some(&mask),
+                    );
+                }
+            }
+            blit(hdc, 0, 0, &pixmap);
         });
+    }
+
+    // -- spinner and app icon ---------------------------------------------------------------
+
+    /// A `BORDER` ring with a `TEXT` quarter arc; the angle follows the clock while the form's
+    /// timer repaints it (`Form::spin`), and stays at the start when animations are off.
+    fn paint_spinner(&self, s: &SpinnerData) {
+        let paint = Paint::begin(self.hwnd);
+        let area = client(self.hwnd);
+        let container = self.back.get();
+        let dpi = self.dpi.get();
+        let stroke = dpi::scale(theme::SPINNER_STROKE, dpi) as f32;
+        let angle = if s.animate {
+            // SAFETY: Plain tick count query.
+            let tick = unsafe { GetTickCount() } as i32;
+            (tick.rem_euclid(theme::SPINNER_TURN_MS)) as f32 * 360.0 / theme::SPINNER_TURN_MS as f32
+        } else {
+            0.0
+        };
+        buffered(paint.hdc(), area, |hdc| {
+            let Some(mut pixmap) =
+                tiny_skia::Pixmap::new(area.w.max(0) as u32, area.h.max(0) as u32)
+            else {
+                return;
+            };
+            pixmap.fill(skia_color(container));
+            let d = area.w.min(area.h) as f32;
+            let (cx, cy) = (area.w as f32 / 2.0, area.h as f32 / 2.0);
+            let r = (d - stroke) / 2.0;
+            if r <= 0.0 {
+                return;
+            }
+            let id = tiny_skia::Transform::identity();
+            let paint_stroke = |color: Color, cap: tiny_skia::LineCap| {
+                (
+                    skia_paint(color),
+                    tiny_skia::Stroke {
+                        width: stroke,
+                        line_cap: cap,
+                        ..Default::default()
+                    },
+                )
+            };
+            // Ring: a full circle.
+            let mut pb = tiny_skia::PathBuilder::new();
+            pb.push_circle(cx, cy, r);
+            if let Some(ring) = pb.finish() {
+                let (p, st) = paint_stroke(theme::BORDER, tiny_skia::LineCap::Butt);
+                pixmap.stroke_path(&ring, &p, &st, id, None);
+            }
+            // Arc: a quarter turn starting at `angle`, built from 12 short segments.
+            let mut pb = tiny_skia::PathBuilder::new();
+            let steps = 12;
+            for i in 0..=steps {
+                let a = (angle + 90.0 * i as f32 / steps as f32).to_radians();
+                let (x, y) = (cx + r * a.cos(), cy + r * a.sin());
+                if i == 0 {
+                    pb.move_to(x, y);
+                } else {
+                    pb.line_to(x, y);
+                }
+            }
+            if let Some(arc) = pb.finish() {
+                let (p, st) = paint_stroke(theme::TEXT, tiny_skia::LineCap::Round);
+                pixmap.stroke_path(&arc, &p, &st, id, None);
+            }
+            blit(hdc, 0, 0, &pixmap);
+        });
+    }
+
+    /// The app icon (resource 1) scaled to the control, over the container color.
+    fn paint_app_icon(&self) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DI_NORMAL, DrawIconEx, HICON, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR, LoadImageW,
+        };
+        let paint = Paint::begin(self.hwnd);
+        let area = client(self.hwnd);
+        let container = self.back.get();
+        let size = area.w.min(area.h);
+        // SAFETY: Module handle of this process; the icon is a shared resource handle.
+        let icon = unsafe {
+            let instance =
+                windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
+            LoadImageW(
+                Some(instance.into()),
+                PCWSTR(std::ptr::without_provenance(1)),
+                IMAGE_ICON,
+                size,
+                size,
+                LR_DEFAULTCOLOR,
+            )
+        }
+        .map(|h| HICON(h.0));
+        // Without the resource (the test exe has none) the stock application icon stands in,
+        // which is also what the title bar shows then.
+        let shared = icon.is_err();
+        let icon = icon.or_else(|_| {
+            // SAFETY: Loads the shared stock application icon.
+            unsafe { windows::Win32::UI::WindowsAndMessaging::LoadIconW(None, IDI_APPLICATION) }
+        });
+        let hdc = paint.hdc();
+        {
+            fill(hdc, area, container);
+            if let Ok(icon) = icon {
+                // SAFETY: Draws a valid icon into the paint DC; no ownership transfer.
+                unsafe {
+                    let _ = DrawIconEx(
+                        hdc,
+                        (area.w - size) / 2,
+                        (area.h - size) / 2,
+                        icon,
+                        size,
+                        size,
+                        0,
+                        None,
+                        DI_NORMAL,
+                    );
+                    if !shared {
+                        let _ = windows::Win32::UI::WindowsAndMessaging::DestroyIcon(icon);
+                    }
+                }
+            }
+        }
     }
 
     // -- checked list ----------------------------------------------------------------------
@@ -1791,14 +2175,26 @@ pub(crate) fn reflect(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<Reflec
 // ---------------------------------------------------------------------------------------------
 
 /// Preferred size of an auto-sized leaf (`GetPreferredSizeCore`), before min/max clamping.
-pub(crate) fn measure(ctl: &Ctl, font: HFONT, padding: Pad, min: Size, proposed: Size) -> Size {
+pub(crate) fn measure(
+    ctl: &Ctl,
+    font: HFONT,
+    padding: Pad,
+    min: Size,
+    proposed: Size,
+    dpi: u32,
+) -> Size {
     let dc = ScreenDc::new();
     match ctl {
         Ctl::Button(b) => {
             // ButtonFlatAdapter.PaintFlatLayout(up: false, check: true): border + 1, padding 1,
-            // plus 2 for GrowBorderBy1PxWhenDefault.
-            let linear = (theme::BUTTON_BORDER_SIZE + 1) * 2 + 2 + 2;
-            let inset = TEXT_IMAGE_INSET * 2;
+            // plus 2 for GrowBorderBy1PxWhenDefault. Sidebar items have neither (see paint).
+            let sidebar = b.kind == ButtonKind::Sidebar;
+            let linear = if sidebar {
+                0
+            } else {
+                (theme::BUTTON_BORDER_SIZE + 1) * 2 + 2 + 2
+            };
+            let inset = if sidebar { 0 } else { TEXT_IMAGE_INSET * 2 };
             // Prefix processing hides `&` with or without cues, so the width is the same.
             let flags = align_flags(b.align) | DT_EDITCONTROL | DT_HIDEPREFIX;
             let avail = Size {
@@ -1806,7 +2202,7 @@ pub(crate) fn measure(ctl: &Ctl, font: HFONT, padding: Pad, min: Size, proposed:
                 h: proposed.h.saturating_sub(linear + inset),
             };
             let text = measure_text(dc.0, &b.text, font, avail, flags);
-            let text = if b.text.is_empty() {
+            let mut text = if b.text.is_empty() {
                 Size::default()
             } else {
                 Size {
@@ -1814,6 +2210,10 @@ pub(crate) fn measure(ctl: &Ctl, font: HFONT, padding: Pad, min: Size, proposed:
                     h: text.h + inset,
                 }
             };
+            if b.icon.is_some() {
+                text.w += dpi::scale(theme::ICON_PX, dpi) + dpi::scale(theme::ICON_GAP, dpi);
+                text.h = text.h.max(dpi::scale(theme::ICON_PX, dpi) + inset);
+            }
             Size {
                 w: (text.w + linear + padding.horizontal()).max(min.w),
                 h: (text.h + linear + padding.vertical()).max(min.h),
@@ -1866,6 +2266,7 @@ pub(crate) fn measure_live(
     padding: Pad,
     min: Size,
     proposed: Size,
+    dpi: u32,
 ) -> Size {
     let mut ctl = declared.clone();
     if let Some(state) = state_of(hwnd) {
@@ -1875,24 +2276,164 @@ pub(crate) fn measure_live(
             _ => {}
         }
     }
-    measure(&ctl, font, padding, min, proposed)
+    measure(&ctl, font, padding, min, proposed, dpi)
 }
 
 // ---------------------------------------------------------------------------------------------
 // Public operations (used through `window::Form`)
 // ---------------------------------------------------------------------------------------------
 
-/// Applies a new font, padding, and DPI after a DPI change.
-pub(crate) fn apply_dpi(hwnd: HWND, font: HFONT, padding: Pad, dpi: u32) {
+/// Applies new fonts, padding, and DPI after a DPI change.
+pub(crate) fn apply_dpi(hwnd: HWND, font: HFONT, icon_font: HFONT, padding: Pad, dpi: u32) {
     if let Some(st) = state_of(hwnd) {
         st.font.set(font);
+        st.icon_font.set(icon_font);
         st.padding.set(padding);
         st.dpi.set(dpi);
         // The form invalidates after the DPI layout; avoid drawing halfway through re-fonting.
+        // (The edit subclass re-applies its margins and scroll bars on WM_SETFONT.)
         send(hwnd, WM_SETFONT, font.0 as usize, 0);
         st.update_item_height();
         invalidate(hwnd);
     }
+}
+
+/// Marks a sidebar item as not collected yet (`FAINT` text) or collected.
+pub fn set_pending(hwnd: HWND, pending: bool) {
+    if let Some(st) = state_of(hwnd)
+        && let Data::Button(b) = &st.data
+        && b.pending.get() != pending
+    {
+        b.pending.set(pending);
+        invalidate(hwnd);
+    }
+}
+
+/// Repaints a spinner (called by the form's timer while a load runs).
+pub fn spin(hwnd: HWND) {
+    invalidate(hwnd);
+}
+
+/// Whether a spinner animates (false when Windows "Show animations" is off).
+pub fn spinner_animates(hwnd: HWND) -> bool {
+    state_of(hwnd).is_some_and(|s| match &s.data {
+        Data::Spinner(sp) => sp.animate,
+        _ => false,
+    })
+}
+
+/// Inner left and right margins of a text well (`EM_SETMARGINS`, DESIGN.md 4).
+fn edit_set_margins(hwnd: HWND, dpi: u32) {
+    use windows::Win32::UI::Controls::EM_SETMARGINS;
+    use windows::Win32::UI::WindowsAndMessaging::{EC_LEFTMARGIN, EC_RIGHTMARGIN};
+    let m = dpi::scale(theme::EDIT_INNER_MARGIN, dpi) as usize;
+    send(
+        hwnd,
+        EM_SETMARGINS,
+        (EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize,
+        (m | (m << 16)) as isize,
+    );
+}
+
+/// Widest line of `text` in device pixels with the edit's font.
+fn widest_line(font: HFONT, text: &str) -> i32 {
+    use windows::Win32::Foundation::SIZE;
+    use windows::Win32::Graphics::Gdi::GetTextExtentPoint32W;
+    let dc = ScreenDc::new();
+    let _sel = Select::new(dc.0, font);
+    text.lines()
+        .map(|line| {
+            let wide: Vec<u16> = line.encode_utf16().collect();
+            let mut size = SIZE::default();
+            // SAFETY: Valid DC with the font selected; `wide` and `size` live for the call.
+            unsafe {
+                let _ = GetTextExtentPoint32W(dc.0, &wide, &mut size);
+            }
+            size.cx
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Shows each scroll bar of a text well only when its text needs it (DESIGN.md 4). The
+/// native edit shows both bars always; `longest` is kept across appends.
+pub(crate) fn edit_update_bars(hwnd: HWND) {
+    use windows::Win32::UI::Controls::{EM_GETLINECOUNT, ShowScrollBar};
+    use windows::Win32::UI::WindowsAndMessaging::{SB_HORZ, SB_VERT, SM_CYHSCROLL};
+    let Some(st) = state_of(hwnd) else {
+        return;
+    };
+    let Data::Edit(e) = &st.data else {
+        return;
+    };
+    if e.updating_bars.replace(true) {
+        return;
+    }
+    struct Done<'a>(&'a Cell<bool>);
+    impl Drop for Done<'_> {
+        fn drop(&mut self) {
+            self.0.set(false);
+        }
+    }
+    let _done = Done(&e.updating_bars);
+    let dpi = st.dpi.get();
+    // Window size minus the native frame: the client size with no scroll bars.
+    let mut rc = RECT::default();
+    let mut origin = POINT::default();
+    // SAFETY: Writable RECT and POINT of our own window.
+    let known = unsafe {
+        GetWindowRect(hwnd, &mut rc).is_ok() && ClientToScreen(hwnd, &mut origin).as_bool()
+    };
+    if !known {
+        return;
+    }
+    let frame = origin.x - rc.left;
+    let full_w = rc.right - rc.left - 2 * frame;
+    let full_h = rc.bottom - rc.top - 2 * frame;
+    let font = st.font.get();
+    let dc = ScreenDc::new();
+    let mut tm = TEXTMETRICW::default();
+    {
+        let _sel = Select::new(dc.0, font);
+        // SAFETY: `tm` is writable; the DC has the font selected.
+        let _ = unsafe { GetTextMetricsW(dc.0, &mut tm) };
+    }
+    let line_h = (tm.tmHeight + tm.tmExternalLeading).max(1);
+    let lines = send(hwnd, EM_GETLINECOUNT, 0, 0).0 as i32;
+    let text_h = lines * line_h;
+    let margins = 2 * dpi::scale(theme::EDIT_INNER_MARGIN, dpi);
+    let text_w = e.longest.get() + margins + 2;
+    let bar_w = dpi::metric(SM_CXVSCROLL, dpi);
+    let bar_h = dpi::metric(SM_CYHSCROLL, dpi);
+    let horizontal_possible = !e.spec.word_wrap;
+    let mut vertical = text_h > full_h;
+    let horizontal = horizontal_possible && text_w > full_w - if vertical { bar_w } else { 0 };
+    if horizontal {
+        vertical = text_h > full_h - bar_h;
+    }
+    // SAFETY: Scroll bar visibility changes on our own control.
+    unsafe {
+        let _ = ShowScrollBar(hwnd, SB_VERT, vertical);
+        if horizontal_possible {
+            let _ = ShowScrollBar(hwnd, SB_HORZ, horizontal);
+        }
+    }
+}
+
+/// Copies the whole text of a read-only edit to the clipboard, keeping its selection.
+pub fn edit_copy_all(hwnd: HWND) {
+    use windows::Win32::UI::Controls::EM_GETSEL;
+    use windows::Win32::UI::WindowsAndMessaging::WM_COPY;
+    let (mut start, mut end) = (0u32, 0u32);
+    send(
+        hwnd,
+        EM_GETSEL,
+        &mut start as *mut u32 as usize,
+        &mut end as *mut u32 as isize,
+    );
+    send(hwnd, EM_SETSEL, 0, -1);
+    send(hwnd, WM_COPY, 0, 0);
+    send(hwnd, EM_SETSEL, start as usize, end as isize);
 }
 
 /// Whether `hwnd` is a kit button.
@@ -1988,10 +2529,22 @@ pub fn edit_set_text(hwnd: HWND, text: &str) {
     unsafe {
         let _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
     }
+    if let Some(st) = state_of(hwnd)
+        && let Data::Edit(e) = &st.data
+    {
+        e.longest.set(widest_line(st.font.get(), text));
+    }
+    edit_update_bars(hwnd);
 }
 
 /// `TextBox.AppendText` + `SelectionStart = TextLength` + `ScrollToCaret`.
 pub fn edit_append(hwnd: HWND, text: &str) {
+    append_raw(hwnd, text);
+    edit_update_bars(hwnd);
+    send(hwnd, EM_SCROLLCARET, 0, 0);
+}
+
+fn append_raw(hwnd: HWND, text: &str) {
     let wide = to_wide(text);
     // SAFETY: Length query on our edit.
     let len = unsafe { GetWindowTextLengthW(hwnd) } as usize;
@@ -2000,15 +2553,22 @@ pub fn edit_append(hwnd: HWND, text: &str) {
     // SAFETY: Length query on our edit.
     let len = unsafe { GetWindowTextLengthW(hwnd) } as usize;
     send(hwnd, EM_SETSEL, len, len as isize);
-    send(hwnd, EM_SCROLLCARET, 0, 0);
+    if let Some(st) = state_of(hwnd)
+        && let Data::Edit(e) = &st.data
+    {
+        // The last line before the append may have grown: measure it with the new text.
+        let w = widest_line(st.font.get(), text);
+        e.longest.set(e.longest.get().max(w));
+    }
 }
 
 /// Appends many chunks with redraw off, then repaints once (bulk status output).
 pub fn edit_append_batch(hwnd: HWND, chunks: &[&str]) {
     send(hwnd, WM_SETREDRAW, 0, 0);
     for c in chunks {
-        edit_append(hwnd, c);
+        append_raw(hwnd, c);
     }
+    edit_update_bars(hwnd);
     send(hwnd, WM_SETREDRAW, 1, 0);
     // SAFETY: Repaint request for our own control, including its frame and scroll bars.
     unsafe {
@@ -2074,20 +2634,34 @@ pub fn list_set_checked(hwnd: HWND, index: usize, checked: bool) {
 
 /// `ProgressBar.Value`.
 pub fn progress_set(hwnd: HWND, value: u32) {
-    send(hwnd, PBM_SETPOS, value.min(100) as usize, 0);
+    if let Some(st) = state_of(hwnd)
+        && let Data::Progress(p) = &st.data
+    {
+        p.pos.set(value.min(100) as i32);
+        invalidate(hwnd);
+    }
 }
 
-/// `ProgressBarStyle.Marquee` on or off.
+/// `ProgressBarStyle.Marquee` on or off (the control's own 30 ms timer moves the block).
 pub fn progress_marquee(hwnd: HWND, on: bool) {
-    // SAFETY: Reads and writes the style of our own progress bar.
-    unsafe {
-        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-        let style = if on {
-            style | PBS_MARQUEE as isize
-        } else {
-            style & !(PBS_MARQUEE as isize)
-        };
-        SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+    use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
+    if let Some(st) = state_of(hwnd)
+        && let Data::Progress(p) = &st.data
+    {
+        p.marquee.set(on);
+        // SAFETY: A timer on our own control window, no callback.
+        unsafe {
+            if on {
+                SetTimer(
+                    Some(hwnd),
+                    MARQUEE_TIMER,
+                    theme::MARQUEE_STEP_MS as u32,
+                    None,
+                );
+            } else {
+                let _ = KillTimer(Some(hwnd), MARQUEE_TIMER);
+            }
+        }
+        invalidate(hwnd);
     }
-    send(hwnd, PBM_SETMARQUEE, usize::from(on), 30);
 }

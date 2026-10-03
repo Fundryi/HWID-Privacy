@@ -70,8 +70,40 @@ fn face_for(spec: FontSpec) -> &'static str {
     }
 }
 
+/// The icon font face: `Segoe Fluent Icons` (Windows 11) or `Segoe MDL2 Assets` (Windows 10).
+/// Resolved once by creating the font and reading the face GDI really selected, because GDI
+/// substitutes a default font for an unknown face without an error.
+pub fn icon_face() -> &'static str {
+    static FACE: OnceLock<&'static str> = OnceLock::new();
+    FACE.get_or_init(|| {
+        const FLUENT: &str = "Segoe Fluent Icons";
+        let spec = FontSpec {
+            face: FLUENT,
+            points: 12.0,
+            weight: theme::REGULAR,
+        };
+        let Ok(font) = Font::new(spec, BASE_DPI) else {
+            return "Segoe MDL2 Assets";
+        };
+        let selected = font.selected_face();
+        if selected.eq_ignore_ascii_case(FLUENT) {
+            FLUENT
+        } else {
+            "Segoe MDL2 Assets"
+        }
+    })
+}
+
 /// The DPI at which every theme constant is defined.
 pub const BASE_DPI: u32 = 96;
+
+/// Converts a device length back to 96-DPI logical pixels (the inverse of [`scale`]).
+pub fn unscale(value: i32, dpi: u32) -> i32 {
+    if dpi == BASE_DPI {
+        return value;
+    }
+    (f64::from(value) * f64::from(BASE_DPI) / f64::from(dpi)).round_ties_even() as i32
+}
 
 /// Scales a 96-DPI length to `dpi`, rounding like WinForms `Math.Round` (ties to even).
 pub fn scale(value: i32, dpi: u32) -> i32 {
@@ -175,6 +207,24 @@ impl Font {
     /// The DPI this font was created for.
     pub fn dpi(&self) -> u32 {
         self.dpi
+    }
+
+    /// The face GDI selected for this font (empty when the query fails).
+    pub fn selected_face(&self) -> String {
+        use windows::Win32::Graphics::Gdi::{
+            CreateCompatibleDC, DeleteDC, GetTextFaceW, SelectObject,
+        };
+        let mut name = [0u16; 64];
+        // SAFETY: A memory DC owned by this call; the font is live; the buffer is writable.
+        let n = unsafe {
+            let dc = CreateCompatibleDC(None);
+            let old = SelectObject(dc, self.handle.into());
+            let n = GetTextFaceW(dc, Some(&mut name));
+            SelectObject(dc, old);
+            let _ = DeleteDC(dc);
+            n
+        };
+        String::from_utf16_lossy(&name[..(n.max(1) as usize - 1).min(name.len())])
     }
 }
 

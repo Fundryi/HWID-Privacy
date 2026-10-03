@@ -11,7 +11,7 @@
 //! C# end state held 500 ms, then the install. No network traffic after Yes.
 
 use super::controls::{self, Ctl, LabelSpec};
-use super::layout::Node;
+use super::layout::{Anchor, Node, Size, Track};
 use super::msgbox::{self, Answer, Buttons, Icon};
 use super::theme;
 use super::window::{Event, Form, FormSpec, FormStyle, StartPosition, WindowSize};
@@ -21,15 +21,18 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use windows::Win32::Foundation::HWND;
 
-// C# parity: UI/Forms/SectionedViewForm.cs:255,778,812.
-const UPDATES_TEXT: &str = "⟳ Updates";
-const CHECKING_TEXT: &str = "⟳ Checking...";
+// C# parity: UI/Forms/SectionedViewForm.cs:255,778,812 (the `⟳` prefix is the button's
+// icon-font glyph, DESIGN.md 14).
+/// The Updates button text at rest.
+pub const UPDATES_TEXT: &str = "Updates";
+const CHECKING_TEXT: &str = "Checking...";
 const PROMPT: &str = "A new version is available. Do you want to update now?\n\n\
                       The application will restart after the update.";
 
 const LABEL: u16 = 1;
 const BAR: u16 = 2;
 const DETAIL: u16 = 3;
+const ICON: u16 = 4;
 const STEP_TIMER: usize = 1;
 /// `USER_TIMER_MINIMUM`. `WM_PAINT` is retrieved before `WM_TIMER`, so every replayed state is
 /// painted before the next one replaces it.
@@ -125,32 +128,57 @@ fn spec() -> FormSpec {
 }
 
 fn nodes() -> Vec<Node> {
-    // C# parity: Services/AutoUpdateService.cs:158-183 (the inline form kept the system colors;
-    // here the tokens apply, and the status label is `INFO` while the update runs).
-    vec![
+    // C# parity: Services/AutoUpdateService.cs:158-183 (same three texts and states). Layout
+    // per DESIGN.md 16: app icon, the step as the heading, the status line under it in its
+    // status color, the progress pill across the bottom.
+    let texts = Node::panel(vec![
         Node::leaf(
             LABEL,
-            Ctl::Label(LabelSpec::new(
-                "Preparing download...",
-                theme::UPDATE_LABEL_FONT,
-                theme::INFO,
-            )),
+            Ctl::Label(
+                LabelSpec::new(
+                    "Preparing download...",
+                    theme::UPDATE_LABEL_FONT,
+                    theme::UPDATE_TEXT,
+                )
+                .ellipsis(),
+            ),
         )
-        .pos(theme::UPDATE_LABEL_POS)
-        .size(theme::UPDATE_LABEL_SIZE),
-        Node::leaf(BAR, Ctl::Progress)
-            .pos(theme::UPDATE_BAR_POS)
-            .size(theme::UPDATE_BAR_SIZE),
+        .top()
+        .height(theme::UPDATE_LABEL_HEIGHT)
+        .margin(theme::UPDATE_LABEL_MARGIN),
         Node::leaf(
             DETAIL,
-            Ctl::Label(LabelSpec::new(
-                "",
-                theme::UPDATE_DETAIL_FONT,
-                theme::UPDATE_TEXT,
-            )),
+            Ctl::Label(LabelSpec::new("", theme::UPDATE_DETAIL_FONT, theme::SECONDARY).ellipsis()),
         )
-        .pos(theme::UPDATE_DETAIL_POS)
-        .size(theme::UPDATE_LABEL_SIZE),
+        .top()
+        .height(theme::UPDATE_DETAIL_HEIGHT),
+    ])
+    .fill()
+    .auto_size()
+    .margin(theme::NO_PAD)
+    .cell(1, 0);
+    let icon = Node::leaf(ICON, Ctl::AppIcon)
+        .size(Size {
+            w: theme::UPDATE_ICON_SIZE,
+            h: theme::UPDATE_ICON_SIZE,
+        })
+        .anchor(Anchor::TOP)
+        .margin(theme::UPDATE_ICON_MARGIN)
+        .cell(0, 0);
+    // The bar sits in the text column, so icon, texts and bar share one left margin.
+    let bar = Node::leaf(BAR, Ctl::Progress)
+        .height(theme::PROGRESS_BAR_HEIGHT)
+        .anchor(Anchor(Anchor::TOP.0 | Anchor::LEFT.0 | Anchor::RIGHT.0))
+        .margin(theme::UPDATE_BAR_MARGIN)
+        .cell(1, 1);
+    vec![
+        Node::table(
+            vec![Track::AutoSize, Track::Percent(100.0)],
+            vec![Track::AutoSize, Track::AutoSize],
+            vec![icon, texts, bar],
+        )
+        .fill()
+        .padding(theme::UPDATE_PADDING),
     ]
 }
 
@@ -366,6 +394,77 @@ mod tests {
         assert_eq!(downloaded_text(15_728_640), "Downloaded: 15.0 MB");
     }
 
+    /// The update window's three states on a real window, no network: captured for the
+    /// DESIGN.md 16 review. `cargo test --locked --lib -- --ignored ui::update_progress::tests::wp19_layout --nocapture`
+    #[test]
+    #[ignore = "opens a real window"]
+    #[allow(clippy::unwrap_used)]
+    fn wp19_layout() {
+        use crate::ui::dpi;
+        use std::path::Path;
+        use std::time::{Duration, Instant};
+        const GOLDEN: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\wp-19";
+        std::fs::create_dir_all(GOLDEN).unwrap();
+        assert!(dpi::set_per_monitor_v2_for_tests(), "PerMonitorV2");
+        assert!(flow::activate_comctl6(), "comctl v6");
+        let form = Form::create(HWND::default(), spec(), nodes(), |_, _| true).unwrap();
+        form.show();
+        let pump = |ms: u64| {
+            let end = Instant::now() + Duration::from_millis(ms);
+            crate::ui::window::pump_until(|| Instant::now() >= end);
+            crate::ui::window::pump_until(|| true);
+        };
+        let states: [(&str, &str, &str, u32, bool); 3] = [
+            ("update-1-preparing", "Preparing download...", "", 0, false),
+            (
+                "update-2-downloading",
+                "Downloading new version...",
+                "2.5 MB / 5.2 MB (48%)",
+                48,
+                false,
+            ),
+            (
+                "update-3-restart",
+                "Preparing to restart...",
+                "Download completed successfully",
+                100,
+                true,
+            ),
+        ];
+        for (name, label, detail, pos, done) in states {
+            form.set_text(LABEL, label);
+            form.set_label_color(
+                DETAIL,
+                if done {
+                    theme::SUCCESS
+                } else {
+                    theme::SECONDARY
+                },
+            );
+            form.set_text(DETAIL, detail);
+            form.progress_set(BAR, pos);
+            form.set_timer(1, 20);
+            pump(250);
+            let dpi = form.dpi();
+            let shot = msgbox::testing::capture(
+                form.hwnd(),
+                &Path::new(GOLDEN).join(format!("{name}-{dpi}dpi.png")),
+            );
+            println!("RESULT {name}: {shot:?}");
+        }
+        // Marquee (unknown length) for the review of the moving block.
+        form.progress_marquee(BAR, true);
+        pump(300);
+        println!(
+            "RESULT update-marquee: {:?}",
+            msgbox::testing::capture(
+                form.hwnd(),
+                &Path::new(GOLDEN).join(format!("update-4-marquee-{}dpi.png", form.dpi())),
+            )
+        );
+        form.destroy();
+    }
+
     /// WP-17 flow on real windows against a loopback server; install stays a dry run.
     /// `cargo test --locked --lib -- --ignored ui::update_progress::tests::wp17_flow --nocapture`
     mod flow {
@@ -383,13 +482,13 @@ mod tests {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::thread::JoinHandle;
         use std::time::{Duration, Instant};
-        use windows::Win32::Foundation::{LPARAM, RECT, WPARAM};
+        use windows::Win32::Foundation::RECT;
         use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
         use windows::Win32::UI::HiDpi::GetDpiForWindow;
         use windows::Win32::UI::WindowsAndMessaging::{
-            DispatchMessageW, FindWindowW, GW_OWNER, GetDlgItemTextW, GetWindow, IDNO, IDOK, IDYES,
-            MESSAGEBOX_RESULT, MSG, PM_REMOVE, PeekMessageW, PostMessageW, SWP_NOSIZE,
-            SWP_NOZORDER, SetWindowPos, TranslateMessage, WM_COMMAND,
+            DispatchMessageW, FindWindowW, GW_OWNER, GetWindow, IDNO, IDOK, IDYES,
+            MESSAGEBOX_RESULT, MSG, PM_REMOVE, PeekMessageW, SWP_NOSIZE, SWP_NOZORDER,
+            SetWindowPos, TranslateMessage,
         };
         use windows::core::PCWSTR;
 
@@ -416,7 +515,7 @@ mod tests {
         }
 
         /// The test exe has no manifest; activate Common Controls 6 like the app manifest does.
-        fn activate_comctl6() -> bool {
+        pub(super) fn activate_comctl6() -> bool {
             let path = Path::new(GOLDEN).join("comctl6.manifest");
             std::fs::write(&path, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
@@ -490,6 +589,7 @@ mod tests {
             r
         }
 
+        /// Best-effort screen capture with a timeout; never panics (the caller still clicks).
         fn screenshot(h: HWND, name: &str) -> String {
             let r = frame(h);
             // SAFETY: Read-only DPI query of a live window.
@@ -509,22 +609,29 @@ mod tests {
                 y = r.top,
                 p = path.display()
             );
-            let status = std::process::Command::new(crate::win::process::powershell())
-                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-                .status()
-                .unwrap();
-            assert!(status.success());
-            format!(
-                "{} at {dpi} DPI: frame {}x{} at ({}, {})",
-                path.display(),
-                r.right - r.left,
-                r.bottom - r.top,
-                r.left,
-                r.top
-            )
+            let result = crate::win::process::run(
+                &crate::win::process::powershell(),
+                &["-NoProfile", "-NonInteractive", "-Command", &script],
+                Duration::from_secs(15),
+                &Cancel::new(),
+            );
+            match result {
+                Ok(out) if out.code == 0 => format!(
+                    "{} at {dpi} DPI: frame {}x{} at ({}, {})",
+                    path.display(),
+                    r.right - r.left,
+                    r.bottom - r.top,
+                    r.left,
+                    r.top
+                ),
+                Ok(out) => format!("screenshot {name} failed: {}", out.stderr),
+                Err(error) => format!("screenshot {name} failed: {error}"),
+            }
         }
 
         /// Answers message boxes in order on a helper thread; returns their texts and notes.
+        /// Once a box is found, its button is pressed no matter what else fails (`PressOnDrop`),
+        /// so the owner never has to click a box the test owns.
         fn answer(
             boxes: Vec<(&'static str, MESSAGEBOX_RESULT, Option<&'static str>)>,
             expected_owner: Option<&'static str>,
@@ -534,64 +641,61 @@ mod tests {
                 for (title, reply, shot) in boxes {
                     let start = Instant::now();
                     let h = loop {
-                        if let Some(h) = find(Some("#32770"), title) {
+                        if let Some(h) = msgbox::testing::find(title) {
                             break h;
                         }
                         if start.elapsed() > Duration::from_secs(110) {
                             let other = (|| {
-                                let class = to_wide("#32770");
+                                let class = to_wide(crate::ui::window::MESSAGE_BOX_CLASS);
                                 // SAFETY: NUL-terminated class name; any title.
                                 let h =
                                     unsafe { FindWindowW(PCWSTR(class.as_ptr()), PCWSTR::null()) }
                                         .ok()?;
-                                let mut text = [0u16; 1024];
-                                // SAFETY: Reads the message text into a local buffer.
-                                let n = unsafe { GetDlgItemTextW(h, 0xFFFF, &mut text) } as usize;
-                                Some(String::from_utf16_lossy(&text[..n]))
+                                Some(msgbox::testing::text(h))
                             })();
                             panic!("no box {title}; open box: {other:?}");
                         }
                         std::thread::sleep(Duration::from_millis(10));
                     };
+                    let press = msgbox::testing::PressOnDrop {
+                        dialog: h,
+                        id: reply,
+                    };
                     let found = start.elapsed().as_millis();
                     let owner_matches = expected_owner.map(|title| {
                         // SAFETY: Read-only owner query of the message box we just found.
-                        let actual = unsafe { GetWindow(h, GW_OWNER) }.unwrap();
-                        actual == find(None, title).expect("expected owner is open")
+                        let actual = unsafe { GetWindow(h, GW_OWNER) }.ok();
+                        actual.is_some() && actual == find(None, title)
                     });
                     std::thread::sleep(Duration::from_millis(200));
-                    let mut text = [0u16; 1024];
-                    // SAFETY: Reads the message text (static id 0xFFFF) into a local buffer.
-                    let n = unsafe { GetDlgItemTextW(h, 0xFFFF, &mut text) } as usize;
                     seen.push(format!(
                         "{title} (after {found} ms): {}",
-                        String::from_utf16_lossy(&text[..n])
+                        msgbox::testing::text(h)
                     ));
                     if let Some(name) = shot {
-                        let progress = find(None, PROGRESS).expect("progress window still open");
-                        let r = frame(progress);
-                        // SAFETY: Moves the message box below the progress window so the
-                        // capture shows the progress window only.
-                        unsafe {
-                            SetWindowPos(
-                                h,
-                                None,
-                                r.left,
-                                r.bottom + 20,
-                                0,
-                                0,
-                                SWP_NOSIZE | SWP_NOZORDER,
-                            )
-                            .unwrap();
+                        match find(None, PROGRESS) {
+                            Some(progress) => {
+                                let r = frame(progress);
+                                // SAFETY: Moves the message box below the progress window so
+                                // the capture shows the progress window only.
+                                unsafe {
+                                    let _ = SetWindowPos(
+                                        h,
+                                        None,
+                                        r.left,
+                                        r.bottom + 20,
+                                        0,
+                                        0,
+                                        SWP_NOSIZE | SWP_NOZORDER,
+                                    );
+                                }
+                                std::thread::sleep(Duration::from_millis(300));
+                                seen.push(screenshot(progress, name));
+                            }
+                            None => seen.push(format!("{name}: progress window not open")),
                         }
-                        std::thread::sleep(Duration::from_millis(300));
-                        seen.push(screenshot(progress, name));
                     }
-                    // SAFETY: Posts the button command to the message box (no pointers).
-                    unsafe {
-                        PostMessageW(Some(h), WM_COMMAND, WPARAM(reply.0 as usize), LPARAM(0))
-                            .unwrap();
-                    }
+                    drop(press);
                     if let Some(matches) = owner_matches {
                         assert!(matches, "{title}: owner must be {expected_owner:?}");
                         seen.push(format!("owner matched {expected_owner:?}"));

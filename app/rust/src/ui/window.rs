@@ -52,22 +52,23 @@ use windows::{
                 GCW_ATOM, GWLP_USERDATA, GetAncestor, GetClassLongPtrW, GetClientRect,
                 GetCursorPos, GetMessageW, GetNextDlgTabItem, GetSystemMetrics, GetWindowLongPtrW,
                 GetWindowRect, GetWindowThreadProcessId, HICON, IDC_ARROW, IMAGE_ICON,
-                IsDialogMessageW, IsIconic, IsWindow, KillTimer, LR_DEFAULTCOLOR, LoadCursorW,
-                LoadIconW, LoadImageW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MINMAXINFO, MSG,
-                MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassExW,
+                IsDialogMessageW, IsIconic, IsWindow, IsZoomed, KillTimer, LR_DEFAULTCOLOR,
+                LoadCursorW, LoadIconW, LoadImageW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK,
+                MINMAXINFO, MSG, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassExW,
                 RegisterWindowMessageW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
-                SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL, SIZE_MINIMIZED, SM_CXSMICON,
-                SM_CXVSCROLL, SM_CYSMICON, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, SWP_NOACTIVATE,
-                SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetTimer,
-                SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage,
-                WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_CLOSE, WM_COMMAND,
-                WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED,
-                WM_DRAWITEM, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_MOUSEWHEEL,
-                WM_NCCREATE, WM_NCDESTROY, WM_NULL, WM_PAINT, WM_SETFOCUS, WM_SIZE, WM_SYSKEYDOWN,
-                WM_TIMER, WM_VKEYTOITEM, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-                WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT,
-                WS_EX_DLGMODALFRAME, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
-                WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+                SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL, SIZE_MINIMIZED, SIZE_RESTORED,
+                SM_CXSMICON, SM_CXVSCROLL, SM_CYSMICON, SPI_SETWORKAREA, SW_SHOWMAXIMIZED,
+                SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+                SWP_NOZORDER, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
+                ShowWindow, TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE,
+                WM_ACTIVATE, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
+                WM_CTLCOLORSTATIC, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DRAWITEM,
+                WM_ERASEBKGND, WM_GETDPISCALEDSIZE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_MOUSEWHEEL,
+                WM_NCCREATE, WM_NCDESTROY, WM_NULL, WM_PAINT, WM_SETFOCUS, WM_SETTINGCHANGE,
+                WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_VKEYTOITEM, WM_VSCROLL, WNDCLASSEXW,
+                WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW,
+                WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+                WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -202,6 +203,10 @@ pub struct FormSpec {
     pub taskbar: bool,
     /// Start maximized when the outer size does not fit the work area (owner Q1, main window).
     pub maximize_if_too_big: bool,
+    /// Register the window under the `HWIDChecker.MessageBox` class (themed message boxes).
+    pub message_box: bool,
+    /// An edit whose whole text Ctrl+C copies while the form has the focus.
+    pub copy_on_ctrl_c: Option<u16>,
 }
 
 impl FormSpec {
@@ -221,9 +226,16 @@ impl FormSpec {
             cancel: None,
             taskbar: true,
             maximize_if_too_big: false,
+            message_box: false,
+            copy_on_ctrl_c: None,
         }
     }
 }
+
+/// Window class name of every kit form.
+pub const FORM_CLASS: &str = "HWIDChecker.Form";
+/// Window class name of the themed message boxes (tests find them by this name).
+pub const MESSAGE_BOX_CLASS: &str = "HWIDChecker.MessageBox";
 
 /// A cheap handle to a live form; every call is a no-op once the window is gone.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -293,6 +305,9 @@ struct FormState {
     /// Live timers (id, interval): killed while minimized, restarted on restore (DESIGN.md 8.6).
     timers: RefCell<HashMap<usize, u32>>,
     minimized: Cell<bool>,
+    /// The client size in 96-DPI pixels of the restored window, kept across monitor moves
+    /// (`WM_GETDPISCALEDSIZE`, DESIGN.md 11).
+    logical_client: Cell<Size>,
 }
 
 type HandlerRc = Rc<dyn Fn(&Form, Event) -> bool>;
@@ -300,6 +315,8 @@ type HandlerRc = Rc<dyn Fn(&Form, Event) -> bool>;
 struct PanelState {
     back: Color,
     brush: controls::Brush,
+    /// Card outline: the parent's color under the rounded corners and the logical radius.
+    card: Option<(Color, i32)>,
 }
 
 struct DpiChange<'a>(&'a Cell<bool>);
@@ -318,12 +335,17 @@ fn form_class() -> PCWSTR {
     w!("HWIDChecker.Form")
 }
 
+fn message_box_class() -> PCWSTR {
+    w!("HWIDChecker.MessageBox")
+}
+
 fn panel_class() -> PCWSTR {
     w!("HWIDChecker.Panel")
 }
 
 struct Atoms {
     form: u16,
+    message_box: u16,
     panel: u16,
 }
 
@@ -375,6 +397,10 @@ fn atoms() -> &'static Atoms {
             lpszClassName: form_class(),
             ..Default::default()
         };
+        let message_box = WNDCLASSEXW {
+            lpszClassName: message_box_class(),
+            ..form
+        };
         let panel = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_DBLCLKS,
@@ -384,14 +410,56 @@ fn atoms() -> &'static Atoms {
             lpszClassName: panel_class(),
             ..Default::default()
         };
-        // SAFETY: Both structures are fully initialized; class names are static strings.
+        // SAFETY: All structures are fully initialized; class names are static strings.
         unsafe {
             Atoms {
                 form: RegisterClassExW(&form),
+                message_box: RegisterClassExW(&message_box),
                 panel: RegisterClassExW(&panel),
             }
         }
     })
+}
+
+thread_local! {
+    /// Test hook: a work area that replaces every monitor query (synthetic screen setups).
+    static FORCED_WORK_AREA: Cell<Option<RECT>> = const { Cell::new(None) };
+}
+
+/// Replaces the monitor work area for every form on this thread (tests only; `None` ends it).
+#[cfg(test)]
+pub fn force_work_area(rect: Option<RECT>) {
+    FORCED_WORK_AREA.with(|w| w.set(rect));
+}
+
+/// The work area of the monitor nearest to `hwnd` (or the forced test work area).
+fn monitor_work_area(hwnd: HWND) -> RECT {
+    if let Some(forced) = FORCED_WORK_AREA.with(Cell::get) {
+        return forced;
+    }
+    // SAFETY: Monitor queries with valid out-parameters.
+    unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let _ = GetMonitorInfoW(monitor, &mut mi);
+        mi.rcWork
+    }
+}
+
+/// Clamps an outer rectangle into `work`: never larger than the work area, and moved inside
+/// it when it hangs over an edge (DESIGN.md 11.1).
+fn fit_to_work_area(mut r: RECT, work: RECT) -> RECT {
+    let (work_w, work_h) = (work.right - work.left, work.bottom - work.top);
+    let w = (r.right - r.left).min(work_w);
+    let h = (r.bottom - r.top).min(work_h);
+    r.left = r.left.min(work.right - w).max(work.left);
+    r.top = r.top.min(work.bottom - h).max(work.top);
+    r.right = r.left + w;
+    r.bottom = r.top + h;
+    r
 }
 
 fn wake_message() -> u32 {
@@ -429,7 +497,13 @@ pub(crate) fn on_window_thread(hwnd: HWND) -> bool {
 }
 
 fn form_state(hwnd: HWND) -> Option<Rc<FormState>> {
-    user_rc(hwnd, atoms().form)
+    let atoms = atoms();
+    let atom = class_atom(hwnd);
+    if atom == atoms.form || atom == atoms.message_box {
+        user_rc(hwnd, atom)
+    } else {
+        None
+    }
 }
 
 fn root_of(hwnd: HWND) -> HWND {
@@ -458,13 +532,19 @@ fn fill_client(hwnd: HWND, hdc: HDC, brush: &controls::Brush) {
     }
 }
 
-/// Validates a container's update region and paints the focus ring of its focused button
-/// (nothing is painted while the window is minimized, DESIGN.md 8.6).
-fn paint_container(hwnd: HWND, back: Color) {
+/// Validates a container's update region, paints its card outline when it has one, and the
+/// focus ring of its focused button (nothing is painted while the window is minimized,
+/// DESIGN.md 8.6).
+fn paint_container(hwnd: HWND, back: Color, card: Option<(Color, i32)>) {
     let paint = controls::Paint::begin(hwnd);
+    let root = root_of(hwnd);
     // SAFETY: Read-only state query of the top-level window.
-    if unsafe { IsIconic(root_of(hwnd)) }.as_bool() {
+    if unsafe { IsIconic(root) }.as_bool() {
         return;
+    }
+    if let Some((outer, radius)) = card {
+        let dpi = form_state(root).map_or(dpi::BASE_DPI, |s| s.dpi.get());
+        controls::paint_card(hwnd, paint.hdc(), outer, back, dpi::scale(radius, dpi));
     }
     controls::paint_focus_ring(hwnd, paint.hdc(), back);
 }
@@ -497,16 +577,23 @@ impl FormState {
 
     fn ensure_fonts(&self, node: &Node) -> win::Result<()> {
         if let Kind::Leaf(ctl) = &node.kind {
-            let spec = ctl.font();
             let dpi = self.dpi.get();
-            if !self.fonts.borrow().iter().any(|f| f.spec() == spec) {
-                self.fonts.borrow_mut().push(Font::new(spec, dpi)?);
+            for spec in std::iter::once(ctl.font()).chain(ctl.icon_font()) {
+                if !self.fonts.borrow().iter().any(|f| f.spec() == spec) {
+                    self.fonts.borrow_mut().push(Font::new(spec, dpi)?);
+                }
             }
         }
         for c in node.children() {
             self.ensure_fonts(c)?;
         }
         Ok(())
+    }
+
+    /// The icon font handle of a leaf (0 when it has none).
+    fn icon_font_of(&self, ctl: &controls::Ctl) -> windows::Win32::Graphics::Gdi::HFONT {
+        ctl.icon_font()
+            .map_or_else(Default::default, |spec| self.font(spec))
     }
 
     fn hwnd_of(&self, id: u16) -> Option<HWND> {
@@ -520,14 +607,15 @@ impl FormState {
             match &child.kind {
                 Kind::Leaf(ctl) => {
                     let font = self.font(ctl.font());
-                    let hwnd = controls::create(parent, child, back, font, self.dpi.get())?;
+                    let icon = self.icon_font_of(ctl);
+                    let hwnd = controls::create(parent, child, back, font, icon, self.dpi.get())?;
                     if matches!(ctl, controls::Ctl::Edit(_) | controls::Ctl::CheckedList(_)) {
                         dark_scrollbars(hwnd);
                     }
                     self.hwnds.borrow_mut().insert(child.id, hwnd);
                 }
                 _ => {
-                    let hwnd = create_panel(parent, child, back)?;
+                    let hwnd = create_panel(parent, child, back, inherited)?;
                     if child.scroll {
                         dark_scrollbars(hwnd);
                     }
@@ -572,6 +660,7 @@ impl FormState {
                         node.padding,
                         node.min,
                         proposed,
+                        dpi,
                     ),
                     _ => Size::default(),
                 }
@@ -733,19 +822,33 @@ impl FormState {
         };
         // WM_SETFONT is synchronous. Release every tree/map/cache borrow before entering a
         // native control, and retain old fonts until every control received its replacement.
-        for (h, font, padding) in placements {
-            controls::apply_dpi(h, font, padding, new_dpi);
+        for (h, font, icon, padding) in placements {
+            controls::apply_dpi(h, font, icon, padding, new_dpi);
         }
         drop(old_fonts);
+        // The suggested rectangle is clamped to the work area of the monitor it lands on
+        // before the one move, so a maximized window keeps Windows' own placement and a
+        // normal one never hangs over the screen (DESIGN.md 11.1; one layout pass, 8.8).
+        // SAFETY: Read-only state query of our own window.
+        let zoomed = unsafe { IsZoomed(self.hwnd.get()) }.as_bool();
+        let target = if zoomed {
+            suggested
+        } else {
+            let center = POINT {
+                x: (suggested.left + suggested.right) / 2,
+                y: (suggested.top + suggested.bottom) / 2,
+            };
+            fit_to_work_area(suggested, work_area_at(center))
+        };
         // SAFETY: Moves our own window to the rectangle Windows suggested for the new DPI.
         unsafe {
             let _ = SetWindowPos(
                 self.hwnd.get(),
                 None,
-                suggested.left,
-                suggested.top,
-                suggested.right - suggested.left,
-                suggested.bottom - suggested.top,
+                target.left,
+                target.top,
+                target.right - target.left,
+                target.bottom - target.top,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
@@ -764,6 +867,36 @@ impl FormState {
 
     fn focus_changed(&self, hwnd: HWND) {
         self.last_focus.set(hwnd);
+    }
+
+    /// Re-checks the work-area fit of a restored window after the display or the work area
+    /// changed (DESIGN.md 11.1); maximized and minimized windows are left to Windows.
+    fn refit(&self) {
+        let hwnd = self.hwnd.get();
+        // SAFETY: Read-only state queries of our own window.
+        if unsafe { IsZoomed(hwnd) }.as_bool() || unsafe { IsIconic(hwnd) }.as_bool() {
+            return;
+        }
+        let mut r = RECT::default();
+        // SAFETY: Writable RECT of our own window.
+        if unsafe { GetWindowRect(hwnd, &mut r) }.is_err() {
+            return;
+        }
+        let fitted = fit_to_work_area(r, monitor_work_area(hwnd));
+        if fitted != r {
+            // SAFETY: Moves our own window inside its monitor's work area.
+            unsafe {
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    fitted.left,
+                    fitted.top,
+                    fitted.right - fitted.left,
+                    fitted.bottom - fitted.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+        }
     }
 
     /// `WM_SIZE`: timers stop while minimized and restart on restore (DESIGN.md 8.6).
@@ -876,15 +1009,27 @@ fn collect_placements(
     }
 }
 
+type FontPlacement = (
+    HWND,
+    windows::Win32::Graphics::Gdi::HFONT,
+    windows::Win32::Graphics::Gdi::HFONT,
+    layout::Pad,
+);
+
 fn collect_fonts(
     node: &Node,
     hwnds: &HashMap<u16, HWND>,
     state: &FormState,
-    out: &mut Vec<(HWND, windows::Win32::Graphics::Gdi::HFONT, layout::Pad)>,
+    out: &mut Vec<FontPlacement>,
 ) {
     for c in node.children() {
         if let (Kind::Leaf(ctl), Some(&h)) = (&c.kind, hwnds.get(&c.id)) {
-            out.push((h, state.font(ctl.font()), c.padding));
+            out.push((
+                h,
+                state.font(ctl.font()),
+                state.icon_font_of(ctl),
+                c.padding,
+            ));
         }
         collect_fonts(c, hwnds, state, out);
     }
@@ -900,10 +1045,16 @@ fn assign_ids(node: &mut Node, next: &mut u16) {
     }
 }
 
-fn create_panel(parent: HWND, node: &Node, back: Color) -> win::Result<HWND> {
+fn create_panel(parent: HWND, node: &Node, back: Color, outer: Color) -> win::Result<HWND> {
     let state = Rc::new(PanelState {
         back,
-        brush: controls::Brush::new(back),
+        // A card erases with the parent's color; the rounded fill is painted over it.
+        brush: controls::Brush::new(if node.card_radius.is_some() {
+            outer
+        } else {
+            back
+        }),
+        card: node.card_radius.map(|r| (outer, r)),
     });
     let vis = if node.visible {
         WS_VISIBLE
@@ -987,7 +1138,7 @@ fn panel_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option
         }
         WM_PAINT => {
             let state: Rc<PanelState> = user_rc(hwnd, atoms().panel)?;
-            paint_container(hwnd, state.back);
+            paint_container(hwnd, state.back, state.card);
             Some(LRESULT(0))
         }
         WM_VSCROLL => {
@@ -1091,7 +1242,7 @@ fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             Some(LRESULT(1))
         }
         WM_PAINT => {
-            paint_container(hwnd, state.spec.back);
+            paint_container(hwnd, state.spec.back, None);
             Some(LRESULT(0))
         }
         WM_SIZE => {
@@ -1099,6 +1250,15 @@ fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             state.minimized_changed(minimized);
             if minimized {
                 return Some(LRESULT(0));
+            }
+            if wparam.0 as u32 == SIZE_RESTORED && !state.in_dpi_change.get() {
+                // Remember the user's restored client size in logical pixels (F6).
+                let client = client_size(hwnd);
+                let dpi = state.dpi.get();
+                state.logical_client.set(Size {
+                    w: dpi::unscale(client.w, dpi),
+                    h: dpi::unscale(client.h, dpi),
+                });
             }
             if state.in_dpi_change.get() || state.tree.try_borrow().is_err() {
                 return Some(LRESULT(0));
@@ -1113,11 +1273,34 @@ fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
         WM_GETMINMAXINFO => {
             let min = state.spec.min?;
             let dpi = state.dpi.get();
+            // The minimum never exceeds the work area of the window's monitor (DESIGN.md 11.1).
+            let work = monitor_work_area(hwnd);
             // SAFETY: For WM_GETMINMAXINFO, lParam points to a writable MINMAXINFO.
             let mmi = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
-            mmi.ptMinTrackSize.x = dpi::scale(min.w, dpi);
-            mmi.ptMinTrackSize.y = dpi::scale(min.h, dpi);
+            mmi.ptMinTrackSize.x = dpi::scale(min.w, dpi).min(work.right - work.left);
+            mmi.ptMinTrackSize.y = dpi::scale(min.h, dpi).min(work.bottom - work.top);
             Some(LRESULT(0))
+        }
+        WM_GETDPISCALEDSIZE => {
+            // Keep the logical client size across monitor moves: the new outer size is the
+            // frame at the new DPI around the scaled client (audit F6), not the linear scale
+            // of the old outer size.
+            let new_dpi = wparam.0 as u32;
+            // SAFETY: Reads the style of our own window.
+            let zoomed = unsafe { IsZoomed(hwnd) }.as_bool();
+            if zoomed || new_dpi == 0 {
+                return None;
+            }
+            let (style, ex) = styles(&state.spec);
+            let client = dpi::scale_size(state.logical_client.get(), new_dpi);
+            let Ok(outer) = dpi::outer_for_client(client, style, ex, new_dpi) else {
+                return None;
+            };
+            // SAFETY: For WM_GETDPISCALEDSIZE, lParam points to a writable SIZE.
+            let size = unsafe { &mut *(lparam.0 as *mut windows::Win32::Foundation::SIZE) };
+            size.cx = outer.w;
+            size.cy = outer.h;
+            Some(LRESULT(1))
         }
         WM_DPICHANGED => {
             let new_dpi = (wparam.0 & 0xFFFF) as u32;
@@ -1125,6 +1308,14 @@ fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             let suggested = unsafe { *(lparam.0 as *const RECT) };
             state.on_dpi_changed(new_dpi, suggested);
             Some(LRESULT(0))
+        }
+        WM_DISPLAYCHANGE => {
+            state.refit();
+            None
+        }
+        WM_SETTINGCHANGE if wparam.0 as u32 == SPI_SETWORKAREA.0 => {
+            state.refit();
+            None
         }
         WM_ACTIVATE => {
             if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE {
@@ -1164,7 +1355,19 @@ fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             state.dispatch(Event::Timer(wparam.0));
             Some(LRESULT(0))
         }
-        WM_COMMAND if lparam.0 == 0 => Some(LRESULT(0)),
+        WM_COMMAND if lparam.0 == 0 => {
+            // A command by id (accelerator-style, also what tests post): click that button.
+            let id = (wparam.0 & 0xFFFF) as u16;
+            let target = state.hwnd_of(id);
+            if let Some(h) = target
+                && controls::is_button(h)
+                // SAFETY: Read-only enabled-state query of our own control.
+                && unsafe { IsWindowEnabled(h) }.as_bool()
+            {
+                state.dispatch(Event::Click(id));
+            }
+            Some(LRESULT(0))
+        }
         m if m == wake_message() => {
             let pending: Vec<_> = state.rx.try_iter().collect();
             for (generation, value) in pending {
@@ -1199,7 +1402,8 @@ fn restore_focus(state: &FormState) {
 // Form creation and the Form handle
 // ---------------------------------------------------------------------------------------------
 
-fn styles(spec: &FormSpec) -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
+/// The window styles of a form spec (tests use them for frame arithmetic).
+pub(crate) fn styles(spec: &FormSpec) -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
     let mut style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
     let mut ex = WS_EX_CONTROLPARENT;
     match spec.style {
@@ -1220,22 +1424,33 @@ fn styles(spec: &FormSpec) -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
     (style, ex)
 }
 
-fn work_area(owner: HWND, start: StartPosition) -> RECT {
+/// The work area of the monitor at `pt` (or the forced test work area).
+fn work_area_at(pt: POINT) -> RECT {
+    if let Some(forced) = FORCED_WORK_AREA.with(Cell::get) {
+        return forced;
+    }
     // SAFETY: Monitor queries with valid out-parameters.
     unsafe {
-        let monitor = if start == StartPosition::CenterParent && !owner.is_invalid() {
-            MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST)
-        } else {
-            let mut pt = POINT::default();
-            let _ = GetCursorPos(&mut pt);
-            MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
-        };
+        let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
         let mut mi = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
         let _ = GetMonitorInfoW(monitor, &mut mi);
         mi.rcWork
+    }
+}
+
+fn work_area(owner: HWND, start: StartPosition) -> RECT {
+    if start == StartPosition::CenterParent && !owner.is_invalid() {
+        monitor_work_area(owner)
+    } else {
+        let mut pt = POINT::default();
+        // SAFETY: Writable POINT.
+        unsafe {
+            let _ = GetCursorPos(&mut pt);
+        }
+        work_area_at(pt)
     }
 }
 
@@ -1282,15 +1497,21 @@ impl Form {
             maximize: Cell::new(false),
             timers: RefCell::new(HashMap::new()),
             minimized: Cell::new(false),
+            logical_client: Cell::new(Size::default()),
         });
         let work = work_area(owner, spec.start);
         let title = to_wide(&spec.title);
+        let class = if spec.message_box {
+            message_box_class()
+        } else {
+            form_class()
+        };
         // SAFETY: Static class name and terminated title. WM_NCCREATE borrows `state` during
         // this synchronous call and stores its own Rc clone, released at WM_NCDESTROY.
         let created = unsafe {
             CreateWindowExW(
                 ex,
-                form_class(),
+                class,
                 PCWSTR(title.as_ptr()),
                 style,
                 work.left,
@@ -1342,6 +1563,15 @@ impl Form {
             }
         };
         let (work_w, work_h) = (work.right - work.left, work.bottom - work.top);
+        // AD-38 decides from the unclamped size; the restored window is then clamped to the
+        // work area so it never hangs over the screen (DESIGN.md 11.1).
+        state
+            .maximize
+            .set(spec.maximize_if_too_big && (outer.w > work_w || outer.h > work_h));
+        let outer = Size {
+            w: outer.w.min(work_w),
+            h: outer.h.min(work_h),
+        };
         let (mut x, mut y) = (
             work.left + (work_w - outer.w) / 2,
             work.top + (work_h - outer.h) / 2,
@@ -1359,9 +1589,6 @@ impl Form {
         }
         x = x.max(work.left);
         y = y.max(work.top);
-        state
-            .maximize
-            .set(spec.maximize_if_too_big && (outer.w > work_w || outer.h > work_h));
         // SAFETY: Sizes and places our own hidden window; WM_SIZE runs the first layout.
         unsafe {
             let _ = SetWindowPos(
@@ -1482,6 +1709,22 @@ impl Form {
         state.relayout();
     }
 
+    /// Shows or hides a control's native window without a layout pass (for `Resize` handlers
+    /// that already set the node's `visible`).
+    pub fn show_control(&self, id: u16, visible: bool) {
+        self.with_control(id, |h| {
+            let cmd = if visible {
+                windows::Win32::UI::WindowsAndMessaging::SW_SHOWNA
+            } else {
+                windows::Win32::UI::WindowsAndMessaging::SW_HIDE
+            };
+            // SAFETY: Shows or hides a child of this form.
+            unsafe {
+                let _ = ShowWindow(h, cmd);
+            }
+        });
+    }
+
     /// Moves a control to the top of its siblings' z-order (`BringToFront`).
     pub fn bring_to_front(&self, id: u16) {
         self.with_control(id, |h| {
@@ -1569,6 +1812,44 @@ impl Form {
     /// Marks a sidebar button as the active item or not.
     pub fn set_active(&self, id: u16, active: bool) {
         self.with_control(id, |h| controls::set_active(h, active));
+    }
+
+    /// Marks a sidebar button as not collected yet (`FAINT`) or collected.
+    pub fn set_pending(&self, id: u16, pending: bool) {
+        self.with_control(id, |h| controls::set_pending(h, pending));
+    }
+
+    /// Repaints a spinner for its next frame (call from a form timer while it shows).
+    pub fn spin(&self, id: u16) {
+        self.with_control(id, controls::spin);
+    }
+
+    /// Whether a spinner animates (false when Windows "Show animations" is off).
+    pub fn spinner_animates(&self, id: u16) -> bool {
+        self.control(id).is_some_and(controls::spinner_animates)
+    }
+
+    /// Copies the whole text of an edit to the clipboard (its selection is kept).
+    pub fn edit_copy_all(&self, id: u16) {
+        self.with_control(id, controls::edit_copy_all);
+    }
+
+    /// Whether the window is maximized.
+    pub fn is_maximized(&self) -> bool {
+        // SAFETY: Read-only state query.
+        self.state().is_some() && unsafe { IsZoomed(self.hwnd) }.as_bool()
+    }
+
+    /// The outer window rectangle in screen coordinates.
+    pub fn window_rect(&self) -> RECT {
+        let mut r = RECT::default();
+        if self.state().is_some() {
+            // SAFETY: Writable RECT of our own window.
+            unsafe {
+                let _ = GetWindowRect(self.hwnd, &mut r);
+            }
+        }
+        r
     }
 
     /// Whether a sidebar button is the active item.
@@ -1823,6 +2104,17 @@ pub(super) fn pre_translate(msg: &MSG) -> bool {
     if msg.message == WM_KEYDOWN {
         let vk = msg.wParam.0 as u16;
         let form = state.form();
+        if vk == u16::from(b'C')
+            && let Some(id) = state.spec.copy_on_ctrl_c
+            // SAFETY: Reads this UI thread's synchronous modifier state.
+            && unsafe { GetKeyState(i32::from(VK_CONTROL.0)) < 0 }
+        {
+            // Ctrl+C anywhere in the form copies the whole message (message boxes).
+            if let Some(h) = state.hwnd_of(id) {
+                controls::edit_copy_all(h);
+            }
+            return true;
+        }
         if vk == VK_RETURN.0 {
             // SAFETY: Reads this thread's focus window.
             let focus = unsafe { GetFocus() };

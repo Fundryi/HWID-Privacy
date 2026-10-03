@@ -5,7 +5,7 @@
 //! C# forms. Sizes are logical pixels at 96 DPI; `dpi::scale` converts them. Form code uses these
 //! names, never literals.
 
-use super::layout::{Pad, Point, Size};
+use super::layout::{Pad, Size};
 use windows::Win32::Foundation::COLORREF;
 
 /// An opaque RGB color, like `System.Drawing.Color.FromArgb(r, g, b)`.
@@ -282,10 +282,91 @@ pub const CONFIRM_MESSAGE_FONT: FontSpec = BODY_FONT;
 pub const CONFIRM_WARNING_FONT: FontSpec = SMALL_FONT;
 /// Old View text box (data).
 pub const OLD_VIEW_FONT: FontSpec = FontSpec::new(DATA_FACE, 9.0, REGULAR);
-/// Update window progress label.
-pub const UPDATE_LABEL_FONT: FontSpec = BODY_FONT;
-/// Update window detail label (`Segoe UI` 8 in C#).
+/// Update window step label (the window's heading).
+pub const UPDATE_LABEL_FONT: FontSpec = TITLE_FONT;
+/// Update window status line (`Segoe UI` 8 in C#).
 pub const UPDATE_DETAIL_FONT: FontSpec = SMALL_FONT;
+/// Main window loading title.
+pub const LOADING_TITLE_FONT: FontSpec = TITLE_FONT;
+/// Main window loading progress line (`Collected {n} of {total} sections`).
+pub const LOADING_PROGRESS_FONT: FontSpec = SMALL_FONT;
+/// Message box text.
+pub const MSGBOX_FONT: FontSpec = BODY_FONT;
+
+// ---------------------------------------------------------------------------------------------
+// DESIGN.md section 14: icons (Segoe Fluent Icons, Segoe MDL2 Assets on Windows 10)
+// ---------------------------------------------------------------------------------------------
+
+/// Icon size in buttons and the sidebar (logical px).
+pub const ICON_PX: i32 = 16;
+/// Icon size in message boxes (logical px).
+pub const MSGBOX_ICON_PX: i32 = 24;
+/// Gap between a button icon and its text.
+pub const ICON_GAP: i32 = 8;
+
+/// The icon font at `px` logical pixels; the face is resolved once (`dpi::icon_face`).
+pub fn icon_font(pixels: i32) -> FontSpec {
+    FontSpec::new(super::dpi::icon_face(), px(pixels as f32), REGULAR)
+}
+
+/// Glyphs (`Segoe Fluent Icons` code points; the same codes exist in `Segoe MDL2 Assets`).
+pub mod glyph {
+    /// `HardDrive`: DISK DRIVES.
+    pub const HARD_DRIVE: char = '\u{EDA2}';
+    /// `Component`: MOTHERBOARD.
+    pub const COMPONENT: char = '\u{E950}';
+    /// `PC1`: CHASSIS.
+    pub const PC: char = '\u{E977}';
+    /// `CommandPrompt`: (SM)BIOS.
+    pub const COMMAND_PROMPT: char = '\u{E756}';
+    /// `Info`: SYSTEM INFORMATION.
+    pub const INFO: char = '\u{E946}';
+    /// `RAM`: RAM MODULES.
+    pub const RAM: char = '\u{EEA0}';
+    /// `CPU`: CPU.
+    pub const CPU: char = '\u{EEA1}';
+    /// `Lock`: TPM MODULES.
+    pub const LOCK: char = '\u{E72E}';
+    /// `USB`: USB DEVICES.
+    pub const USB: char = '\u{E88E}';
+    /// `Game`: GPU INFO.
+    pub const GAME: char = '\u{E7FC}';
+    /// `TVMonitor`: MONITOR INFORMATION.
+    pub const MONITOR: char = '\u{E7F4}';
+    /// `Ethernet`: NETWORK ADAPTERS.
+    pub const ETHERNET: char = '\u{E839}';
+    /// `Bluetooth`: BLUETOOTH ADAPTERS.
+    pub const BLUETOOTH: char = '\u{E702}';
+    /// `Network`: ARP INFO/CACHE.
+    pub const NETWORK: char = '\u{E968}';
+    /// `List`: any other section.
+    pub const LIST: char = '\u{EA37}';
+    /// `Refresh`: Refresh.
+    pub const REFRESH: char = '\u{E72C}';
+    /// `Save`: Export.
+    pub const SAVE: char = '\u{E74E}';
+    /// `Broom`: Clean Devices.
+    pub const BROOM: char = '\u{EA99}';
+    /// `Delete`: Clean Logs.
+    pub const DELETE: char = '\u{E74D}';
+    /// `Sync`: Updates / Checking.
+    pub const SYNC: char = '\u{E895}';
+    /// `History`: Old View.
+    pub const HISTORY: char = '\u{E81C}';
+    /// `Copy`: Copy section.
+    pub const COPY: char = '\u{E8C8}';
+    /// `StatusCircleRing`: the circle under every message box symbol (the symbols are drawn
+    /// stacked on it).
+    pub const STATUS_RING: char = '\u{F138}';
+    /// `StatusCircleInfo`: information box.
+    pub const STATUS_INFO: char = '\u{F13F}';
+    /// `StatusCircleExclamation`: warning box.
+    pub const STATUS_WARNING: char = '\u{F13C}';
+    /// `StatusCircleErrorX`: error box.
+    pub const STATUS_ERROR: char = '\u{F13D}';
+    /// `StatusCircleQuestionMark`: question box.
+    pub const STATUS_QUESTION: char = '\u{F142}';
+}
 
 // ---------------------------------------------------------------------------------------------
 // WinForms framework defaults (used when C# does not set a value)
@@ -343,9 +424,9 @@ pub const SIDEBAR_MAX_WIDTH: i32 = 360;
 pub const SIDEBAR_WIDTH_PERCENT: i32 = 28;
 /// Sidebar panel padding.
 pub const SIDEBAR_PADDING: Pad = pad(0, 8, 0, 8);
-/// Sidebar item width = client - padding - scroll bar - this inset.
-pub const SIDEBAR_ITEM_INSET: i32 = 24;
-/// Lower bound of the sidebar item width.
+/// Sidebar item width = sidebar - margins - padding - scroll bar (once) - this inset (scaled).
+pub const SIDEBAR_ITEM_INSET: i32 = 12;
+/// Lower bound of the sidebar item width (scaled).
 pub const SIDEBAR_ITEM_MIN_WIDTH: i32 = 160;
 /// Sidebar title label height.
 pub const SIDEBAR_TITLE_HEIGHT: i32 = 34;
@@ -354,29 +435,98 @@ pub const SIDEBAR_TITLE_MARGIN: Pad = pad(12, 0, 12, 0);
 /// Sidebar subtitle label height.
 pub const SIDEBAR_SUBTITLE_HEIGHT: i32 = 20;
 /// Sidebar subtitle label margin.
-pub const SIDEBAR_SUBTITLE_MARGIN: Pad = pad(12, 0, 12, 10);
-/// Sidebar section button height.
+pub const SIDEBAR_SUBTITLE_MARGIN: Pad = pad(12, 0, 12, 8);
+/// Sidebar section button height (tier A).
 pub const SECTION_BUTTON_HEIGHT: i32 = 42;
 /// Sidebar section button padding.
 pub const SECTION_BUTTON_PADDING: Pad = pad(12, 0, 0, 0);
-/// Sidebar section button margin.
-pub const SECTION_BUTTON_MARGIN: Pad = pad(12, 0, 12, 5);
+/// Sidebar section button margin (tier A: gap 4).
+pub const SECTION_BUTTON_MARGIN: Pad = pad(12, 0, 12, 4);
+/// Width of the accent bar on the active sidebar item.
+pub const SIDEBAR_ACCENT_WIDTH: i32 = 2;
+/// Vertical inset of the accent bar (top and bottom).
+pub const SIDEBAR_ACCENT_INSET: i32 = 4;
+/// Sidebar tiers (`DESIGN.md` section 11): item height, gap below, title height and gap,
+/// subtitle shown. The first tier whose content fits the sidebar is used.
+pub struct SidebarTier {
+    /// Section button height.
+    pub item: i32,
+    /// Gap below each section button.
+    pub gap: i32,
+    /// Title label height.
+    pub title: i32,
+    /// Gap below the title when the subtitle is hidden.
+    pub title_gap: i32,
+    /// Whether the `{n} sections` subtitle is shown.
+    pub subtitle: bool,
+}
+/// Tier A (default), B, C, D in order.
+pub const SIDEBAR_TIERS: [SidebarTier; 4] = [
+    SidebarTier {
+        item: 42,
+        gap: 4,
+        title: 34,
+        title_gap: 0,
+        subtitle: true,
+    },
+    SidebarTier {
+        item: 36,
+        gap: 4,
+        title: 34,
+        title_gap: 0,
+        subtitle: true,
+    },
+    SidebarTier {
+        item: 32,
+        gap: 3,
+        title: 34,
+        title_gap: 6,
+        subtitle: false,
+    },
+    SidebarTier {
+        item: 28,
+        gap: 2,
+        title: 28,
+        title_gap: 4,
+        subtitle: false,
+    },
+];
 /// Content panel padding.
-pub const CONTENT_PADDING: Pad = all(14);
-/// Section header panel padding.
-pub const HEADER_PADDING: Pad = pad(14, 10, 14, 9);
+pub const CONTENT_PADDING: Pad = all(12);
+/// Section header card padding.
+pub const HEADER_PADDING: Pad = pad(12, 8, 12, 8);
+/// Section header card margin (the gap to the text well).
+pub const HEADER_MARGIN: Pad = pad(0, 0, 0, 8);
+/// Section header card corner radius.
+pub const HEADER_RADIUS: i32 = 8;
 /// Section title label height.
 pub const SECTION_TITLE_HEIGHT: i32 = 26;
 /// Section meta label height.
 pub const SECTION_META_HEIGHT: i32 = 18;
-/// Divider row height.
-pub const DIVIDER_HEIGHT: i32 = 1;
+/// `Copy` button minimum size in the section header (auto-sized to its icon and text).
+pub const COPY_BUTTON_SIZE: Size = size(72, 28);
 /// Footer button panel padding.
 pub const FOOTER_PADDING: Pad = pad(12, 8, 12, 8);
 /// Footer button minimum size.
 pub const FOOTER_BUTTON_MIN: Size = size(120, 34);
-/// Footer button margin.
-pub const FOOTER_BUTTON_MARGIN: Pad = pad(0, 0, 8, 8);
+/// Footer button margin (one row); the bottom margin returns only when the footer wraps.
+pub const FOOTER_BUTTON_MARGIN: Pad = pad(0, 0, 8, 0);
+/// Gap between wrapped footer rows.
+pub const FOOTER_ROW_GAP: i32 = 8;
+/// Inner margin (left and right) of every multi-line text well.
+pub const EDIT_INNER_MARGIN: i32 = 10;
+/// Loading indicator diameter.
+pub const SPINNER_SIZE: i32 = 32;
+/// Loading indicator stroke width.
+pub const SPINNER_STROKE: i32 = 3;
+/// Loading indicator: one turn in milliseconds.
+pub const SPINNER_TURN_MS: i32 = 1200;
+/// Loading indicator repaint period.
+pub const SPINNER_STEP_MS: u32 = 33;
+/// Gap below the loading indicator.
+pub const SPINNER_MARGIN: Pad = pad(0, 0, 0, 16);
+/// Gap below the loading title.
+pub const LOADING_TITLE_MARGIN: Pad = pad(0, 0, 0, 4);
 
 // ---------------------------------------------------------------------------------------------
 // Old View (inline form in SectionedViewForm.cs:836-858)
@@ -384,6 +534,8 @@ pub const FOOTER_BUTTON_MARGIN: Pad = pad(0, 0, 8, 8);
 
 /// Old View outer size.
 pub const OLD_VIEW_SIZE: Size = size(1000, 700);
+/// Old View minimum outer size (C# has none).
+pub const OLD_VIEW_MIN_SIZE: Size = size(640, 400);
 
 // ---------------------------------------------------------------------------------------------
 // Device Cleaning (CleanDevicesForm.cs)
@@ -393,12 +545,12 @@ pub const OLD_VIEW_SIZE: Size = size(1000, 700);
 pub const CLEAN_DEVICES_CLIENT_SIZE: Size = size(920, 640);
 /// `MinimumWidth` x `MinimumHeight` (outer).
 pub const CLEAN_DEVICES_MIN_SIZE: Size = size(760, 500);
-/// Output panel padding (cleaner and whitelist windows).
-pub const OUTPUT_PANEL_PADDING: Pad = all(10);
-/// Footer row height (cleaner and whitelist windows).
-pub const ACTION_ROW_HEIGHT: i32 = 56;
+/// Output panel padding (cleaner, whitelist and Old View windows).
+pub const OUTPUT_PANEL_PADDING: Pad = all(12);
+/// Footer row height (cleaner and whitelist windows): padding 12 + button 36 + padding 12.
+pub const ACTION_ROW_HEIGHT: i32 = 60;
 /// Footer flow panel padding (cleaner and whitelist windows).
-pub const ACTION_PANEL_PADDING: Pad = all(10);
+pub const ACTION_PANEL_PADDING: Pad = all(12);
 /// `CreateActionButton` minimum size (Device Cleaning, whitelist).
 pub const ACTION_BUTTON_MIN: Size = size(130, 34);
 /// `CreateActionButton` margin (Device Cleaning, Log Cleaning, whitelist).
@@ -461,13 +613,40 @@ pub const CONFIRM_LABEL_WRAP_INSET: i32 = 40;
 
 /// Update window outer size.
 pub const UPDATE_SIZE: Size = size(400, 150);
-/// Progress label location.
-pub const UPDATE_LABEL_POS: Point = Point { x: 10, y: 20 };
-/// Progress label and detail label size.
-pub const UPDATE_LABEL_SIZE: Size = size(360, 20);
-/// Progress bar location.
-pub const UPDATE_BAR_POS: Point = Point { x: 10, y: 50 };
-/// Progress bar size.
-pub const UPDATE_BAR_SIZE: Size = size(360, 25);
-/// Detail label location.
-pub const UPDATE_DETAIL_POS: Point = Point { x: 10, y: 85 };
+/// Update window padding.
+pub const UPDATE_PADDING: Pad = all(16);
+/// App icon size in the update window.
+pub const UPDATE_ICON_SIZE: i32 = 32;
+/// App icon margin (the gap to the text column).
+pub const UPDATE_ICON_MARGIN: Pad = pad(0, 0, 12, 0);
+/// Step label height.
+pub const UPDATE_LABEL_HEIGHT: i32 = 20;
+/// Step label margin.
+pub const UPDATE_LABEL_MARGIN: Pad = pad(0, 0, 0, 2);
+/// Status line height.
+pub const UPDATE_DETAIL_HEIGHT: i32 = 18;
+/// Progress bar height (a pill: radius = half the height).
+pub const PROGRESS_BAR_HEIGHT: i32 = 8;
+/// Progress bar margin (the gap above it).
+pub const UPDATE_BAR_MARGIN: Pad = pad(0, 12, 0, 0);
+
+// ---------------------------------------------------------------------------------------------
+// Message box (themed `MessageBox.Show`, DESIGN.md section 15)
+// ---------------------------------------------------------------------------------------------
+
+/// Message box padding.
+pub const MSGBOX_PADDING: Pad = all(20);
+/// Icon margin (the gap to the text).
+pub const MSGBOX_ICON_MARGIN: Pad = pad(0, 0, 14, 0);
+/// Longest text line before wrapping (logical px).
+pub const MSGBOX_TEXT_MAX_WIDTH: i32 = 440;
+/// Minimum client width.
+pub const MSGBOX_MIN_WIDTH: i32 = 320;
+/// Gap between the text and the button row.
+pub const MSGBOX_BUTTON_ROW_MARGIN: Pad = pad(0, 20, 0, 0);
+/// Button minimum width.
+pub const MSGBOX_BUTTON_MIN_WIDTH: i32 = 88;
+/// Button height.
+pub const MSGBOX_BUTTON_HEIGHT: i32 = 34;
+/// Button margin: 4 on every side (8 between buttons, room for the focus ring around them).
+pub const MSGBOX_BUTTON_MARGIN: Pad = all(4);
