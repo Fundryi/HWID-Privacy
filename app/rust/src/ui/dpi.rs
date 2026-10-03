@@ -41,10 +41,16 @@ pub fn load_fonts() -> bool {
     *LOADED.get_or_init(|| {
         let mut ok = true;
         for (name, bytes) in INTER {
-            let count = 0u32;
-            // SAFETY: The byte slice is a static resource that outlives the call; GDI copies it.
+            let mut count = 0u32;
+            // SAFETY: GDI copies the static font bytes. Despite the binding's const pointer,
+            // pcFonts is an output parameter; count is writable and lives through the call.
             let handle = unsafe {
-                AddFontMemResourceEx(bytes.as_ptr().cast(), bytes.len() as u32, None, &count)
+                AddFontMemResourceEx(
+                    bytes.as_ptr().cast(),
+                    bytes.len() as u32,
+                    None,
+                    &raw mut count,
+                )
             };
             if handle.is_invalid() || count == 0 {
                 win::record(win::Error::last(name));
