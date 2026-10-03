@@ -26,8 +26,8 @@ use windows::{
         Graphics::{
             Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute},
             Gdi::{
-                BeginPaint, EndPaint, FillRect, GetMonitorInfoW, HDC, MONITOR_DEFAULTTONEAREST,
-                MONITORINFO, MonitorFromPoint, MonitorFromWindow, PAINTSTRUCT, UpdateWindow,
+                FillRect, GetMonitorInfoW, HDC, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+                MonitorFromPoint, MonitorFromWindow, UpdateWindow,
             },
         },
         System::{
@@ -35,34 +35,38 @@ use windows::{
                 GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
             },
             SystemInformation::OSVERSIONINFOW,
+            Threading::GetCurrentThreadId,
         },
         UI::{
             Controls::{
-                BufferedPaintInit, ICC_PROGRESS_CLASS, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX,
+                ICC_PROGRESS_CLASS, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX,
                 InitCommonControlsEx, SetScrollInfo, SetWindowTheme, ShowScrollBar,
             },
             Input::KeyboardAndMouse::{
-                EnableWindow, GetFocus, IsWindowEnabled, SetFocus, VK_ESCAPE, VK_RETURN,
+                EnableWindow, GetFocus, GetKeyState, IsWindowEnabled, SetFocus, VK_CONTROL,
+                VK_ESCAPE, VK_MENU, VK_RETURN,
             },
             WindowsAndMessaging::{
                 BeginDeferWindowPos, CREATESTRUCTW, CS_DBLCLKS, CreateWindowExW, DefWindowProcW,
                 DeferWindowPos, DestroyWindow, DispatchMessageW, EndDeferWindowPos, GA_ROOT,
                 GCW_ATOM, GWLP_USERDATA, GetAncestor, GetClassLongPtrW, GetClientRect,
                 GetCursorPos, GetMessageW, GetNextDlgTabItem, GetWindowLongPtrW, GetWindowRect,
-                HICON, IDC_ARROW, IsDialogMessageW, IsWindow, KillTimer, LoadCursorW, LoadIconW,
-                MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MINMAXINFO, MSG, MessageBoxW,
-                PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SB_BOTTOM,
-                SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBTRACK, SB_TOP, SB_VERT,
-                SCROLLINFO, SIF_ALL, SIZE_MINIMIZED, SM_CXVSCROLL, SW_SHOWMAXIMIZED, SW_SHOWNORMAL,
-                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetTimer,
-                SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage,
-                WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_CLOSE, WM_COMMAND,
-                WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED,
-                WM_DRAWITEM, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_MOUSEWHEEL,
-                WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFOCUS, WM_SIZE, WM_TIMER, WM_VKEYTOITEM,
-                WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-                WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_MAXIMIZEBOX,
-                WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+                GetWindowThreadProcessId, HICON, IDC_ARROW, IsDialogMessageW, IsWindow, KillTimer,
+                LoadCursorW, LoadIconW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MINMAXINFO, MSG,
+                MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassExW,
+                RegisterWindowMessageW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
+                SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL, SIZE_MINIMIZED, SM_CXVSCROLL,
+                SW_SHOWMAXIMIZED, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
+                SWP_NOSIZE, SWP_NOZORDER, SetTimer, SetWindowLongPtrW, SetWindowPos,
+                SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE,
+                WINDOW_STYLE, WM_ACTIVATE, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT,
+                WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM,
+                WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_MOUSEWHEEL, WM_NCCREATE,
+                WM_NCDESTROY, WM_NULL, WM_PAINT, WM_SETFOCUS, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER,
+                WM_VKEYTOITEM, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+                WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
+                WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME,
+                WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -284,6 +288,7 @@ struct FormState {
     default_button: Cell<HWND>,
     last_focus: Cell<HWND>,
     destroyed: Cell<bool>,
+    destroying: Cell<bool>,
     maximize: Cell<bool>,
 }
 
@@ -291,6 +296,14 @@ type HandlerRc = Rc<dyn Fn(&Form, Event) -> bool>;
 
 struct PanelState {
     brush: controls::Brush,
+}
+
+struct DpiChange<'a>(&'a Cell<bool>);
+
+impl Drop for DpiChange<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
 }
 
 thread_local! {
@@ -318,12 +331,9 @@ fn atoms() -> &'static Atoms {
             dwICC: ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS,
         };
         // SAFETY: Registers the common control classes (progress bar) for this process; a
-        // failure surfaces later as a CreateWindowExW error. Buffered paint is initialized once
-        // for the UI thread and kept for the process lifetime; without it BeginBufferedPaint
-        // still works, only slower.
+        // failure surfaces later as a CreateWindowExW error.
         unsafe {
             let _ = InitCommonControlsEx(&icc);
-            let _ = BufferedPaintInit();
         }
         // SAFETY: Module handle of this process; no ownership.
         let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
@@ -378,7 +388,7 @@ fn class_atom(hwnd: HWND) -> u16 {
 
 /// Clones the `Rc` stored in `GWLP_USERDATA` of a window of class `atom`.
 fn user_rc<T>(hwnd: HWND, atom: u16) -> Option<Rc<T>> {
-    if atom == 0 || class_atom(hwnd) != atom {
+    if !on_window_thread(hwnd) || atom == 0 || class_atom(hwnd) != atom {
         return None;
     }
     // SAFETY: Windows of our classes store Rc::into_raw of T here (or 0 before NCCREATE/after
@@ -391,6 +401,12 @@ fn user_rc<T>(hwnd: HWND, atom: u16) -> Option<Rc<T>> {
         Rc::increment_strong_count(ptr);
         Some(Rc::from_raw(ptr))
     }
+}
+
+/// Whether a live window belongs to the calling UI thread (required before borrowing its Rc).
+pub(crate) fn on_window_thread(hwnd: HWND) -> bool {
+    // SAFETY: Read-only thread id queries, with no pointers retained or messages dispatched.
+    unsafe { GetWindowThreadProcessId(hwnd, None) == GetCurrentThreadId() }
 }
 
 fn form_state(hwnd: HWND) -> Option<Rc<FormState>> {
@@ -424,12 +440,7 @@ fn fill_client(hwnd: HWND, hdc: HDC, brush: &controls::Brush) {
 }
 
 fn validate_paint(hwnd: HWND) {
-    let mut ps = PAINTSTRUCT::default();
-    // SAFETY: BeginPaint/EndPaint pair inside WM_PAINT of our own window.
-    unsafe {
-        BeginPaint(hwnd, &mut ps);
-        let _ = EndPaint(hwnd, &ps);
-    }
+    let _paint = controls::Paint::begin(hwnd);
 }
 
 impl FormState {
@@ -528,7 +539,8 @@ impl FormState {
             };
             let mut measure = |node: &Node, proposed: Size| -> Size {
                 match &node.kind {
-                    Kind::Leaf(ctl) => controls::measure(
+                    Kind::Leaf(ctl) => controls::measure_live(
+                        self.hwnd_of(node.id).unwrap_or_default(),
                         ctl,
                         font_of(ctl.font()),
                         node.padding,
@@ -607,39 +619,71 @@ impl FormState {
     }
 
     fn destroy(&self) {
-        if self.destroyed.get() {
+        if self.destroyed.get() || self.destroying.replace(true) {
             return;
         }
-        if self.modal.get() && !self.owner.is_invalid() {
+        self.enable_owner();
+        // SAFETY: Destroys our own top-level window on its thread.
+        if let Err(error) = unsafe { DestroyWindow(self.hwnd.get()) } {
+            self.destroying.set(false);
+            if !self.destroyed.get() {
+                show_error(
+                    self.hwnd.get(),
+                    &win::Error::from_win("DestroyWindow", error).to_string(),
+                    "HWID Checker",
+                );
+            }
+        }
+    }
+
+    fn enable_owner(&self) {
+        if self.modal.replace(false) && !self.owner.is_invalid() {
             // Re-enable the owner first so Windows activates it, not another app.
             // SAFETY: Enabling the owner window that `run_modal` disabled.
             unsafe {
                 let _ = EnableWindow(self.owner, true);
             }
         }
-        // SAFETY: Destroys our own top-level window on its thread.
-        unsafe {
-            let _ = DestroyWindow(self.hwnd.get());
-        }
     }
 
     fn on_dpi_changed(&self, new_dpi: u32, suggested: RECT) {
+        // Build the complete replacement before changing the cache. A failed font must not
+        // delete the fonts still borrowed by native controls or silently substitute HFONT(0).
+        let fresh: win::Result<Vec<Font>> = self
+            .fonts
+            .borrow()
+            .iter()
+            .map(|f| Font::new(f.spec(), new_dpi))
+            .collect();
+        let fresh = match fresh {
+            Ok(fonts) => fonts,
+            Err(error) => {
+                show_error(self.hwnd.get(), &error.to_string(), "HWID Checker");
+                return;
+            }
+        };
         let old = self.dpi.get();
-        self.in_dpi_change.set(true);
-        if let Ok(mut tree) = self.tree.try_borrow_mut() {
+        {
+            let Ok(mut tree) = self.tree.try_borrow_mut() else {
+                return;
+            };
             tree.rescale(old, new_dpi);
         }
+        self.in_dpi_change.set(true);
+        let change = DpiChange(&self.in_dpi_change);
         self.dpi.set(new_dpi);
-        let specs: Vec<theme::FontSpec> = self.fonts.borrow().iter().map(Font::spec).collect();
-        let fresh: Vec<Font> = specs
-            .into_iter()
-            .filter_map(|s| Font::new(s, new_dpi).ok())
-            .collect();
         let old_fonts = std::mem::replace(&mut *self.fonts.borrow_mut(), fresh);
-        {
+        let placements = {
             let tree = self.tree.borrow();
             let hwnds = self.hwnds.borrow();
-            apply_fonts(&tree, &hwnds, self, new_dpi);
+            let mut placements = Vec::new();
+            collect_fonts(&tree, &hwnds, self, &mut placements);
+            placements
+        };
+        // WM_SETFONT is synchronous. Release every tree/map/cache borrow before entering a
+        // native control, and retain old fonts until every control received its replacement.
+        for (h, font, padding) in placements {
+            controls::apply_dpi(h, font, padding, new_dpi);
         }
         drop(old_fonts);
         // SAFETY: Moves our own window to the rectangle Windows suggested for the new DPI.
@@ -654,7 +698,7 @@ impl FormState {
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
-        self.in_dpi_change.set(false);
+        drop(change);
         self.dispatch(Event::Resize {
             client: client_size(self.hwnd.get()),
             dpi: new_dpi,
@@ -782,12 +826,17 @@ fn collect_placements(
     }
 }
 
-fn apply_fonts(node: &Node, hwnds: &HashMap<u16, HWND>, state: &FormState, dpi: u32) {
+fn collect_fonts(
+    node: &Node,
+    hwnds: &HashMap<u16, HWND>,
+    state: &FormState,
+    out: &mut Vec<(HWND, windows::Win32::Graphics::Gdi::HFONT, layout::Pad)>,
+) {
     for c in node.children() {
         if let (Kind::Leaf(ctl), Some(&h)) = (&c.kind, hwnds.get(&c.id)) {
-            controls::apply_dpi(h, state.font(ctl.font()), c.padding, dpi);
+            out.push((h, state.font(ctl.font()), c.padding));
         }
-        apply_fonts(c, hwnds, state, dpi);
+        collect_fonts(c, hwnds, state, out);
     }
 }
 
@@ -805,7 +854,6 @@ fn create_panel(parent: HWND, node: &Node, back: Color) -> win::Result<HWND> {
     let state = Rc::new(PanelState {
         brush: controls::Brush::new(back),
     });
-    let raw = Rc::into_raw(state);
     let vis = if node.visible {
         WS_VISIBLE
     } else {
@@ -816,8 +864,8 @@ fn create_panel(parent: HWND, node: &Node, back: Color) -> win::Result<HWND> {
     } else {
         WINDOW_STYLE(0)
     };
-    // SAFETY: Static class name; `raw` is handed to WM_NCCREATE, which stores it, or reclaimed
-    // below if creation fails before that.
+    // SAFETY: Creation is synchronous. WM_NCCREATE borrows `state` during this call and stores
+    // its own Rc clone, released by WM_NCDESTROY; an early failure acquires no reference.
     let hwnd = unsafe {
         CreateWindowExW(
             WS_EX_CONTROLPARENT,
@@ -831,19 +879,10 @@ fn create_panel(parent: HWND, node: &Node, back: Color) -> win::Result<HWND> {
             Some(parent),
             None,
             None,
-            Some(raw as *const core::ffi::c_void),
+            Some((&state as *const Rc<PanelState>).cast()),
         )
     };
-    match hwnd {
-        Ok(h) => Ok(h),
-        Err(e) => {
-            // Creation failed. If WM_NCCREATE ran, WM_NCDESTROY already freed `raw`; we cannot
-            // tell which, so the rare early failure leaks one small allocation rather than risk
-            // a double free.
-            let _ = raw;
-            Err(win::Error::from_win("CreateWindowExW", e))
-        }
-    }
+    hwnd.map_err(|e| win::Error::from_win("CreateWindowExW", e))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -856,14 +895,16 @@ unsafe extern "system" fn panel_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        panel_message(hwnd, msg, wparam, lparam)
-    }));
-    match result {
-        Ok(Some(r)) => r,
-        // SAFETY: Default processing with unchanged parameters (also after a caught panic).
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
+    catch_unwind(AssertUnwindSafe(|| {
+        panel_message(hwnd, msg, wparam, lparam).unwrap_or_else(|| {
+            // SAFETY: Default processing with unchanged parameters.
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        })
+    }))
+    .unwrap_or_else(|_| {
+        // SAFETY: Default processing after a caught panic.
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    })
 }
 
 fn panel_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
@@ -871,8 +912,11 @@ fn panel_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option
         WM_NCCREATE => {
             // SAFETY: For WM_NCCREATE, lParam points to the CREATESTRUCTW of this window.
             let cs = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
-            // SAFETY: Stores the Rc pointer passed by `create_panel`.
-            unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize) };
+            // SAFETY: create_panel passes a live Rc for this synchronous creation callback.
+            let state = unsafe { &*(cs.lpCreateParams as *const Rc<PanelState>) };
+            let raw = Rc::into_raw(Rc::clone(state));
+            // SAFETY: The window owns this clone until WM_NCDESTROY clears it.
+            unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize) };
             None
         }
         WM_NCDESTROY => {
@@ -952,23 +996,28 @@ unsafe extern "system" fn form_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    let result = catch_unwind(AssertUnwindSafe(|| form_message(hwnd, msg, wparam, lparam)));
-    match result {
-        Ok(Some(r)) => r,
-        // SAFETY: Default processing with unchanged parameters (also after a caught panic).
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
+    catch_unwind(AssertUnwindSafe(|| {
+        form_message(hwnd, msg, wparam, lparam).unwrap_or_else(|| {
+            // SAFETY: Default processing with unchanged parameters.
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        })
+    }))
+    .unwrap_or_else(|_| {
+        // SAFETY: Default processing after a caught panic.
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    })
 }
 
 fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     if msg == WM_NCCREATE {
         // SAFETY: For WM_NCCREATE, lParam points to the CREATESTRUCTW of this window.
         let cs = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
-        // SAFETY: Stores the Rc pointer passed by `Form::create`.
-        unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize) };
-        if let Some(state) = form_state(hwnd) {
-            state.hwnd.set(hwnd);
-        }
+        // SAFETY: Form::create passes a live Rc for this synchronous creation callback.
+        let state = unsafe { &*(cs.lpCreateParams as *const Rc<FormState>) };
+        let raw = Rc::into_raw(Rc::clone(state));
+        // SAFETY: The window owns this clone until WM_NCDESTROY clears it.
+        unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize) };
+        state.hwnd.set(hwnd);
         return None;
     }
     if msg == WM_NCDESTROY {
@@ -1035,14 +1084,26 @@ fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             Some(LRESULT(0))
         }
         WM_CLOSE => {
+            // Form::close tags queued requests, so HWND reuse cannot close a newer form.
+            // Native WM_CLOSE has wParam == 0.
+            if wparam.0 != 0 && wparam.0 as u64 != state.serial {
+                return Some(LRESULT(0));
+            }
             if state.dispatch(Event::CloseRequest) {
                 state.destroy();
             }
             Some(LRESULT(0))
         }
         WM_DESTROY => {
-            state.dispatch(Event::Destroyed);
             state.destroyed.set(true);
+            state.enable_owner();
+            // GetMessage dispatches sent messages internally and can keep waiting after a
+            // synchronous WM_CLOSE destroys this form. Wake it so `done` is checked again.
+            // SAFETY: A pointer-free thread message to this window's UI thread.
+            unsafe {
+                let _ = PostMessageW(None, WM_NULL, WPARAM(0), LPARAM(0));
+            }
+            state.dispatch(Event::Destroyed);
             Some(LRESULT(0))
         }
         WM_TIMER => {
@@ -1164,13 +1225,13 @@ impl Form {
             default_button: Cell::new(HWND::default()),
             last_focus: Cell::new(HWND::default()),
             destroyed: Cell::new(false),
+            destroying: Cell::new(false),
             maximize: Cell::new(false),
         });
         let work = work_area(owner, spec.start);
         let title = to_wide(&spec.title);
-        let raw = Rc::into_raw(Rc::clone(&state));
-        // SAFETY: Static class name, NUL-terminated title; `raw` is stored at WM_NCCREATE and
-        // released at WM_NCDESTROY.
+        // SAFETY: Static class name and terminated title. WM_NCCREATE borrows `state` during
+        // this synchronous call and stores its own Rc clone, released at WM_NCDESTROY.
         let created = unsafe {
             CreateWindowExW(
                 ex,
@@ -1188,17 +1249,12 @@ impl Form {
                 },
                 None,
                 None,
-                Some(raw as *const core::ffi::c_void),
+                Some((&state as *const Rc<FormState>).cast()),
             )
         };
         let hwnd = match created {
             Ok(h) => h,
-            Err(e) => {
-                // Creation fails before WM_NCCREATE only when the class is missing; otherwise
-                // WM_NCDESTROY already reclaimed `raw`, so it is never freed here.
-                let _ = raw;
-                return Err(win::Error::from_win("CreateWindowExW", e));
-            }
+            Err(e) => return Err(win::Error::from_win("CreateWindowExW", e)),
         };
         let dpi = dpi::window_dpi(hwnd);
         state.dpi.set(dpi);
@@ -1218,7 +1274,13 @@ impl Form {
         }
         let outer = match spec.size {
             WindowSize::Client(s) => {
-                dpi::outer_for_client(dpi::scale_size(s, dpi), style, ex, dpi)?
+                match dpi::outer_for_client(dpi::scale_size(s, dpi), style, ex, dpi) {
+                    Ok(size) => size,
+                    Err(error) => {
+                        state.destroy();
+                        return Err(error);
+                    }
+                }
             }
             WindowSize::Outer { size, scaled } => {
                 if scaled {
@@ -1269,7 +1331,8 @@ impl Form {
     }
 
     fn state(&self) -> Option<Rc<FormState>> {
-        form_state(self.hwnd).filter(|s| s.serial == self.serial)
+        form_state(self.hwnd)
+            .filter(|s| s.serial == self.serial && !s.destroyed.get() && !s.destroying.get())
     }
 
     /// The window handle (for owners of message boxes and child forms).
@@ -1315,6 +1378,16 @@ impl Form {
     /// Sets the text of a button, label, or edit.
     pub fn set_text(&self, id: u16, text: &str) {
         self.with_control(id, |h| controls::set_text(h, text));
+        if let Some(state) = self.state() {
+            let auto_size = state
+                .tree
+                .try_borrow()
+                .ok()
+                .is_some_and(|tree| tree.find(id).is_some_and(|n| n.auto_size));
+            if auto_size {
+                state.relayout();
+            }
+        }
     }
 
     /// The text of a control.
@@ -1454,6 +1527,9 @@ impl Form {
 
     /// Sets the window title.
     pub fn set_title(&self, title: &str) {
+        let Some(_state) = self.state() else {
+            return;
+        };
         let wide = to_wide(title);
         // SAFETY: NUL-terminated buffer valid for the call.
         unsafe {
@@ -1473,7 +1549,8 @@ impl Form {
 
     /// Client size of the form in device pixels.
     pub fn client_size(&self) -> Size {
-        client_size(self.hwnd)
+        self.state()
+            .map_or(Size::default(), |_| client_size(self.hwnd))
     }
 
     /// Client size of a container in device pixels (scroll bar excluded), from the last layout.
@@ -1527,6 +1604,9 @@ impl Form {
 
     /// Starts or restarts timer `id` (`Event::Timer(id)` every `ms`).
     pub fn set_timer(&self, id: usize, ms: u32) {
+        let Some(_state) = self.state() else {
+            return;
+        };
         // SAFETY: Window timer on our own window, no callback.
         unsafe {
             SetTimer(Some(self.hwnd), id, ms, None);
@@ -1535,6 +1615,9 @@ impl Form {
 
     /// Stops timer `id`.
     pub fn kill_timer(&self, id: usize) {
+        let Some(_state) = self.state() else {
+            return;
+        };
         // SAFETY: Window timer on our own window.
         unsafe {
             let _ = KillTimer(Some(self.hwnd), id);
@@ -1561,9 +1644,17 @@ impl Form {
 
     /// Requests a close (`Event::CloseRequest` decides).
     pub fn close(&self) {
+        let Some(_state) = self.state() else {
+            return;
+        };
         // SAFETY: Posts WM_CLOSE to our own window.
         unsafe {
-            let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+            let _ = PostMessageW(
+                Some(self.hwnd),
+                WM_CLOSE,
+                WPARAM(self.serial as usize),
+                LPARAM(0),
+            );
         }
     }
 
@@ -1586,7 +1677,9 @@ pub fn run_modal(
     let Some(state) = form.state() else {
         return Ok(());
     };
-    if !owner.is_invalid() {
+    // Only restore an owner that this loop actually disabled.
+    // SAFETY: Queries the owner window on the UI thread.
+    if !owner.is_invalid() && unsafe { IsWindowEnabled(owner) }.as_bool() {
         state.modal.set(true);
         // SAFETY: Disables the owner for the modal loop; `destroy` re-enables it.
         unsafe {
@@ -1595,12 +1688,8 @@ pub fn run_modal(
     }
     form.show();
     pump_until(|| state.destroyed.get());
-    if !owner.is_invalid() {
-        // SAFETY: Safety net if the window died without `destroy` (for example WM_QUIT).
-        unsafe {
-            let _ = EnableWindow(owner, true);
-        }
-    }
+    // WM_QUIT or GetMessage failure can end the loop while the window is still alive.
+    state.destroy();
     Ok(())
 }
 
@@ -1616,6 +1705,7 @@ pub fn run_main(
     };
     form.show();
     pump_until(|| state.destroyed.get());
+    state.destroy();
     Ok(())
 }
 
@@ -1646,7 +1736,7 @@ pub fn pump_until(done: impl Fn() -> bool) {
 }
 
 /// Enter, Esc, and Tab handling for kit forms (WinForms `ProcessDialogKey`).
-fn pre_translate(msg: &MSG) -> bool {
+pub(super) fn pre_translate(msg: &MSG) -> bool {
     if msg.hwnd.is_invalid() {
         return false;
     }
@@ -1654,13 +1744,27 @@ fn pre_translate(msg: &MSG) -> bool {
     let Some(state) = form_state(root) else {
         return false;
     };
+    if msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN {
+        let vk = msg.wParam.0 as u16;
+        if vk == VK_RETURN.0 || vk == VK_ESCAPE.0 {
+            // WinForms Form.ProcessDialogKey excludes Ctrl/Alt combinations. Bypass native
+            // dialog translation too, so a modified Enter cannot activate a confirmation.
+            // SAFETY: Reads this UI thread's synchronous modifier state.
+            let modified = unsafe {
+                GetKeyState(i32::from(VK_CONTROL.0)) < 0 || GetKeyState(i32::from(VK_MENU.0)) < 0
+            };
+            if modified {
+                return false;
+            }
+        }
+    }
     if msg.message == WM_KEYDOWN {
         let vk = msg.wParam.0 as u16;
         let form = state.form();
         if vk == VK_RETURN.0 {
             // SAFETY: Reads this thread's focus window.
             let focus = unsafe { GetFocus() };
-            if controls::is_button(focus) {
+            if controls::is_button(focus) && root_of(focus) == root {
                 // C# parity: a focused button is the default button; Enter clicks it.
                 if let Some((id, _)) = state.hwnds.borrow().iter().find(|(_, h)| **h == focus) {
                     let id = *id;
@@ -1687,7 +1791,9 @@ fn pre_translate(msg: &MSG) -> bool {
 // Dark title bar and scroll bars (OPT-17, AD-35, AD-36)
 // ---------------------------------------------------------------------------------------------
 
-type AllowDarkModeForWindow = unsafe extern "system" fn(HWND, BOOL) -> BOOL;
+// uxtheme uses C++ bool (one byte), not Win32 BOOL (four bytes), for these exports.
+type AllowDarkModeForWindow = unsafe extern "system" fn(HWND, bool) -> bool;
+type AllowDarkModeForApp = unsafe extern "system" fn(bool) -> bool;
 type SetPreferredAppMode = unsafe extern "system" fn(i32) -> i32;
 type RtlGetVersion = unsafe extern "system" fn(*mut OSVERSIONINFOW) -> i32;
 
@@ -1718,7 +1824,8 @@ pub fn os_build() -> u32 {
 fn dark_api() -> &'static DarkApi {
     static API: OnceLock<DarkApi> = OnceLock::new();
     API.get_or_init(|| {
-        if os_build() < 17763 {
+        let build = os_build();
+        if build < 17763 {
             return DarkApi { allow_window: None };
         }
         // SAFETY: uxtheme is a System32 DLL loaded by full search path; the module stays
@@ -1730,9 +1837,13 @@ fn dark_api() -> &'static DarkApi {
                 return DarkApi { allow_window: None };
             };
             if let Some(f) = GetProcAddress(ux, PCSTR(std::ptr::without_provenance(135))) {
-                let f: SetPreferredAppMode = std::mem::transmute(f);
-                // 1 = AllowDark (SetPreferredAppMode) or TRUE (AllowDarkModeForApp on 17763).
-                f(1);
+                if build < 18362 {
+                    let f: AllowDarkModeForApp = std::mem::transmute(f);
+                    f(true);
+                } else {
+                    let f: SetPreferredAppMode = std::mem::transmute(f);
+                    f(1); // PreferredAppMode::AllowDark
+                }
             }
             let allow_window = GetProcAddress(ux, PCSTR(std::ptr::without_provenance(133)))
                 .map(|f| std::mem::transmute::<_, AllowDarkModeForWindow>(f));
@@ -1743,21 +1854,23 @@ fn dark_api() -> &'static DarkApi {
 
 /// Dark title bar (`DWMWA_USE_IMMERSIVE_DARK_MODE`: 20, or 19 before build 18985).
 pub fn dark_title_bar(hwnd: HWND) {
-    let on = BOOL(1);
-    for attr in [20, 19] {
-        // SAFETY: `on` is a 4-byte BOOL that lives through the call.
-        let r = unsafe {
-            DwmSetWindowAttribute(
-                hwnd,
-                DWMWINDOWATTRIBUTE(attr),
-                (&on as *const BOOL).cast(),
-                std::mem::size_of::<BOOL>() as u32,
-            )
-        };
-        if r.is_ok() {
-            return;
-        }
+    let build = os_build();
+    if build < 17763 {
+        return;
     }
+    let on = BOOL(1);
+    let attr = if build < 18985 { 19 } else { 20 };
+    // SAFETY: `on` is a 4-byte BOOL that lives through the call.
+    let r = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWINDOWATTRIBUTE(attr),
+            (&on as *const BOOL).cast(),
+            std::mem::size_of::<BOOL>() as u32,
+        )
+    };
+    // Dark mode is optional polish; unsupported attributes retain a light title bar.
+    let _ = r;
 }
 
 /// Dark scroll bars on a scrollable control (build 17763 or later; otherwise unchanged).
@@ -1769,1584 +1882,7 @@ pub fn dark_scrollbars(hwnd: HWND) {
     // SAFETY: `allow` is the uxtheme export resolved in `dark_api`; SetWindowTheme takes
     // static strings.
     unsafe {
-        // The return value is the previous opt-in state, not an error.
-        let _ = allow(hwnd, BOOL(1));
+        let _ = allow(hwnd, true);
         let _ = SetWindowTheme(hwnd, w!("DarkMode_Explorer"), PCWSTR::null());
-    }
-}
-
-#[cfg(test)]
-mod spike {
-    //! WP-10a spike: `cargo test --locked --lib -- --ignored ui::window::spike --nocapture`.
-    //! Opens real windows on the desktop for about half a minute and drives them by itself.
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
-
-    use super::*;
-    use crate::ui::controls::{
-        Align, ButtonSpec, Ctl, EditBorder, EditSpec, Hover, LabelSpec, ListSpec,
-    };
-    use crate::ui::layout::{Anchor, FlowDir, Point, Track};
-    use std::path::{Path, PathBuf};
-    use std::time::{Duration, Instant};
-    use windows::Win32::Graphics::Gdi::{
-        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap, CreateCompatibleDC,
-        DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, GetObjectW, HBITMAP, HFONT,
-        LOGFONTW, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RedrawWindow, ReleaseDC, SelectObject,
-    };
-    use windows::Win32::UI::HiDpi::GetDpiForSystem;
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetKeyboardState, SetKeyboardState, VK_CONTROL, VK_SHIFT, VK_SPACE, VK_TAB,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetSystemMetrics, GetWindowTextLengthW, HWND_NOTOPMOST, HWND_TOPMOST, PM_REMOVE,
-        PeekMessageW, SM_CMONITORS, SendMessageW, WM_CHAR, WM_GETFONT, WM_KEYUP, WM_LBUTTONDBLCLK,
-        WM_LBUTTONDOWN, WM_LBUTTONUP,
-    };
-
-    const GOLDEN: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\wp-10a";
-
-    #[repr(C)]
-    struct ActCtx {
-        cb_size: u32,
-        flags: u32,
-        source: *const u16,
-        arch: u16,
-        lang: u16,
-        dir: *const u16,
-        resource: *const u16,
-        app: *const u16,
-        module: *mut core::ffi::c_void,
-    }
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn CreateActCtxW(ctx: *const ActCtx) -> *mut core::ffi::c_void;
-        fn ActivateActCtx(h: *mut core::ffi::c_void, cookie: *mut usize) -> i32;
-        fn GlobalLock(h: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
-        fn GlobalUnlock(h: *mut core::ffi::c_void) -> i32;
-        fn GlobalAlloc(flags: u32, bytes: usize) -> *mut core::ffi::c_void;
-    }
-
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn PrintWindow(hwnd: *mut core::ffi::c_void, hdc: *mut core::ffi::c_void, f: u32) -> i32;
-        fn OpenClipboard(hwnd: *mut core::ffi::c_void) -> i32;
-        fn CloseClipboard() -> i32;
-        fn EmptyClipboard() -> i32;
-        fn GetClipboardData(format: u32) -> *mut core::ffi::c_void;
-        fn SetClipboardData(format: u32, mem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
-    }
-
-    const CF_UNICODETEXT: u32 = 13;
-
-    /// The test exe has no manifest; activate Common Controls 6 like the app manifest does.
-    fn activate_comctl6() -> bool {
-        let path = Path::new(GOLDEN).join("comctl6.manifest");
-        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-<dependency><dependentAssembly><assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/></dependentAssembly></dependency>
-</assembly>"#;
-        std::fs::write(&path, xml).unwrap();
-        let wide = to_wide(&path.to_string_lossy());
-        let ctx = ActCtx {
-            cb_size: std::mem::size_of::<ActCtx>() as u32,
-            flags: 0,
-            source: wide.as_ptr(),
-            arch: 0,
-            lang: 0,
-            dir: std::ptr::null(),
-            resource: std::ptr::null(),
-            app: std::ptr::null(),
-            module: std::ptr::null_mut(),
-        };
-        // SAFETY: `ctx` and the path buffer live through the call; the context stays active
-        // for the rest of the test thread (never deactivated on purpose).
-        unsafe {
-            let h = CreateActCtxW(&ctx);
-            if h.is_null() || h as isize == -1 {
-                return false;
-            }
-            let mut cookie = 0usize;
-            ActivateActCtx(h, &mut cookie) != 0
-        }
-    }
-
-    fn pump_for(ms: u64) {
-        let end = Instant::now() + Duration::from_millis(ms);
-        while Instant::now() < end {
-            let mut msg = MSG::default();
-            // SAFETY: Standard non-blocking message pump on the test (UI) thread.
-            unsafe {
-                while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                    if !pre_translate(&msg) {
-                        let _ = TranslateMessage(&msg);
-                        DispatchMessageW(&msg);
-                    }
-                }
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    }
-
-    fn post(h: HWND, msg: u32, w: usize, l: isize) {
-        // SAFETY: Plain value messages to windows of this thread.
-        unsafe { PostMessageW(Some(h), msg, WPARAM(w), LPARAM(l)).unwrap() };
-    }
-
-    fn send(h: HWND, msg: u32, w: usize, l: isize) -> isize {
-        // SAFETY: Plain value messages (or pointers to live locals) to windows of this thread.
-        unsafe { SendMessageW(h, msg, Some(WPARAM(w)), Some(LPARAM(l))).0 }
-    }
-
-    fn set_keys(keys: &[u16], down: bool) {
-        let mut state = [0u8; 256];
-        // SAFETY: Reads and writes this thread's synchronous key state (test input only).
-        unsafe {
-            GetKeyboardState(&mut state).unwrap();
-            for k in keys {
-                state[usize::from(*k)] = if down { 0x80 } else { 0 };
-            }
-            SetKeyboardState(&state).unwrap();
-        }
-    }
-
-    /// Makes `h` the foreground window even when another app is active (test only).
-    fn ensure_active(h: HWND) {
-        use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
-        };
-        // SAFETY: Foreground and input-attach calls on window handles; detached again below.
-        unsafe {
-            let fg = GetForegroundWindow();
-            if fg == h {
-                return;
-            }
-            let other = GetWindowThreadProcessId(fg, None);
-            let me = GetCurrentThreadId();
-            let attached =
-                other != 0 && other != me && AttachThreadInput(me, other, true).as_bool();
-            let _ = SetForegroundWindow(h);
-            if attached {
-                let _ = AttachThreadInput(me, other, false);
-            }
-        }
-        pump_for(100);
-    }
-
-    fn focus() -> HWND {
-        // SAFETY: Reads this thread's focus window.
-        unsafe { GetFocus() }
-    }
-
-    fn window_rect(h: HWND) -> RECT {
-        let mut r = RECT::default();
-        // SAFETY: Writable RECT.
-        unsafe { GetWindowRect(h, &mut r).unwrap() };
-        r
-    }
-
-    /// PrintWindow capture of a top-level window as top-down BGRA pixels.
-    fn capture(h: HWND) -> (i32, i32, Vec<u8>) {
-        let r = window_rect(h);
-        let (w, hgt) = (r.right - r.left, r.bottom - r.top);
-        let mut bits = vec![0u8; (w * hgt * 4) as usize];
-        // SAFETY: Memory DC and bitmap are created, used, and released here; buffers are
-        // sized for the requested 32-bit top-down DIB.
-        unsafe {
-            let screen = GetDC(None);
-            let mem = CreateCompatibleDC(Some(screen));
-            let bmp: HBITMAP = CreateCompatibleBitmap(screen, w, hgt);
-            let old = SelectObject(mem, bmp.into());
-            PrintWindow(h.0, mem.0, 2);
-            SelectObject(mem, old);
-            let mut bi = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: w,
-                    biHeight: -hgt,
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: BI_RGB.0,
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            GetDIBits(
-                mem,
-                bmp,
-                0,
-                hgt as u32,
-                Some(bits.as_mut_ptr().cast()),
-                &mut bi,
-                DIB_RGB_COLORS,
-            );
-            let _ = DeleteObject(bmp.into());
-            let _ = DeleteDC(mem);
-            ReleaseDC(None, screen);
-        }
-        (w, hgt, bits)
-    }
-
-    fn save_bmp(path: &Path, w: i32, h: i32, bgra: &[u8]) {
-        let mut out = Vec::with_capacity(54 + bgra.len());
-        let file_size = 54 + bgra.len() as u32;
-        out.extend_from_slice(b"BM");
-        out.extend_from_slice(&file_size.to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes());
-        out.extend_from_slice(&54u32.to_le_bytes());
-        out.extend_from_slice(&40u32.to_le_bytes());
-        out.extend_from_slice(&w.to_le_bytes());
-        out.extend_from_slice(&(-h).to_le_bytes());
-        out.extend_from_slice(&1u16.to_le_bytes());
-        out.extend_from_slice(&32u16.to_le_bytes());
-        out.extend_from_slice(&[0u8; 24]);
-        out.extend_from_slice(bgra);
-        std::fs::write(path, out).unwrap();
-    }
-
-    fn print_shot(h: HWND, name: &str) -> PathBuf {
-        let (w, hgt, bits) = capture(h);
-        let path = Path::new(GOLDEN).join(format!("{name}.bmp"));
-        save_bmp(&path, w, hgt, &bits);
-        path
-    }
-
-    /// Screen capture through PowerShell `CopyFromScreen` (what the user really sees).
-    fn screen_shot(h: HWND, name: &str) {
-        // SAFETY: Z-order changes of our own window around the capture.
-        unsafe {
-            let _ = SetWindowPos(h, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-        }
-        pump_for(300);
-        let mut r = window_rect(h);
-        // SAFETY: Reads the visible frame rectangle of our own window into a RECT.
-        unsafe {
-            let _ = windows::Win32::Graphics::Dwm::DwmGetWindowAttribute(
-                h,
-                windows::Win32::Graphics::Dwm::DWMWA_EXTENDED_FRAME_BOUNDS,
-                (&mut r as *mut RECT).cast(),
-                std::mem::size_of::<RECT>() as u32,
-            );
-        }
-        let path = Path::new(GOLDEN).join(format!("{name}.png"));
-        let script = format!(
-            "Add-Type -AssemblyName System.Drawing; \
-             Add-Type -Namespace W -Name U -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool SetProcessDpiAwarenessContext(IntPtr v);'; \
-             [void][W.U]::SetProcessDpiAwarenessContext([IntPtr](-4)); \
-             $b = New-Object System.Drawing.Bitmap {w}, {h}; \
-             $g = [System.Drawing.Graphics]::FromImage($b); \
-             $g.CopyFromScreen({x}, {y}, 0, 0, $b.Size); \
-             $b.Save('{p}', [System.Drawing.Imaging.ImageFormat]::Png)",
-            w = r.right - r.left,
-            h = r.bottom - r.top,
-            x = r.left,
-            y = r.top,
-            p = path.display()
-        );
-        let mut child = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .spawn()
-            .unwrap();
-        loop {
-            pump_for(50);
-            if child.try_wait().unwrap().is_some() {
-                break;
-            }
-        }
-        // SAFETY: Restores normal z-order.
-        unsafe {
-            let _ = SetWindowPos(h, Some(HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-        }
-        println!("screenshot {}", path.display());
-    }
-
-    fn bmps_to_png() {
-        let script = format!(
-            "Add-Type -AssemblyName System.Drawing; \
-             Get-ChildItem '{g}' -Filter *.bmp | ForEach-Object {{ \
-               $i = [System.Drawing.Image]::FromFile($_.FullName); \
-               $i.Save(($_.FullName -replace '\\.bmp$', '.png'), [System.Drawing.Imaging.ImageFormat]::Png); \
-               $i.Dispose(); Remove-Item $_.FullName }}",
-            g = GOLDEN
-        );
-        let status = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .status()
-            .unwrap();
-        assert!(status.success());
-    }
-
-    fn clipboard_text() -> Option<String> {
-        // SAFETY: Standard clipboard read; the handle is only locked while copying out.
-        unsafe {
-            if OpenClipboard(std::ptr::null_mut()) == 0 {
-                return None;
-            }
-            let h = GetClipboardData(CF_UNICODETEXT);
-            let mut out = None;
-            if !h.is_null() {
-                let p = GlobalLock(h) as *const u16;
-                if !p.is_null() {
-                    let mut n = 0;
-                    while *p.add(n) != 0 {
-                        n += 1;
-                    }
-                    out = Some(String::from_utf16_lossy(std::slice::from_raw_parts(p, n)));
-                    GlobalUnlock(h);
-                }
-            }
-            CloseClipboard();
-            out
-        }
-    }
-
-    fn set_clipboard_text(text: &str) {
-        let wide = to_wide(text);
-        // SAFETY: Allocates movable global memory, copies the text in, and hands ownership to
-        // the clipboard.
-        unsafe {
-            if OpenClipboard(std::ptr::null_mut()) == 0 {
-                return;
-            }
-            EmptyClipboard();
-            let h = GlobalAlloc(0x0002, wide.len() * 2);
-            let p = GlobalLock(h) as *mut u16;
-            std::ptr::copy_nonoverlapping(wide.as_ptr(), p, wide.len());
-            GlobalUnlock(h);
-            SetClipboardData(CF_UNICODETEXT, h);
-            CloseClipboard();
-        }
-    }
-
-    fn lf_height(font: HFONT) -> i32 {
-        let mut lf = LOGFONTW::default();
-        // SAFETY: Reads the LOGFONTW of a font handle into a correctly sized buffer.
-        unsafe {
-            GetObjectW(
-                font.into(),
-                std::mem::size_of::<LOGFONTW>() as i32,
-                Some((&mut lf as *mut LOGFONTW).cast()),
-            )
-        };
-        lf.lfHeight
-    }
-
-    /// (leaves checked, wrong font handle, wrong font height) after a DPI change.
-    fn check_fonts(form: &Form) -> (usize, usize, usize) {
-        let state = form.state().unwrap();
-        let tree = state.tree.borrow();
-        let mut leaves = Vec::new();
-        fn walk<'a>(n: &'a Node, out: &mut Vec<&'a Node>) {
-            for c in n.children() {
-                if c.is_leaf() {
-                    out.push(c);
-                }
-                walk(c, out);
-            }
-        }
-        walk(&tree, &mut leaves);
-        let dpi = state.dpi.get();
-        let (mut wrong_handle, mut wrong_height) = (0, 0);
-        for leaf in &leaves {
-            let Kind::Leaf(ctl) = &leaf.kind else {
-                continue;
-            };
-            let h = state.hwnd_of(leaf.id).unwrap();
-            let got = send(h, WM_GETFONT, 0, 0);
-            let want = state.font(ctl.font());
-            if got != want.0 as isize {
-                wrong_handle += 1;
-            }
-            if lf_height(want) != dpi::font_height(ctl.font().points, dpi) {
-                wrong_height += 1;
-            }
-        }
-        (leaves.len(), wrong_handle, wrong_height)
-    }
-
-    /// Border pixels of a child window that no scroll bar covers: its left column and top row
-    /// (minus the vertical scroll bar width at the right end). The scroll bars themselves sit
-    /// on the right and bottom edges and change color by design (dark scroll bars, AD-36).
-    fn border_ring(top: HWND, child: HWND, cap: &(i32, i32, Vec<u8>)) -> Vec<u8> {
-        let tr = window_rect(top);
-        let cr = window_rect(child);
-        let (w, _, bits) = cap;
-        let bar = dpi::metric(SM_CXVSCROLL, dpi::window_dpi(child)) + 1;
-        let (x0, y0) = (cr.left - tr.left, cr.top - tr.top);
-        let (x1, y1) = (cr.right - tr.left, cr.bottom - tr.top);
-        let mut out = Vec::new();
-        let mut px = |x: i32, y: i32| {
-            let i = ((y * w + x) * 4) as usize;
-            out.extend_from_slice(&bits[i..i + 3]);
-        };
-        for x in x0..(x1 - bar) {
-            px(x, y0);
-        }
-        for y in y0..(y1 - bar) {
-            px(x0, y);
-        }
-        out
-    }
-
-    fn redraw(h: HWND) {
-        // SAFETY: Repaint request including the non-client frame.
-        unsafe {
-            let _ = RedrawWindow(Some(h), None, None, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE);
-        }
-    }
-
-    // ------------------------------------------------------------------ test forms
-
-    const MAIN_TABLE: u16 = 90;
-    const SIDEBAR: u16 = 100;
-    const SIDEBAR_TITLE: u16 = 101;
-    const SIDEBAR_SUBTITLE: u16 = 102;
-    const FIRST_SECTION: u16 = 110;
-    const CONTENT_TITLE: u16 = 130;
-    const CONTENT_META: u16 = 131;
-    const CONTENT_EDIT: u16 = 132;
-    const FOOTER: u16 = 140;
-    const FIRST_FOOTER_BUTTON: u16 = 141;
-    const LOADING: u16 = 150;
-    const TITLES: [&str; 14] = [
-        "💿 DISK DRIVES",
-        "🔌 MOTHERBOARD",
-        "📋 CHASSIS",
-        "⚙️ (SM)BIOS",
-        "💻 SYSTEM INFORMATION",
-        "💾 RAM MODULES",
-        "🖥️ CPU",
-        "🔒 TPM MODULES",
-        "🔌 USB DEVICES",
-        "🎮 GPU INFO",
-        "🖥️ MONITOR INFORMATION",
-        "🌐 NETWORK ADAPTERS (NIC's)",
-        "📋 BLUETOOTH ADAPTERS",
-        "📡 ARP INFO/CACHE",
-    ];
-    const FOOTER_TEXTS: [&str; 6] = [
-        "↻ Refresh",
-        "💾 Export",
-        "🧹 Clean Devices",
-        "📝 Clean Logs",
-        "⟳ Updates",
-        "📜 Old View",
-    ];
-
-    fn sidebar_button(i: usize) -> Node {
-        let spec = ButtonSpec {
-            text: TITLES[i].to_owned(),
-            font: theme::SECTION_BUTTON_FONT,
-            back: theme::SIDEBAR_ITEM_BACKGROUND,
-            fore: theme::SIDEBAR_ITEM_TEXT,
-            border: theme::BORDER_SUBTLE,
-            border_size: 1,
-            over_back: Some(theme::SIDEBAR_ITEM_HOVER),
-            down_back: Some(theme::SIDEBAR_ITEM_ACTIVE),
-            align: Align::MiddleLeft,
-            hover: Hover::None,
-        };
-        Node::leaf(FIRST_SECTION + i as u16, Ctl::Button(spec))
-            .size(Size {
-                w: 216,
-                h: theme::SECTION_BUTTON_HEIGHT,
-            })
-            .padding(theme::SECTION_BUTTON_PADDING)
-            .margin(theme::SECTION_BUTTON_MARGIN)
-    }
-
-    fn main_replica() -> Vec<Node> {
-        let mut side = vec![
-            Node::leaf(
-                SIDEBAR_TITLE,
-                Ctl::Label(LabelSpec::new(
-                    "Hardware Sections",
-                    theme::SIDEBAR_TITLE_FONT,
-                    theme::SIDEBAR_HEADER_TEXT,
-                )),
-            )
-            .size(Size {
-                w: 216,
-                h: theme::SIDEBAR_TITLE_HEIGHT,
-            })
-            .margin(theme::SIDEBAR_TITLE_MARGIN),
-            Node::leaf(
-                SIDEBAR_SUBTITLE,
-                Ctl::Label(LabelSpec::new(
-                    "14 sections",
-                    theme::SIDEBAR_SUBTITLE_FONT,
-                    theme::MUTED_TEXT,
-                )),
-            )
-            .size(Size {
-                w: 216,
-                h: theme::SIDEBAR_SUBTITLE_HEIGHT,
-            })
-            .margin(theme::SIDEBAR_SUBTITLE_MARGIN),
-        ];
-        side.extend((0..14).map(sidebar_button));
-        let header = Node::panel(vec![
-            Node::leaf(
-                CONTENT_TITLE,
-                Ctl::Label(
-                    LabelSpec::new(
-                        "DISK DRIVES",
-                        theme::SECTION_TITLE_FONT,
-                        theme::SIDEBAR_HEADER_TEXT,
-                    )
-                    .ellipsis(),
-                ),
-            )
-            .top()
-            .height(theme::SECTION_TITLE_HEIGHT),
-            Node::leaf(
-                CONTENT_META,
-                Ctl::Label(
-                    LabelSpec::new(
-                        "Section 1 of 14",
-                        theme::SECTION_META_FONT,
-                        theme::MUTED_TEXT,
-                    )
-                    .ellipsis(),
-                ),
-            )
-            .top()
-            .height(theme::SECTION_META_HEIGHT),
-        ])
-        .fill()
-        .auto_size()
-        .back(theme::CONTENT_BACKGROUND)
-        .padding(theme::HEADER_PADDING)
-        .margin(theme::NO_PAD)
-        .cell(0, 0);
-        let content = Node::panel(vec![
-            Node::table(
-                vec![Track::Percent(100.0)],
-                vec![
-                    Track::AutoSize,
-                    Track::Absolute(theme::DIVIDER_HEIGHT),
-                    Track::Percent(100.0),
-                ],
-                vec![
-                    header,
-                    Node::panel(vec![])
-                        .fill()
-                        .back(theme::BORDER_SUBTLE)
-                        .margin(theme::NO_PAD)
-                        .cell(0, 1),
-                    Node::leaf(
-                        CONTENT_EDIT,
-                        Ctl::Edit(
-                            EditSpec::new(
-                                theme::CONTENT_FONT,
-                                theme::TEXT_BOX_TEXT,
-                                theme::TEXT_BOX_BACKGROUND,
-                            )
-                            .border(EditBorder::FixedSingle),
-                        ),
-                    )
-                    .fill()
-                    .cell(0, 2),
-                ],
-            )
-            .fill()
-            .back(theme::SURFACE_BACKGROUND),
-        ])
-        .fill()
-        .padding(theme::CONTENT_PADDING)
-        .back(theme::SURFACE_BACKGROUND)
-        .cell(1, 0);
-        let footer_buttons = FOOTER_TEXTS
-            .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                Node::leaf(
-                    FIRST_FOOTER_BUTTON + i as u16,
-                    Ctl::Button(ButtonSpec::secondary(t)),
-                )
-                .auto_size()
-                .min(theme::FOOTER_BUTTON_MIN)
-                .padding(theme::SHARED_BUTTON_PADDING)
-                .margin(theme::FOOTER_BUTTON_MARGIN)
-            })
-            .collect();
-        vec![
-            Node::table(
-                vec![Track::Absolute(291), Track::Percent(100.0)],
-                vec![Track::Percent(100.0), Track::AutoSize],
-                vec![
-                    Node::flow(FlowDir::TopDown, false, side)
-                        .id(SIDEBAR)
-                        .fill()
-                        .scroll()
-                        .padding(theme::SIDEBAR_PADDING)
-                        .back(theme::SIDEBAR_BACKGROUND)
-                        .cell(0, 0),
-                    content,
-                    Node::flow(FlowDir::LeftToRight, true, footer_buttons)
-                        .id(FOOTER)
-                        .fill()
-                        .auto_size()
-                        .padding(theme::FOOTER_PADDING)
-                        .margin(theme::NO_PAD)
-                        .back(theme::BUTTON_PANEL_BACKGROUND)
-                        .cell(0, 1)
-                        .span(2),
-                ],
-            )
-            .id(MAIN_TABLE)
-            .fill()
-            .back(theme::MAIN_BACKGROUND),
-            Node::leaf(
-                LOADING,
-                Ctl::Label(LabelSpec::new(
-                    "Loading hardware information...",
-                    theme::LOADING_FONT,
-                    theme::LOADING_LABEL_TEXT,
-                )),
-            )
-            .auto_size()
-            .anchor(Anchor::NONE)
-            .visible(false),
-        ]
-    }
-
-    /// The C# `UpdateResponsiveLayout` with the owner-approved DPI clamp (AD-37).
-    fn responsive(form: &Form, client: Size) {
-        let s = |v| form.scale(v);
-        let sidebar = (client.w * theme::SIDEBAR_WIDTH_PERCENT / 100)
-            .clamp(s(theme::SIDEBAR_MIN_WIDTH), s(theme::SIDEBAR_MAX_WIDTH));
-        let bar = if form.vscroll_visible(SIDEBAR) {
-            dpi::metric(SM_CXVSCROLL, form.dpi())
-        } else {
-            0
-        };
-        form.with_tree(|t| {
-            if let Some(Kind::Table { cols, .. }) = t.find_mut(MAIN_TABLE).map(|n| &mut n.kind) {
-                cols[0] = Track::Absolute(sidebar);
-            }
-            let Some(side) = t.find_mut(SIDEBAR) else {
-                return;
-            };
-            // C# parity: sidebarPanel.ClientSize.Width (scroll bar already excluded) minus the
-            // scroll bar width again (SectionedViewForm.cs:650-651).
-            let client_w = sidebar - side.margin.horizontal() - bar;
-            let item = (client_w - side.padding.horizontal() - bar - theme::SIDEBAR_ITEM_INSET)
-                .max(theme::SIDEBAR_ITEM_MIN_WIDTH);
-            for c in side.children_mut() {
-                c.size.w = item;
-            }
-        });
-    }
-
-    fn confirm_replica() -> Vec<Node> {
-        let button = |id: u16, text: &str, primary: bool| {
-            let (back, border, hover, font, size, min_w) = if primary {
-                (
-                    theme::CONFIRM_PRIMARY,
-                    theme::CONFIRM_PRIMARY_BORDER,
-                    theme::CONFIRM_PRIMARY_HOVER,
-                    theme::CONFIRM_PRIMARY_FONT,
-                    theme::CONFIRM_PRIMARY_BORDER_SIZE,
-                    theme::CONFIRM_PRIMARY_MIN_WIDTH,
-                )
-            } else {
-                (
-                    theme::CONFIRM_SECONDARY,
-                    theme::CONFIRM_SECONDARY_BORDER,
-                    theme::CONFIRM_SECONDARY_HOVER,
-                    theme::CONFIRM_SECONDARY_FONT,
-                    theme::CONFIRM_SECONDARY_BORDER_SIZE,
-                    theme::CONFIRM_SECONDARY_MIN_WIDTH,
-                )
-            };
-            Node::leaf(
-                id,
-                Ctl::Button(ButtonSpec {
-                    text: text.to_owned(),
-                    font,
-                    back,
-                    fore: theme::WHITE,
-                    border,
-                    border_size: size,
-                    over_back: None,
-                    down_back: None,
-                    align: Align::MiddleCenter,
-                    hover: Hover::EnterLeave {
-                        normal: back,
-                        hover,
-                    },
-                }),
-            )
-            .auto_size()
-            .min(Size {
-                w: min_w,
-                h: theme::CONFIRM_BUTTON_HEIGHT,
-            })
-            .padding(theme::CONFIRM_BUTTON_PADDING)
-            .margin(theme::CONFIRM_BUTTON_MARGIN)
-        };
-        let wrap = Size {
-            w: (theme::CONFIRM_CLIENT_SIZE.w - theme::CONFIRM_LABEL_WRAP_INSET)
-                .max(theme::CONFIRM_LABEL_WRAP_MIN),
-            h: 0,
-        };
-        vec![
-            Node::table(
-                vec![Track::Percent(100.0)],
-                vec![Track::AutoSize, Track::AutoSize, Track::AutoSize],
-                vec![
-                    Node::leaf(
-                        301,
-                        Ctl::Label(
-                            LabelSpec::new(
-                                "Remove 12 ghost devices?",
-                                theme::CONFIRM_MESSAGE_FONT,
-                                theme::WHITE,
-                            )
-                            .align(Align::MiddleCenter),
-                        ),
-                    )
-                    .auto_size()
-                    .anchor(Anchor::NONE)
-                    .max(wrap)
-                    .margin(theme::CONFIRM_MESSAGE_MARGIN)
-                    .cell(0, 0),
-                    Node::leaf(
-                        302,
-                        Ctl::Label(
-                            LabelSpec::new(
-                                "Warning: This action cannot be undone",
-                                theme::CONFIRM_WARNING_FONT,
-                                theme::ORANGE,
-                            )
-                            .align(Align::MiddleCenter),
-                        ),
-                    )
-                    .auto_size()
-                    .anchor(Anchor::NONE)
-                    .max(wrap)
-                    .margin(theme::CONFIRM_WARNING_MARGIN)
-                    .cell(0, 1),
-                    Node::flow(
-                        FlowDir::LeftToRight,
-                        true,
-                        vec![
-                            button(311, "Yes (Autoclose)", true),
-                            button(312, "Yes", false),
-                            button(313, "No", false),
-                        ],
-                    )
-                    .auto_size()
-                    .anchor(Anchor::NONE)
-                    .margin(theme::NO_PAD)
-                    .cell(0, 2),
-                ],
-            )
-            .fill()
-            .padding(theme::CONFIRM_PADDING),
-        ]
-    }
-
-    fn extras_replica() -> Vec<Node> {
-        let action = |id: u16, text: &str| {
-            Node::leaf(id, Ctl::Button(ButtonSpec::primary(text)))
-                .auto_size()
-                .min(theme::ACTION_BUTTON_MIN)
-                .padding(theme::SHARED_BUTTON_PADDING)
-                .margin(theme::ACTION_BUTTON_MARGIN)
-        };
-        let list = ListSpec {
-            font: theme::WHITELIST_LIST_FONT,
-            fore: theme::TEXT_BOX_TEXT,
-            back: theme::TEXT_BOX_BACKGROUND,
-            selected_back: theme::SIDEBAR_ITEM_ACTIVE,
-            selected_fore: theme::WHITE,
-        };
-        vec![
-            Node::table(
-                vec![Track::Percent(100.0)],
-                vec![
-                    Track::AutoSize,
-                    Track::Percent(50.0),
-                    Track::Percent(50.0),
-                    Track::Absolute(30),
-                    Track::Absolute(theme::ACTION_ROW_HEIGHT),
-                ],
-                vec![
-                    Node::leaf(
-                        200,
-                        Ctl::Label(LabelSpec::new(
-                            "Select ghost devices to keep in the whitelist:",
-                            theme::WHITELIST_HEADER_FONT,
-                            theme::PRIMARY_TEXT,
-                        )),
-                    )
-                    .auto_size()
-                    .anchor(Anchor::LEFT)
-                    .margin(theme::WHITELIST_HEADER_MARGIN)
-                    .cell(0, 0),
-                    Node::panel(vec![Node::leaf(201, Ctl::CheckedList(list)).fill()])
-                        .fill()
-                        .padding(theme::OUTPUT_PANEL_PADDING)
-                        .cell(0, 1),
-                    Node::panel(vec![
-                        Node::leaf(
-                            202,
-                            Ctl::Edit(EditSpec::new(
-                                theme::CLEANER_OUTPUT_FONT,
-                                theme::TEXT_BOX_TEXT,
-                                theme::TEXT_BOX_BACKGROUND,
-                            )),
-                        )
-                        .fill(),
-                    ])
-                    .fill()
-                    .padding(theme::OUTPUT_PANEL_PADDING)
-                    .cell(0, 2),
-                    Node::leaf(203, Ctl::Progress).fill().cell(0, 3),
-                    Node::flow(
-                        FlowDir::RightToLeft,
-                        false,
-                        vec![
-                            action(211, "Stop & Close"),
-                            action(212, "Reclean"),
-                            action(213, "Manage Whitelist"),
-                        ],
-                    )
-                    .fill()
-                    .padding(theme::ACTION_PANEL_PADDING)
-                    .back(theme::BUTTON_PANEL_BACKGROUND)
-                    .cell(0, 4),
-                ],
-            )
-            .fill()
-            .back(theme::MAIN_BACKGROUND),
-        ]
-    }
-
-    #[derive(Default)]
-    struct Log {
-        clicks: RefCell<Vec<u16>>,
-        checks: RefCell<Vec<(u16, usize, bool)>>,
-        workers: RefCell<Vec<u32>>,
-        other: RefCell<Vec<String>>,
-    }
-
-    fn rect_of(form: &Form, id: u16) -> Rect {
-        let state = form.state().unwrap();
-        let tree = state.tree.borrow();
-        tree.find(id).unwrap().bounds
-    }
-
-    #[test]
-    #[ignore = "opens real windows; run by hand for the WP-10a spike"]
-    fn spike() {
-        std::fs::create_dir_all(GOLDEN).unwrap();
-        assert!(dpi::set_per_monitor_v2_for_tests(), "PerMonitorV2");
-        assert!(activate_comctl6(), "comctl v6 activation context");
-        // SAFETY: Plain system queries.
-        let (sys_dpi, monitors) = unsafe { (GetDpiForSystem(), GetSystemMetrics(SM_CMONITORS)) };
-        println!(
-            "system DPI {sys_dpi}, OS build {}, monitors {monitors}",
-            os_build()
-        );
-        let mut results: Vec<(String, String)> = Vec::new();
-        let mut record = |name: &str, value: String| {
-            println!("RESULT {name}: {value}");
-            results.push((name.to_owned(), value));
-        };
-
-        // ---------------------------------------------------------------- main replica
-        let log = Rc::new(Log::default());
-        let l = Rc::clone(&log);
-        let mut spec = FormSpec::new("HWID Checker", WindowSize::Client(theme::MAIN_CLIENT_SIZE));
-        spec.min = Some(theme::MAIN_MIN_SIZE);
-        spec.start = StartPosition::CenterScreen;
-        spec.maximize_if_too_big = true;
-        let main = Form::create(HWND::default(), spec, main_replica(), move |form, ev| {
-            match ev {
-                Event::Resize { client, .. } => responsive(form, client),
-                Event::Click(id) => {
-                    l.clicks.borrow_mut().push(id);
-                    if id == FIRST_FOOTER_BUTTON + 5 {
-                        panic!("spike: deliberate panic inside a handler");
-                    }
-                    if (FIRST_SECTION..FIRST_SECTION + 14).contains(&id) {
-                        for i in 0..14 {
-                            form.set_button_colors(
-                                FIRST_SECTION + i,
-                                theme::SIDEBAR_ITEM_BACKGROUND,
-                                theme::SIDEBAR_ITEM_TEXT,
-                                theme::BORDER_SUBTLE,
-                            );
-                        }
-                        form.set_button_colors(
-                            id,
-                            theme::SIDEBAR_ITEM_ACTIVE,
-                            theme::SIDEBAR_ITEM_ACTIVE_TEXT,
-                            theme::PRIMARY_BUTTON_HOVER,
-                        );
-                    }
-                }
-                Event::Worker(v) => {
-                    if let Ok(n) = v.downcast::<u32>() {
-                        l.workers.borrow_mut().push(*n);
-                    }
-                }
-                other => l.other.borrow_mut().push(format!("{other:?}")),
-            }
-            true
-        })
-        .unwrap();
-        // First layout used the default sidebar width; C# runs UpdateResponsiveLayout in the
-        // constructor, so run it once more before showing.
-        main.relayout();
-        main.set_button_colors(
-            FIRST_SECTION,
-            theme::SIDEBAR_ITEM_ACTIVE,
-            theme::SIDEBAR_ITEM_ACTIVE_TEXT,
-            theme::PRIMARY_BUTTON_HOVER,
-        );
-        main.show();
-        pump_for(400);
-        let mh = main.hwnd();
-        record("main dpi", main.dpi().to_string());
-        record("main client", format!("{:?}", main.client_size()));
-        record("sidebar rect", format!("{:?}", rect_of(&main, SIDEBAR)));
-        record("footer rect", format!("{:?}", rect_of(&main, FOOTER)));
-        for i in 0..6 {
-            record(
-                &format!("footer button {i}"),
-                format!("{:?}", rect_of(&main, FIRST_FOOTER_BUTTON + i)),
-            );
-        }
-        record("edit rect", format!("{:?}", rect_of(&main, CONTENT_EDIT)));
-        record(
-            "section button 0",
-            format!("{:?}", rect_of(&main, FIRST_SECTION)),
-        );
-
-        // 40,000+ characters appended in full.
-        let edit = main.control(CONTENT_EDIT).unwrap();
-        let line = "0123456789ABCDEFGHIJ 0123456789ABCDEFGHIJ 012345\r\n";
-        let lines: Vec<&str> = std::iter::repeat_n(line, 1000).collect();
-        main.edit_append_batch(CONTENT_EDIT, &lines);
-        // SAFETY: Length query on our edit.
-        let len = unsafe { GetWindowTextLengthW(edit) } as usize;
-        record(
-            "append 50,000 chars",
-            format!("{} (expected {})", len, line.len() * 1000),
-        );
-        assert_eq!(len, line.len() * 1000);
-        main.edit_scroll_to_top(CONTENT_EDIT);
-        pump_for(200);
-        screen_shot(mh, &format!("main-{}dpi-default", main.dpi()));
-
-        // Tab and Shift+Tab order (retried when desktop activity steals the focus).
-        let ids: HashMap<isize, u16> = {
-            let st = main.state().unwrap();
-            st.hwnds
-                .borrow()
-                .iter()
-                .map(|(id, h)| (h.0 as isize, *id))
-                .collect()
-        };
-        let (mut forward, mut backward) = (Vec::new(), Vec::new());
-        for attempt in 0..3 {
-            ensure_active(mh);
-            main.focus(FIRST_SECTION);
-            pump_for(50);
-            forward.clear();
-            backward.clear();
-            for _ in 0..21 {
-                post(focus(), WM_KEYDOWN, usize::from(VK_TAB.0), 0);
-                pump_for(30);
-                forward.push(ids.get(&(focus().0 as isize)).copied().unwrap_or(0));
-            }
-            set_keys(&[VK_SHIFT.0], true);
-            for _ in 0..3 {
-                post(focus(), WM_KEYDOWN, usize::from(VK_TAB.0), 0);
-                pump_for(30);
-                backward.push(ids.get(&(focus().0 as isize)).copied().unwrap_or(0));
-            }
-            set_keys(&[VK_SHIFT.0], false);
-            if !forward.contains(&0) && !backward.contains(&0) {
-                break;
-            }
-            println!("tab test attempt {attempt}: focus left the window (desktop activity)");
-        }
-        let mut expected: Vec<u16> = (FIRST_SECTION + 1..FIRST_SECTION + 14).collect();
-        expected.push(CONTENT_EDIT);
-        expected.extend(FIRST_FOOTER_BUTTON..FIRST_FOOTER_BUTTON + 6);
-        expected.push(FIRST_SECTION);
-        record("tab order", format!("{forward:?}"));
-        assert_eq!(forward, expected, "Tab order");
-        record("shift+tab order", format!("{backward:?}"));
-        assert_eq!(
-            backward,
-            vec![
-                FIRST_FOOTER_BUTTON + 5,
-                FIRST_FOOTER_BUTTON + 4,
-                FIRST_FOOTER_BUTTON + 3
-            ]
-        );
-
-        // Space and Enter on the focused button.
-        ensure_active(mh);
-        log.clicks.borrow_mut().clear();
-        main.focus(FIRST_FOOTER_BUTTON);
-        pump_for(30);
-        post(focus(), WM_KEYDOWN, usize::from(VK_SPACE.0), 0x0039_0001);
-        post(
-            focus(),
-            WM_KEYUP,
-            usize::from(VK_SPACE.0),
-            0xC039_0001_u32 as isize,
-        );
-        pump_for(80);
-        main.focus(FIRST_FOOTER_BUTTON + 1);
-        pump_for(30);
-        post(focus(), WM_KEYDOWN, usize::from(VK_RETURN.0), 0x001C_0001);
-        pump_for(80);
-        record("space+enter clicks", format!("{:?}", log.clicks.borrow()));
-        assert_eq!(
-            *log.clicks.borrow(),
-            vec![FIRST_FOOTER_BUTTON, FIRST_FOOTER_BUTTON + 1]
-        );
-
-        // Esc does nothing on a non-dialog window.
-        log.clicks.borrow_mut().clear();
-        post(focus(), WM_KEYDOWN, usize::from(VK_ESCAPE.0), 0x0001_0001);
-        pump_for(80);
-        record(
-            "esc on main",
-            format!("alive={} clicks={:?}", main.is_alive(), log.clicks.borrow()),
-        );
-        assert!(main.is_alive() && log.clicks.borrow().is_empty());
-
-        // Ctrl+A and copy in the EDIT (clipboard saved and restored).
-        let saved_clip = clipboard_text();
-        ensure_active(mh);
-        main.focus(CONTENT_EDIT);
-        pump_for(30);
-        set_keys(&[VK_CONTROL.0], true);
-        post(edit, WM_KEYDOWN, usize::from(b'A'), 0x001E_0001);
-        pump_for(50);
-        let (mut s, mut e) = (0u32, 0u32);
-        send(
-            edit,
-            windows::Win32::UI::Controls::EM_GETSEL,
-            (&mut s as *mut u32) as usize,
-            (&mut e as *mut u32) as isize,
-        );
-        // Ctrl+C the way a keyboard sends it: TranslateMessage turns it into WM_CHAR 3.
-        post(edit, WM_KEYDOWN, usize::from(b'C'), 0x002E_0001);
-        pump_for(100);
-        set_keys(&[VK_CONTROL.0], false);
-        let copied = clipboard_text().map(|t| t.len()).unwrap_or(0);
-        if let Some(t) = saved_clip {
-            set_clipboard_text(&t);
-        }
-        record(
-            "ctrl+a / copy",
-            format!("selection {s}..{e} of {len}; clipboard {copied} chars"),
-        );
-        assert_eq!((s as usize, e as usize), (0, len));
-        assert_eq!(copied, len);
-        main.edit_scroll_to_top(CONTENT_EDIT);
-
-        // Fast double click on a sidebar button fires twice.
-        log.clicks.borrow_mut().clear();
-        let sb = main.control(FIRST_SECTION + 3).unwrap();
-        let at = (20 | (20 << 16)) as isize;
-        post(sb, WM_LBUTTONDOWN, 1, at);
-        post(sb, WM_LBUTTONUP, 0, at);
-        post(sb, WM_LBUTTONDBLCLK, 1, at);
-        post(sb, WM_LBUTTONUP, 0, at);
-        pump_for(150);
-        record("double click", format!("{:?}", log.clicks.borrow()));
-        assert_eq!(*log.clicks.borrow(), vec![FIRST_SECTION + 3; 2]);
-
-        // A panic inside a handler is caught; the window keeps working.
-        log.clicks.borrow_mut().clear();
-        let old_view = main.control(FIRST_FOOTER_BUTTON + 5).unwrap();
-        post(old_view, WM_KEYDOWN, usize::from(VK_SPACE.0), 0x0039_0001);
-        post(
-            old_view,
-            WM_KEYUP,
-            usize::from(VK_SPACE.0),
-            0xC039_0001_u32 as isize,
-        );
-        pump_for(100);
-        main.click(FIRST_FOOTER_BUTTON + 2);
-        record(
-            "panic in handler",
-            format!("alive={} clicks={:?}", main.is_alive(), log.clicks.borrow()),
-        );
-        assert!(main.is_alive());
-
-        // Worker generations: stale posts are dropped.
-        let p0 = main.poster().unwrap();
-        let p0b = p0.clone();
-        std::thread::spawn(move || assert!(p0b.post(1u32)))
-            .join()
-            .unwrap();
-        pump_for(80);
-        main.next_generation();
-        let p1 = main.poster().unwrap();
-        std::thread::spawn(move || {
-            p0.post(2u32);
-            p1.post(3u32);
-        })
-        .join()
-        .unwrap();
-        pump_for(80);
-        record("worker generations", format!("{:?}", log.workers.borrow()));
-        assert_eq!(*log.workers.borrow(), vec![1, 3]);
-
-        // Focus rectangle (keyboard cues are on after the Tab test) and pressed colors.
-        let pixel = |top: HWND, child: HWND, dx: i32, dy: i32| {
-            let (w, _, bits) = capture(top);
-            let (tr, cr) = (window_rect(top), window_rect(child));
-            let (x, y) = (cr.left - tr.left + dx, cr.top - tr.top + dy);
-            let i = ((y * w + x) * 4) as usize;
-            (bits[i + 2], bits[i + 1], bits[i])
-        };
-        ensure_active(mh);
-        main.focus(FIRST_FOOTER_BUTTON);
-        pump_for(80);
-        let fb = main.control(FIRST_FOOTER_BUTTON).unwrap();
-        let fr = window_rect(fb);
-        let half = (fr.bottom - fr.top) / 2;
-        let focus_px = pixel(mh, fb, 4, half);
-        let normal_px = pixel(mh, fb, 6, half);
-        // BM_SETSTATE gives the pushed state without mouse capture, so the real cursor of the
-        // live desktop cannot interfere.
-        let bm_setstate = windows::Win32::UI::WindowsAndMessaging::BM_SETSTATE;
-        send(fb, bm_setstate, 1, 0);
-        pump_for(80);
-        let pressed_px = pixel(mh, fb, 6, half);
-        send(fb, bm_setstate, 0, 0);
-        let sb0 = main.control(FIRST_SECTION + 1).unwrap();
-        send(sb0, bm_setstate, 1, 0);
-        pump_for(80);
-        let side_pressed_px = pixel(mh, sb0, 6, 20);
-        send(sb0, bm_setstate, 0, 0);
-        pump_for(80);
-        record(
-            "focus / pressed colors",
-            format!(
-                "focus ring {focus_px:?} (WinForms LowHighlight of 45,45,48 = (133, 133, 138)), \
-                 face {normal_px:?}, pressed {pressed_px:?} (expected (133, 133, 138)), \
-                 sidebar pressed {side_pressed_px:?} (MouseDownBackColor (0, 120, 215))"
-            ),
-        );
-        assert_eq!(focus_px, (133, 133, 138));
-        assert_eq!(normal_px, (45, 45, 48));
-        assert_eq!(pressed_px, (133, 133, 138));
-        assert_eq!(side_pressed_px, (0, 120, 215));
-        log.clicks.borrow_mut().clear();
-
-        // Disabled button paint (C# Old View while loading).
-        main.set_enabled(FIRST_FOOTER_BUTTON + 5, false);
-        main.set_text(FIRST_FOOTER_BUTTON + 5, "📜 Loading...");
-        main.set_visible(LOADING, true);
-        let lr = rect_of(&main, LOADING);
-        let c = main.client_size();
-        main.with_tree(|t| {
-            if let Some(n) = t.find_mut(LOADING) {
-                n.pos = Point {
-                    x: ((c.w - lr.w) / 2).max(0),
-                    y: ((c.h - lr.h) / 2).max(0),
-                };
-            }
-        });
-        main.relayout();
-        main.bring_to_front(LOADING);
-        pump_for(200);
-        screen_shot(mh, &format!("main-{}dpi-loading-disabled", main.dpi()));
-        main.set_visible(LOADING, false);
-        main.set_enabled(FIRST_FOOTER_BUTTON + 5, true);
-        main.set_text(FIRST_FOOTER_BUTTON + 5, "📜 Old View");
-
-        // Minimum size: the footer wraps like C#.
-        // SAFETY: Resizes our own window below its minimum; WM_GETMINMAXINFO clamps it.
-        unsafe {
-            let _ = SetWindowPos(mh, None, 0, 0, 100, 100, SWP_NOMOVE | SWP_NOZORDER);
-        }
-        pump_for(200);
-        let wr = window_rect(mh);
-        record(
-            "minimum outer size",
-            format!("{}x{}", wr.right - wr.left, wr.bottom - wr.top),
-        );
-        record("footer at minimum", format!("{:?}", rect_of(&main, FOOTER)));
-        for i in 0..6 {
-            record(
-                &format!("min footer button {i}"),
-                format!("{:?}", rect_of(&main, FIRST_FOOTER_BUTTON + i)),
-            );
-        }
-        record(
-            "sidebar scroll at minimum",
-            format!("{}", main.vscroll_visible(SIDEBAR)),
-        );
-        screen_shot(mh, &format!("main-{}dpi-minimum", main.dpi()));
-
-        // Resizing: exactly one layout pass per WM_SIZE.
-        let before = main.layout_count();
-        for (i, w) in [950, 1000, 1100, 1200, 1300].iter().enumerate() {
-            // SAFETY: Resizes our own window.
-            unsafe {
-                let _ = SetWindowPos(
-                    mh,
-                    None,
-                    0,
-                    0,
-                    main.scale(*w),
-                    main.scale(780 + i as i32 * 5),
-                    SWP_NOMOVE | SWP_NOZORDER,
-                );
-            }
-            pump_for(20);
-        }
-        record(
-            "layout passes for 5 resizes",
-            format!("{}", main.layout_count() - before),
-        );
-        assert_eq!(main.layout_count() - before, 5);
-
-        // Synthesized DPI changes: fonts, one layout, screenshots. The last step returns to the
-        // real DPI of the monitor the window is on.
-        let real_dpi = dpi::window_dpi(mh);
-        for new_dpi in [144u32, 192, real_dpi] {
-            let r = window_rect(mh);
-            let factor = |v: i32| v * new_dpi as i32 / main.dpi() as i32;
-            let suggested = RECT {
-                left: r.left,
-                top: r.top,
-                right: r.left + factor(r.right - r.left),
-                bottom: r.top + factor(r.bottom - r.top),
-            };
-            let before = main.layout_count();
-            send(
-                mh,
-                WM_DPICHANGED,
-                (new_dpi | (new_dpi << 16)) as usize,
-                (&suggested as *const RECT) as isize,
-            );
-            pump_for(250);
-            let (n, wrong_handle, wrong_height) = check_fonts(&main);
-            record(
-                &format!("dpi {new_dpi}"),
-                format!(
-                    "layout passes {}, leaves {n}, wrong font handle {wrong_handle}, wrong font height {wrong_height}, footer {:?}, sidebar {:?}",
-                    main.layout_count() - before,
-                    rect_of(&main, FOOTER),
-                    rect_of(&main, SIDEBAR)
-                ),
-            );
-            assert_eq!(main.layout_count() - before, 1);
-            assert_eq!((wrong_handle, wrong_height), (0, 0));
-            print_shot(mh, &format!("main-{new_dpi}-synthetic"));
-        }
-
-        // Real monitor moves: put the window on every monitor; Windows sends WM_DPICHANGED.
-        let monitors = {
-            use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HMONITOR};
-            unsafe extern "system" fn collect(
-                m: HMONITOR,
-                _: HDC,
-                _: *mut RECT,
-                data: LPARAM,
-            ) -> BOOL {
-                // SAFETY: `data` is the Vec passed below, alive for the enumeration.
-                unsafe { (*(data.0 as *mut Vec<HMONITOR>)).push(m) };
-                BOOL(1)
-            }
-            let mut list: Vec<HMONITOR> = Vec::new();
-            // SAFETY: Synchronous enumeration with a callback that only pushes into `list`.
-            unsafe {
-                let _ = EnumDisplayMonitors(
-                    None,
-                    None,
-                    Some(collect),
-                    LPARAM(&mut list as *mut Vec<HMONITOR> as isize),
-                );
-            }
-            list
-        };
-        for (i, m) in monitors.iter().enumerate() {
-            let mut mi = MONITORINFO {
-                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                ..Default::default()
-            };
-            // SAFETY: Valid monitor handle and writable MONITORINFO.
-            unsafe {
-                let _ = GetMonitorInfoW(*m, &mut mi);
-            }
-            let before = main.layout_count();
-            let old_dpi = main.dpi();
-            // SAFETY: Moves our own window onto monitor `i`.
-            unsafe {
-                let _ = SetWindowPos(
-                    mh,
-                    None,
-                    mi.rcWork.left + 20,
-                    mi.rcWork.top + 20,
-                    0,
-                    0,
-                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-            }
-            pump_for(400);
-            let (n, wrong_handle, wrong_height) = check_fonts(&main);
-            let passes = main.layout_count() - before;
-            record(
-                &format!("real monitor {i}"),
-                format!(
-                    "work {:?}, dpi {old_dpi} -> {} (system says {}), layout passes {passes}, leaves {n}, wrong font handle {wrong_handle}, wrong font height {wrong_height}, footer {:?}",
-                    (
-                        mi.rcWork.left,
-                        mi.rcWork.top,
-                        mi.rcWork.right,
-                        mi.rcWork.bottom
-                    ),
-                    main.dpi(),
-                    dpi::window_dpi(mh),
-                    rect_of(&main, FOOTER)
-                ),
-            );
-            assert_eq!(
-                main.dpi(),
-                dpi::window_dpi(mh),
-                "kit DPI follows the monitor"
-            );
-            assert_eq!((wrong_handle, wrong_height), (0, 0));
-            if main.dpi() != old_dpi {
-                assert_eq!(passes, 1, "one layout pass per real DPI change");
-            }
-            screen_shot(mh, &format!("main-real-monitor{i}-{}dpi", main.dpi()));
-        }
-
-        // ---------------------------------------------------------------- extras window
-        let elog = Rc::new(Log::default());
-        let el = Rc::clone(&elog);
-        let mut espec = FormSpec::new(
-            "Kit extras (whitelist list, 3D edit, progress, RTL footer)",
-            WindowSize::Client(theme::CLEAN_DEVICES_CLIENT_SIZE),
-        );
-        espec.min = Some(theme::CLEAN_DEVICES_MIN_SIZE);
-        espec.style = FormStyle::Sizable {
-            maximize: true,
-            minimize: false,
-        };
-        let extras = Form::create(mh, espec, extras_replica(), move |_, ev| {
-            match ev {
-                Event::ItemCheck { id, index, checked } => {
-                    el.checks.borrow_mut().push((id, index, checked))
-                }
-                Event::Click(id) => el.clicks.borrow_mut().push(id),
-                _ => {}
-            }
-            true
-        })
-        .unwrap();
-        let items: Vec<(String, bool)> = (0..12)
-            .map(|i| (format!("Generic USB Hub #{i} (USB)"), i % 3 == 0))
-            .collect();
-        extras.list_set_items(201, &items);
-        extras.edit_append(202, "Scanning for non-present (ghost) devices...\r\n");
-        extras.progress_set(203, 60);
-        extras.set_enabled(212, false);
-        extras.show();
-        pump_for(300);
-        let eh = extras.hwnd();
-        for id in [211, 212, 213] {
-            record(
-                &format!("rtl button {id}"),
-                format!("{:?}", rect_of(&extras, id)),
-            );
-        }
-        let list = extras.control(201).unwrap();
-        let item_h = send(
-            list,
-            windows::Win32::UI::WindowsAndMessaging::LB_GETITEMHEIGHT,
-            0,
-            0,
-        ) as i32;
-        let y = item_h + item_h / 2;
-        post(list, WM_LBUTTONDOWN, 1, (30 | (y << 16)) as isize);
-        post(list, WM_LBUTTONUP, 0, (30 | (y << 16)) as isize);
-        pump_for(100);
-        extras.focus(201);
-        pump_for(30);
-        post(list, WM_CHAR, usize::from(b' '), 0x0039_0001);
-        pump_for(100);
-        record(
-            "list toggles (click item 1, then Space)",
-            format!(
-                "{:?} checked now {:?}",
-                elog.checks.borrow(),
-                &extras.list_checked(201)[..3]
-            ),
-        );
-        assert_eq!(*elog.checks.borrow(), vec![(201, 1, true), (201, 1, false)]);
-        screen_shot(eh, &format!("extras-{}dpi", extras.dpi()));
-
-        // DarkMode_Explorer vs default theme: edit border pixels.
-        let edit3d = extras.control(202).unwrap();
-        let dark_cap = capture(eh);
-        let dark_main = capture(mh);
-        // SAFETY: Clears the theme association of our own edits, then repaints them.
-        unsafe {
-            let _ = SetWindowTheme(edit3d, PCWSTR::null(), PCWSTR::null());
-            let _ = SetWindowTheme(edit, PCWSTR::null(), PCWSTR::null());
-        }
-        redraw(edit3d);
-        redraw(edit);
-        pump_for(200);
-        let light_cap = capture(eh);
-        let light_main = capture(mh);
-        let same3d = border_ring(eh, edit3d, &dark_cap) == border_ring(eh, edit3d, &light_cap);
-        let same_single = border_ring(mh, edit, &dark_main) == border_ring(mh, edit, &light_main);
-        let colors = |ring: Vec<u8>| {
-            let mut c: Vec<(u8, u8, u8)> = ring.chunks(3).map(|p| (p[2], p[1], p[0])).collect();
-            c.sort_unstable();
-            c.dedup();
-            c
-        };
-        record(
-            "DarkMode_Explorer border pixels unchanged",
-            format!(
-                "Fixed3D {same3d}, FixedSingle {same_single}; FixedSingle ring colors dark {:?} light {:?}",
-                colors(border_ring(mh, edit, &dark_main)),
-                colors(border_ring(mh, edit, &light_main))
-            ),
-        );
-        assert!(
-            same3d && same_single,
-            "DarkMode_Explorer changed edit border pixels"
-        );
-        print_shot(eh, "extras-light-scrollbars");
-        dark_scrollbars(edit3d);
-        dark_scrollbars(edit);
-        redraw(edit3d);
-        redraw(edit);
-        pump_for(100);
-        let er = window_rect(eh);
-        let suggested = RECT {
-            left: er.left,
-            top: er.top,
-            right: er.left + (er.right - er.left) * 3 / 2,
-            bottom: er.top + (er.bottom - er.top) * 3 / 2,
-        };
-        send(
-            eh,
-            WM_DPICHANGED,
-            (144 | (144 << 16)) as usize,
-            (&suggested as *const RECT) as isize,
-        );
-        pump_for(250);
-        let (n, wrong_handle, wrong_height) = check_fonts(&extras);
-        let item_h144 = send(
-            list,
-            windows::Win32::UI::WindowsAndMessaging::LB_GETITEMHEIGHT,
-            0,
-            0,
-        );
-        record(
-            "extras dpi 144",
-            format!(
-                "leaves {n}, wrong font handle {wrong_handle}, wrong font height {wrong_height}, \
-                 list item height {item_h} -> {item_h144}, close button {:?}",
-                rect_of(&extras, 211)
-            ),
-        );
-        assert_eq!((wrong_handle, wrong_height), (0, 0));
-        print_shot(eh, "extras-144-synthetic");
-        extras.destroy();
-        pump_for(100);
-
-        // ---------------------------------------------------------------- modal confirm
-        let outcomes: Rc<RefCell<Vec<String>>> = Rc::default();
-        for key in [VK_RETURN, VK_ESCAPE] {
-            let o = Rc::clone(&outcomes);
-            let mut cspec = FormSpec::new(
-                "Confirm Device Removal",
-                WindowSize::Client(theme::CONFIRM_CLIENT_SIZE),
-            );
-            cspec.min = Some(theme::CONFIRM_MIN_SIZE);
-            cspec.style = FormStyle::FixedDialog;
-            cspec.back = theme::CONFIRM_BACKGROUND;
-            cspec.accept = Some(311);
-            cspec.cancel = Some(313);
-            let shot = key == VK_RETURN;
-            run_modal(mh, cspec, confirm_replica(), move |form, ev| {
-                match ev {
-                    Event::Created => form.set_timer(1, 400),
-                    Event::Timer(_) => {
-                        form.kill_timer(1);
-                        // SAFETY: Reads window state of the owner.
-                        let owner_enabled = unsafe { IsWindowEnabled(mh) }.as_bool();
-                        o.borrow_mut()
-                            .push(format!("owner enabled during modal: {owner_enabled}"));
-                        if shot {
-                            print_shot(form.hwnd(), &format!("confirm-{}dpi", form.dpi()));
-                            let r = window_rect(form.hwnd());
-                            let s = RECT {
-                                left: r.left,
-                                top: r.top,
-                                right: r.left + (r.right - r.left) * 2,
-                                bottom: r.top + (r.bottom - r.top) * 2,
-                            };
-                            send(
-                                form.hwnd(),
-                                WM_DPICHANGED,
-                                (192 | (192 << 16)) as usize,
-                                (&s as *const RECT) as isize,
-                            );
-                            pump_for(200);
-                            print_shot(form.hwnd(), "confirm-192-synthetic");
-                        }
-                        post(focus(), WM_KEYDOWN, usize::from(key.0), 0x0001_0001);
-                    }
-                    Event::Click(id) => {
-                        o.borrow_mut().push(format!("click {id}"));
-                        form.destroy();
-                    }
-                    _ => {}
-                }
-                true
-            })
-            .unwrap();
-        }
-        // SAFETY: Reads window state of the owner.
-        let owner_after = unsafe { IsWindowEnabled(mh) }.as_bool();
-        record(
-            "modal confirm (Enter, then Esc)",
-            format!(
-                "{:?}; owner enabled after: {owner_after}",
-                outcomes.borrow()
-            ),
-        );
-        assert_eq!(
-            *outcomes.borrow(),
-            vec![
-                "owner enabled during modal: false".to_owned(),
-                "click 311".to_owned(),
-                "owner enabled during modal: false".to_owned(),
-                "click 313".to_owned()
-            ]
-        );
-        assert!(owner_after);
-
-        main.destroy();
-        pump_for(100);
-        bmps_to_png();
-        let report: String = results.iter().map(|(k, v)| format!("{k}: {v}\n")).collect();
-        std::fs::write(Path::new(GOLDEN).join("spike-results.txt"), report).unwrap();
     }
 }

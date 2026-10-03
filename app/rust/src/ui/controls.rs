@@ -48,20 +48,22 @@ use windows::{
     Win32::{
         Foundation::{HANDLE, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::Gdi::{
-            CreateSolidBrush, DFC_BUTTON, DFCS_BUTTONCHECK, DFCS_CHECKED, DFCS_FLAT,
+            BeginPaint, CreateSolidBrush, DFC_BUTTON, DFCS_BUTTONCHECK, DFCS_CHECKED, DFCS_FLAT,
             DRAW_TEXT_FORMAT, DRAWTEXTPARAMS, DT_BOTTOM, DT_CALCRECT, DT_CENTER, DT_EDITCONTROL,
             DT_END_ELLIPSIS, DT_HIDEPREFIX, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
-            DT_WORDBREAK, DeleteObject, DrawFocusRect, DrawFrameControl, DrawTextExW, FillRect,
-            GetDC, GetTextMetricsW, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, ReleaseDC,
-            SelectObject, SetBkColor, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT,
+            DT_WORDBREAK, DeleteObject, DrawFocusRect, DrawFrameControl, DrawTextExW, EndPaint,
+            FillRect, GetDC, GetTextMetricsW, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect,
+            PAINTSTRUCT, ReleaseDC, SelectObject, SetBkColor, SetBkMode, SetTextColor, TEXTMETRICW,
+            TRANSPARENT,
         },
         UI::{
             Controls::{
-                BPBF_COMPATIBLEBITMAP, BeginBufferedPaint, CloseThemeData, DRAWITEMSTRUCT,
-                DrawThemeBackground, EM_REPLACESEL, EM_SCROLLCARET, EM_SETLIMITTEXT, EM_SETSEL,
-                EndBufferedPaint, HTHEME, ODS_FOCUS, ODS_NOFOCUSRECT, ODS_SELECTED, OpenThemeData,
-                PBM_SETMARQUEE, PBM_SETPOS, PBM_SETRANGE32, PBS_MARQUEE, PBS_SMOOTH,
-                PROGRESS_CLASSW, WC_BUTTONW, WC_EDITW, WC_LISTBOXW, WC_STATICW, WM_MOUSELEAVE,
+                BPBF_COMPATIBLEBITMAP, BeginBufferedPaint, BufferedPaintInit, BufferedPaintUnInit,
+                CloseThemeData, DRAWITEMSTRUCT, DrawThemeBackground, EM_REPLACESEL, EM_SCROLLCARET,
+                EM_SETLIMITTEXT, EM_SETSEL, EndBufferedPaint, HTHEME, ODS_FOCUS, ODS_NOFOCUSRECT,
+                ODS_SELECTED, OpenThemeData, PBM_SETMARQUEE, PBM_SETPOS, PBM_SETRANGE32,
+                PBS_MARQUEE, PBS_SMOOTH, PROGRESS_CLASSW, WC_BUTTONW, WC_EDITW, WC_LISTBOXW,
+                WC_STATICW, WM_MOUSELEAVE,
             },
             Input::KeyboardAndMouse::{
                 EnableWindow, GetFocus, GetKeyState, IsWindowEnabled, TME_LEAVE, TRACKMOUSEEVENT,
@@ -457,6 +459,74 @@ impl Drop for Theme {
     }
 }
 
+/// A paint DC whose update region is validated even if painting panics.
+pub(crate) struct Paint {
+    hwnd: HWND,
+    ps: PAINTSTRUCT,
+    hdc: HDC,
+}
+
+impl Paint {
+    /// Begins painting inside this window's WM_PAINT handler.
+    pub(crate) fn begin(hwnd: HWND) -> Self {
+        let mut ps = PAINTSTRUCT::default();
+        // SAFETY: Writable PAINTSTRUCT; the guard balances BeginPaint on this UI thread.
+        let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
+        Self { hwnd, ps, hdc }
+    }
+
+    /// Borrows the DC until the guard drops.
+    pub(crate) fn hdc(&self) -> HDC {
+        self.hdc
+    }
+}
+
+impl Drop for Paint {
+    fn drop(&mut self) {
+        // SAFETY: Ends this guard's BeginPaint, also while unwinding a caught paint panic.
+        unsafe {
+            let _ = EndPaint(self.hwnd, &self.ps);
+        }
+    }
+}
+
+struct BufferedPaintThread(bool);
+
+impl Drop for BufferedPaintThread {
+    fn drop(&mut self) {
+        if self.0 {
+            // SAFETY: Balances this thread's successful BufferedPaintInit once at thread exit.
+            unsafe {
+                let _ = BufferedPaintUnInit();
+            }
+        }
+    }
+}
+
+thread_local! {
+    static BUFFERED_PAINT: BufferedPaintThread = {
+        // SAFETY: Initializes buffered painting only for the calling UI thread.
+        BufferedPaintThread(unsafe { BufferedPaintInit() }.is_ok())
+    };
+}
+
+struct PaintBuffer {
+    handle: isize,
+    update: bool,
+}
+
+impl Drop for PaintBuffer {
+    fn drop(&mut self) {
+        if self.handle != 0 {
+            // SAFETY: Ends the buffer acquired by BeginBufferedPaint exactly once; a panic
+            // discards the partial drawing and still releases its bitmap and DC.
+            unsafe {
+                let _ = EndBufferedPaint(self.handle, self.update);
+            }
+        }
+    }
+}
+
 fn rect(r: Rect) -> RECT {
     RECT {
         left: r.x,
@@ -620,19 +690,21 @@ fn draw_text(
 
 /// Paints into an off-screen buffer and copies it to `hdc` in one step (no flicker).
 fn buffered(hdc: HDC, area: Rect, paint: impl FnOnce(HDC)) {
+    BUFFERED_PAINT.with(|_| {});
     let rc = rect(area);
     let mut mem = HDC::default();
     // SAFETY: `rc` and `mem` are valid; on failure the handle is 0 and we paint directly.
-    let pb = unsafe { BeginBufferedPaint(hdc, &rc, BPBF_COMPATIBLEBITMAP, None, &mut mem) };
-    if pb == 0 || mem.is_invalid() {
+    let mut pb = PaintBuffer {
+        // SAFETY: `rc` and `mem` live through the call; the guard owns any returned buffer.
+        handle: unsafe { BeginBufferedPaint(hdc, &rc, BPBF_COMPATIBLEBITMAP, None, &mut mem) },
+        update: false,
+    };
+    if pb.handle == 0 || mem.is_invalid() {
         paint(hdc);
         return;
     }
     paint(mem);
-    // SAFETY: `pb` came from BeginBufferedPaint above and is ended exactly once.
-    unsafe {
-        let _ = EndBufferedPaint(pb, true);
-    }
+    pb.update = true;
 }
 
 fn client(hwnd: HWND) -> Rect {
@@ -826,7 +898,6 @@ struct ListData {
     brush: Brush,
     checked: RefCell<Vec<bool>>,
     kill_next_select: Cell<bool>,
-    last_selected: Cell<i32>,
 }
 
 enum Data {
@@ -850,6 +921,11 @@ pub(crate) struct CtlState {
 
 /// Returns the state of a kit control, or `None` for any other window.
 pub(crate) fn state_of(hwnd: HWND) -> Option<Rc<CtlState>> {
+    // Raw HWNDs can be reconstructed safely on a worker. Only the owning thread may clone
+    // this non-atomic Rc; otherwise WM_NCDESTROY could free it between GetPropW and increment.
+    if !super::window::on_window_thread(hwnd) {
+        return None;
+    }
     // The state lives in a window property, not in GetWindowSubclass: comctl32 v5 (loaded by
     // unmanifested test binaries) exports GetWindowSubclass only by ordinal.
     // SAFETY: Reads a property of a window handle; other windows do not carry this name.
@@ -949,7 +1025,6 @@ pub(crate) fn create(
                 brush: Brush::new(l.back),
                 checked: RefCell::new(Vec::new()),
                 kill_next_select: Cell::new(false),
-                last_selected: Cell::new(-1),
             }),
         ),
         Ctl::Progress => (
@@ -1043,31 +1118,31 @@ unsafe extern "system" fn subclass_proc(
     _id: usize,
     _data: usize,
 ) -> LRESULT {
-    if msg == WM_NCDESTROY {
-        // SAFETY: Removes our own subclass and property from our own window inside its window
-        // procedure, then reclaims the reference stored in `create` exactly once. Live callers
-        // hold their own strong counts.
-        unsafe {
-            let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID);
-            if let Ok(h) = RemovePropW(hwnd, STATE_PROP)
-                && !h.is_invalid()
-            {
-                drop(Rc::from_raw(h.0 as *const CtlState));
+    catch_unwind(AssertUnwindSafe(|| {
+        if msg == WM_NCDESTROY {
+            // SAFETY: Removes our own subclass and property from our own window inside its window
+            // procedure, then reclaims the reference stored in `create` exactly once. Live callers
+            // hold their own strong counts.
+            unsafe {
+                let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID);
+                if let Ok(h) = RemovePropW(hwnd, STATE_PROP)
+                    && !h.is_invalid()
+                {
+                    drop(Rc::from_raw(h.0 as *const CtlState));
+                }
             }
+            // SAFETY: Forwards to the next procedure in the chain with unchanged parameters.
+            return unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
         }
-        // SAFETY: Forwards to the next procedure in the chain with unchanged parameters.
-        return unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
-    }
-    let Some(state) = state_of(hwnd) else {
-        // SAFETY: Forwards with unchanged parameters.
-        return unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
-    };
-    let result = catch_unwind(AssertUnwindSafe(|| state.message(msg, wparam, lparam)));
-    match result {
-        Ok(Some(r)) => r,
-        // SAFETY: Forwards with unchanged parameters (also after a caught panic).
-        _ => unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) },
-    }
+        let Some(state) = state_of(hwnd) else {
+            // SAFETY: Forwards with unchanged parameters.
+            return unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+        };
+        state
+            .message(msg, wparam, lparam)
+            .unwrap_or_else(|| def(hwnd, msg, wparam, lparam))
+    }))
+    .unwrap_or_else(|_| def(hwnd, msg, wparam, lparam))
 }
 
 fn def(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -1349,9 +1424,8 @@ impl CtlState {
             return;
         };
         let spec = spec.borrow();
-        let mut ps = Default::default();
-        // SAFETY: BeginPaint/EndPaint pair on our own window inside WM_PAINT.
-        let hdc = unsafe { windows::Win32::Graphics::Gdi::BeginPaint(self.hwnd, &mut ps) };
+        let paint = Paint::begin(self.hwnd);
+        let hdc = paint.hdc();
         let area = client(self.hwnd);
         let face = area.deflate(self.padding.get());
         let back = self.back.get();
@@ -1360,10 +1434,6 @@ impl CtlState {
             let flags = self.label_flags(&spec, hdc, face.size());
             draw_text(hdc, &spec.text, self.font.get(), face, spec.fore, flags);
         });
-        // SAFETY: Ends the paint started above.
-        unsafe {
-            let _ = windows::Win32::Graphics::Gdi::EndPaint(self.hwnd, &ps);
-        }
     }
 
     // -- checked list ----------------------------------------------------------------------
@@ -1397,7 +1467,6 @@ impl CtlState {
             checked[i] = !checked[i];
             result = Some((i, checked[i]));
         }
-        l.last_selected.set(index);
         invalidate(self.hwnd);
         result
     }
@@ -1680,6 +1749,26 @@ pub(crate) fn measure(ctl: &Ctl, font: HFONT, padding: Pad, min: Size, proposed:
     }
 }
 
+/// Measures the current caption, which may differ from the form's initial declaration.
+pub(crate) fn measure_live(
+    hwnd: HWND,
+    declared: &Ctl,
+    font: HFONT,
+    padding: Pad,
+    min: Size,
+    proposed: Size,
+) -> Size {
+    let mut ctl = declared.clone();
+    if let Some(state) = state_of(hwnd) {
+        match (&mut ctl, &state.data) {
+            (Ctl::Button(spec), Data::Button(b)) => *spec = b.spec.borrow().clone(),
+            (Ctl::Label(spec), Data::Label(l)) => *spec = l.borrow().clone(),
+            _ => {}
+        }
+    }
+    measure(&ctl, font, padding, min, proposed)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Public operations (used through `window::Form`)
 // ---------------------------------------------------------------------------------------------
@@ -1690,7 +1779,8 @@ pub(crate) fn apply_dpi(hwnd: HWND, font: HFONT, padding: Pad, dpi: u32) {
         st.font.set(font);
         st.padding.set(padding);
         st.dpi.set(dpi);
-        send(hwnd, WM_SETFONT, font.0 as usize, 1);
+        // The form invalidates after the DPI layout; avoid drawing halfway through re-fonting.
+        send(hwnd, WM_SETFONT, font.0 as usize, 0);
         st.update_item_height();
         invalidate(hwnd);
     }
