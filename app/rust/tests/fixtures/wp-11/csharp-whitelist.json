@@ -1,0 +1,14 @@
+[
+  {
+    "Name": "True",
+    "Description": "USB Ger\u00E4t \u0026 \u003CReserve\u003E \u0027A\u0027 \u002B \uD83D\uDD12",
+    "HardwareId": "USB\\VID_046D\u0026PID_C52B\u0026REV_2401USB\\VID_046D\u0026PID_C52B",
+    "Class": "USB"
+  },
+  {
+    "Name": "True",
+    "Description": "Historical device without an ID",
+    "HardwareId": "",
+    "Class": ""
+  }
+]
