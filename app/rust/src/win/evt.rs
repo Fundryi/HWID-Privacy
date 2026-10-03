@@ -74,7 +74,7 @@ impl Drop for EventHandle {
     fn drop(&mut self) {
         // SAFETY: This is the sole owner of a live event handle returned by wevtapi.
         if let Err(error) = unsafe { EvtClose(self.0) } {
-            eprintln!("{}", Error::from_win("EvtClose", error));
+            super::record(Error::from_win("EvtClose", error));
         }
     }
 }

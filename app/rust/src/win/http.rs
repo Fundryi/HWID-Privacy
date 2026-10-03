@@ -5,19 +5,30 @@ use std::{
     ffi::c_void,
     fs::{self, File, OpenOptions},
     io::{self, Write},
-    os::windows::fs::OpenOptionsExt,
+    os::windows::ffi::OsStrExt,
+    os::windows::fs::{MetadataExt, OpenOptionsExt},
+    os::windows::io::AsRawHandle,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 use windows::{
-    Win32::Networking::WinHttp::*,
+    Win32::{
+        Foundation::HANDLE,
+        Networking::WinHttp::*,
+        Storage::FileSystem::{
+            DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO,
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo, MOVEFILE_WRITE_THROUGH,
+            MoveFileExW, SetFileInformationByHandle,
+        },
+    },
     core::{PCWSTR, w},
 };
 
 // C# parity: Services/AutoUpdateService.cs:28 (HttpClient's default 100 s budget).
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(100);
-// Far above any HWIDChecker.exe build; stops a broken or hostile reply filling %TEMP%.
-const MAX_DOWNLOAD: u64 = 256 * 1024 * 1024;
+// Far above any HWIDChecker.exe build; bounds retained memory for a hostile reply.
+pub(crate) const MAX_DOWNLOAD: u64 = 256 * 1024 * 1024;
 
 fn too_large() -> Error {
     Error::msg("Download size", format!("exceeds {MAX_DOWNLOAD} bytes"))
@@ -44,17 +55,16 @@ impl Drop for Internet {
     }
 }
 
-/// An exclusively created temporary file, deleted on drop unless handed to the installer.
+/// An exclusively created validation snapshot, always deleted on drop.
 pub struct TempFile {
     path: PathBuf,
     file: Option<File>,
-    keep: bool,
 }
 
 impl TempFile {
     /// Creates an unpredictable updater file and denies other writers or deleters.
     pub fn create(extension: &str) -> Result<Self> {
-        if !matches!(extension, "exe" | "bat") {
+        if extension != "exe" {
             return Err(Error::msg(
                 "Create update temp file",
                 "unsupported extension",
@@ -65,7 +75,7 @@ impl TempFile {
                 "HWIDChecker_update_{}.{extension}",
                 hash::random_name()?
             ));
-            // FILE_SHARE_READ keeps the retained bytes immutable until the helper handoff.
+            // A validation snapshot cannot be modified or deleted while inspected.
             match OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -77,7 +87,6 @@ impl TempFile {
                     return Ok(Self {
                         path,
                         file: Some(file),
-                        keep: false,
                     });
                 }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -101,19 +110,13 @@ impl TempFile {
             .as_ref()
             .ok_or_else(|| Error::msg("Update temp file", "file is closed"))
     }
-
-    /// Hands cleanup ownership to a successfully launched replacement helper.
-    pub fn keep(&mut self) {
-        self.keep = true;
-    }
 }
 
 impl Drop for TempFile {
     fn drop(&mut self) {
         // Close first: the retained handle deliberately denies deletion while held.
         drop(self.file.take());
-        if !self.keep
-            && let Err(error) = fs::remove_file(&self.path)
+        if let Err(error) = fs::remove_file(&self.path)
             && error.kind() != io::ErrorKind::NotFound
         {
             record(hash::io_error("Delete update temp file", error));
@@ -123,9 +126,141 @@ impl Drop for TempFile {
 
 /// The retained response, including its independently measured and advertised sizes.
 pub struct Download {
-    pub temp: TempFile,
+    pub bytes: Vec<u8>,
     pub size: u64,
     pub content_length: Option<u64>,
+}
+
+/// Reuses the existing full PE parser on a locked snapshot of exactly these bytes.
+pub(crate) fn validate_x64_pe(bytes: &[u8]) -> Result<()> {
+    let snapshot = TempFile::create("exe")?;
+    snapshot
+        .file()?
+        .write_all(bytes)
+        .map_err(|e| hash::io_error("Write PE validation snapshot", e))?;
+    hash::validate_x64_pe(snapshot.file()?)
+}
+
+fn rename_file(source: &Path, target: &Path) -> Result<()> {
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let target: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: Both paths are NUL-terminated and live through the call. No replacement
+    // flag is used: an existing destination must never be overwritten.
+    unsafe {
+        MoveFileExW(
+            PCWSTR(source.as_ptr()),
+            PCWSTR(target.as_ptr()),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|e| Error::from_win("Rename update executable", e))
+}
+
+/// Owns an in-process executable swap; dropping an unfinished swap restores the old file.
+pub(crate) struct ExecutableSwap {
+    executable: PathBuf,
+    old: PathBuf,
+    created: bool,
+    pending: bool,
+}
+
+impl ExecutableSwap {
+    /// Renames the old image to an unpredictable sibling without replacing anything.
+    pub(crate) fn begin(executable: &Path) -> Result<Self> {
+        let mut old = executable.as_os_str().to_os_string();
+        old.push(format!(".old-{}", hash::random_name()?));
+        let old = PathBuf::from(old);
+        rename_file(executable, &old)?;
+        Ok(Self {
+            executable: executable.to_owned(),
+            old,
+            created: false,
+            pending: true,
+        })
+    }
+
+    /// Exclusively creates the new image, writes the checked bytes, flushes, and closes it.
+    pub(crate) fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .share_mode(0)
+            .open(&self.executable)
+            .map_err(|e| hash::io_error("Create update executable", e))?;
+        // Ownership starts only after CREATE_NEW succeeds, including partial-write failures.
+        self.created = true;
+        file.write_all(bytes)
+            .map_err(|e| hash::io_error("Write update executable", e))?;
+        file.sync_all()
+            .map_err(|e| hash::io_error("Flush update executable", e))?;
+        drop(file);
+        Ok(())
+    }
+
+    /// Restores the old image, deleting only the exact file this swap created.
+    pub(crate) fn rollback(&mut self) -> Result<()> {
+        if self.created {
+            // remove_file is a file-only API (DeleteFileW), never directory cleanup.
+            fs::remove_file(&self.executable)
+                .map_err(|e| hash::io_error("Delete failed update executable", e))?;
+            self.created = false;
+        }
+        rename_file(&self.old, &self.executable)?;
+        self.pending = false;
+        Ok(())
+    }
+
+    /// Leaves the old sibling for the successfully restarted application's startup cleanup.
+    pub(crate) fn commit(mut self) {
+        self.pending = false;
+    }
+}
+
+impl Drop for ExecutableSwap {
+    fn drop(&mut self) {
+        if self.pending
+            && let Err(error) = self.rollback()
+        {
+            record(error);
+        }
+    }
+}
+
+/// Deletes only a regular, non-reparse file; directories and links are left untouched.
+pub(crate) fn delete_old_executable(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|e| hash::io_error("Inspect old update executable", e))?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        return Ok(());
+    }
+    // Recheck the opened object and deny renames/deletion while inspecting it. A path
+    // changed into a junction, symlink, or directory cannot redirect this deletion.
+    let file = OpenOptions::new()
+        .read(true)
+        .access_mode(DELETE.0 | FILE_READ_ATTRIBUTES.0)
+        .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0 | FILE_FLAG_BACKUP_SEMANTICS.0)
+        .open(path)
+        .map_err(|e| hash::io_error("Open old update executable", e))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| hash::io_error("Inspect old update handle", e))?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        return Ok(());
+    }
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: The owned file has DELETE access. The correctly sized disposition lives
+    // through the call; deletion is tied to this checked regular file, not its pathname.
+    unsafe {
+        SetFileInformationByHandle(
+            HANDLE(file.as_raw_handle()),
+            FileDispositionInfo,
+            (&disposition as *const FILE_DISPOSITION_INFO).cast(),
+            std::mem::size_of_val(&disposition) as u32,
+        )
+    }
+    .map_err(|e| Error::from_win("Delete old update executable", e))?;
+    Ok(())
 }
 
 fn component(url: &[u16], ptr: *const u16, length: u32) -> Result<Vec<u16>> {
@@ -352,8 +487,7 @@ pub(crate) fn download_with_timeout(
     if content_length.is_some_and(|n| n > MAX_DOWNLOAD) {
         return Err(too_large());
     }
-    let temp = TempFile::create("exe")?;
-    let mut file = temp.file()?;
+    let mut bytes = Vec::new();
     let mut size = 0_u64;
     let mut buffer = [0_u8; 8192];
     progress(0, content_length);
@@ -376,14 +510,14 @@ pub(crate) fn download_with_timeout(
         if size + count as u64 > MAX_DOWNLOAD {
             return Err(too_large());
         }
-        file.write_all(&buffer[..count as usize])
-            .map_err(|e| hash::io_error("Write update file", e))?;
+        bytes
+            .try_reserve(count as usize)
+            .map_err(|e| Error::msg("Retain update bytes", e.to_string()))?;
+        bytes.extend_from_slice(&buffer[..count as usize]);
         size += count as u64;
         progress(size, content_length);
     }
     timeouts(&request, start, budget, cancel)?;
-    file.sync_all()
-        .map_err(|e| hash::io_error("Flush update file", e))?;
     if let Some(expected) = content_length
         && size != expected
     {
@@ -393,7 +527,7 @@ pub(crate) fn download_with_timeout(
         ));
     }
     Ok(Download {
-        temp,
+        bytes,
         size,
         content_length,
     })

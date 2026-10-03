@@ -51,6 +51,7 @@ fn main() -> ExitCode {
         if !win::security::is_admin() {
             return Err("HWIDChecker requires administrator privileges.".to_owned());
         }
+        hwidchecker::update::cleanup_old_executables();
         parse_options(args.iter().cloned()).and_then(run)
     };
     let result = if switch_mode {
