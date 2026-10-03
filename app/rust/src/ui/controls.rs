@@ -1,14 +1,15 @@
 //! Owned by WP-10a: native controls with WinForms look and behavior.
 //!
-//! Flat button (owner-drawn BUTTON), label (painted STATIC), read-only multiline EDIT, checked
-//! list (owner-drawn LISTBOX), progress bar. Each control keeps its own state in its subclass;
-//! containers reflect `WM_DRAWITEM`, `WM_CTLCOLOR*`, `WM_COMMAND`, and `WM_VKEYTOITEM` back to it
-//! through [`reflect`]. Text goes through GDI `DrawTextExW` with the flags and margins of
-//! WinForms `TextRenderer`, so pixels can match the C# app.
+//! Button (owner-drawn BUTTON, `DESIGN.md` section 6), label (painted STATIC), read-only
+//! multiline EDIT, checked list (owner-drawn LISTBOX), progress bar. Each control keeps its own
+//! state in its subclass; containers reflect `WM_DRAWITEM`, `WM_CTLCOLOR*`, `WM_COMMAND`, and
+//! `WM_VKEYTOITEM` back to it through [`reflect`]. Text goes through GDI `DrawTextExW` with the
+//! flags and margins of WinForms `TextRenderer`, so text positions match the C# app; shapes are
+//! drawn with tiny-skia into a DIB.
 //!
 //! Portions ported from dotnet/winforms `ButtonBase.cs`, `Button.cs`,
 //! `ButtonInternal/ButtonBaseAdapter*.cs`, `ButtonInternal/ButtonFlatAdapter.cs`,
-//! `ControlPaint.HLSColor.cs`, `Rendering/TextExtensions.cs`, `Label.cs`, `CheckedListBox.cs`:
+//! `Rendering/TextExtensions.cs`, `Label.cs`, `CheckedListBox.cs`:
 //!
 //! The MIT License (MIT)
 //!
@@ -46,46 +47,49 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use windows::{
     Win32::{
-        Foundation::{HANDLE, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
-            BeginPaint, CreateSolidBrush, DFC_BUTTON, DFCS_BUTTONCHECK, DFCS_CHECKED, DFCS_FLAT,
+            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, ClientToScreen, CreateSolidBrush,
+            DFC_BUTTON, DFCS_BUTTONCHECK, DFCS_CHECKED, DFCS_FLAT, DIB_RGB_COLORS,
             DRAW_TEXT_FORMAT, DRAWTEXTPARAMS, DT_BOTTOM, DT_CALCRECT, DT_CENTER, DT_EDITCONTROL,
             DT_END_ELLIPSIS, DT_HIDEPREFIX, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
             DT_WORDBREAK, DeleteObject, DrawFocusRect, DrawFrameControl, DrawTextExW, EndPaint,
-            FillRect, GetDC, GetTextMetricsW, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect,
-            PAINTSTRUCT, ReleaseDC, SelectObject, SetBkColor, SetBkMode, SetTextColor, TEXTMETRICW,
-            TRANSPARENT,
+            FillRect, GetDC, GetTextMetricsW, GetWindowDC, HBRUSH, HDC, HFONT, HGDIOBJ,
+            InvalidateRect, MapWindowPoints, PAINTSTRUCT, ReleaseDC, SelectObject, SetBkColor,
+            SetBkMode, SetDIBitsToDevice, SetTextColor, TEXTMETRICW, TRANSPARENT,
         },
+        System::SystemInformation::GetTickCount,
         UI::{
             Controls::{
                 BPBF_COMPATIBLEBITMAP, BeginBufferedPaint, BufferedPaintInit, BufferedPaintUnInit,
                 CloseThemeData, DRAWITEMSTRUCT, DrawThemeBackground, EM_REPLACESEL, EM_SCROLLCARET,
                 EM_SETLIMITTEXT, EM_SETSEL, EndBufferedPaint, HTHEME, ODS_FOCUS, ODS_NOFOCUSRECT,
-                ODS_SELECTED, OpenThemeData, PBM_SETMARQUEE, PBM_SETPOS, PBM_SETRANGE32,
-                PBS_MARQUEE, PBS_SMOOTH, PROGRESS_CLASSW, WC_BUTTONW, WC_EDITW, WC_LISTBOXW,
-                WC_STATICW, WM_MOUSELEAVE,
+                ODS_SELECTED, OpenThemeData, PBM_GETPOS, PBM_SETMARQUEE, PBM_SETPOS,
+                PBM_SETRANGE32, PBS_MARQUEE, PBS_SMOOTH, PROGRESS_CLASSW, WC_BUTTONW, WC_EDITW,
+                WC_LISTBOXW, WC_STATICW, WM_MOUSELEAVE,
             },
             Input::KeyboardAndMouse::{
-                EnableWindow, GetFocus, GetKeyState, IsWindowEnabled, TME_LEAVE, TRACKMOUSEEVENT,
-                TrackMouseEvent, VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR,
-                VK_RIGHT, VK_UP,
+                EnableWindow, GetFocus, GetKeyState, IsWindowEnabled, SetFocus, TME_LEAVE,
+                TRACKMOUSEEVENT, TrackMouseEvent, VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT,
+                VK_NEXT, VK_PRIOR, VK_RIGHT, VK_UP,
             },
             Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
             WindowsAndMessaging::{
                 BM_GETSTATE, BN_CLICKED, BN_DBLCLK, BS_OWNERDRAW, CreateWindowExW,
                 DLGC_WANTALLKEYS, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY,
-                GWL_STYLE, GetClientRect, GetPropW, GetWindowLongPtrW, GetWindowTextLengthW,
-                GetWindowTextW, HMENU, HTCLIENT, IDC_HAND, LB_ADDSTRING, LB_ERR, LB_GETCURSEL,
-                LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT, LB_SETITEMHEIGHT, LBN_DBLCLK,
-                LBN_SELCHANGE, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY,
-                LBS_OWNERDRAWFIXED, LBS_WANTKEYBOARDINPUT, LoadCursorW, RemovePropW, SendMessageW,
-                SetCursor, SetPropW, SetWindowLongPtrW, SetWindowTextW, UISF_HIDEACCEL,
-                UISF_HIDEFOCUS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR, WM_CTLCOLOREDIT,
-                WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_ERASEBKGND, WM_GETDLGCODE,
-                WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-                WM_NCDESTROY, WM_PAINT, WM_QUERYUISTATE, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT,
-                WM_SETREDRAW, WM_UPDATEUISTATE, WM_VKEYTOITEM, WS_BORDER, WS_CHILD,
-                WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_HSCROLL, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                GA_ROOT, GWL_STYLE, GetAncestor, GetClientRect, GetNextDlgTabItem, GetParent,
+                GetPropW, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+                HMENU, HTCLIENT, IDC_HAND, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETTEXT,
+                LB_GETTEXTLEN, LB_RESETCONTENT, LB_SETITEMHEIGHT, LBN_DBLCLK, LBN_SELCHANGE,
+                LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LBS_OWNERDRAWFIXED,
+                LBS_WANTKEYBOARDINPUT, LoadCursorW, RemovePropW, SendMessageW, SetCursor, SetPropW,
+                SetWindowLongPtrW, SetWindowTextW, UISF_HIDEACCEL, UISF_HIDEFOCUS, WINDOW_EX_STYLE,
+                WINDOW_STYLE, WM_CHAR, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
+                WM_DRAWITEM, WM_ERASEBKGND, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS,
+                WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCPAINT, WM_PAINT, WM_QUERYUISTATE,
+                WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_UPDATEUISTATE,
+                WM_VKEYTOITEM, WS_BORDER, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_HSCROLL,
+                WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -115,111 +119,64 @@ pub enum Align {
     MiddleCenter,
 }
 
-/// How a button changes its `BackColor` on mouse events (the C# event handlers).
+/// The button kinds of `DESIGN.md` section 6 (`Buttons.ButtonVariant` in C#).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Hover {
-    /// No handlers (sidebar buttons; `FlatAppearance` colors only).
-    None,
-    /// `Buttons.ApplyStyle`: enter/leave/down/up when enabled, and disabled colors.
-    Shared {
-        /// Normal back color.
-        normal: Color,
-        /// Hover back color.
-        hover: Color,
-        /// Pressed back color.
-        pressed: Color,
-    },
-    /// `DeviceRemovalConfirmationForm.AddHoverEffects`: enter and leave only.
-    EnterLeave {
-        /// Normal back color.
-        normal: Color,
-        /// Hover back color.
-        hover: Color,
-    },
-}
-
-/// `Buttons.ButtonVariant`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Variant {
-    /// Blue.
+pub enum ButtonKind {
+    /// White fill, dark text, no border: the one main action of a window.
     Primary,
-    /// Dark grey.
-    Secondary,
-    /// Red.
-    Danger,
+    /// `CARD` fill with a 1 px `BORDER` (every other button; C# `Secondary`).
+    Outline,
+    /// An outline button with `DANGER` text (C# `Danger` fill is not used).
+    Destructive,
+    /// No fill at rest, `HOVER` fill when hovered or active (the main window sections).
+    Sidebar,
 }
 
-/// A WinForms `FlatStyle.Flat` button.
+/// An owner-drawn button (`FlatStyle.Flat` in C#; the look comes from `kind`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ButtonSpec {
     /// Text; `&` marks a mnemonic like WinForms `UseMnemonic`.
     pub text: String,
     /// Font.
     pub font: FontSpec,
-    /// Initial `BackColor`.
-    pub back: Color,
-    /// `ForeColor`.
-    pub fore: Color,
-    /// `FlatAppearance.BorderColor`.
-    pub border: Color,
-    /// `FlatAppearance.BorderSize` (device pixels, not DPI scaled, like WinForms).
-    pub border_size: i32,
-    /// `FlatAppearance.MouseOverBackColor` (`None` = WinForms computed color).
-    pub over_back: Option<Color>,
-    /// `FlatAppearance.MouseDownBackColor` (`None` = WinForms computed color).
-    pub down_back: Option<Color>,
+    /// Visual kind.
+    pub kind: ButtonKind,
     /// `TextAlign`.
     pub align: Align,
-    /// Event handlers that change `BackColor`.
-    pub hover: Hover,
 }
 
 impl ButtonSpec {
-    /// `Buttons.ApplyStyle(button, variant)`.
-    pub fn shared(text: &str, variant: Variant) -> Self {
-        let (normal, hover, pressed) = match variant {
-            Variant::Primary => (
-                theme::PRIMARY_BUTTON,
-                theme::PRIMARY_BUTTON_HOVER,
-                theme::PRIMARY_BUTTON_PRESSED,
-            ),
-            Variant::Secondary => (
-                theme::BUTTON_BACKGROUND,
-                theme::BUTTON_HOVER,
-                theme::BUTTON_BACKGROUND,
-            ),
-            Variant::Danger => (
-                theme::DANGER_BUTTON,
-                theme::DANGER_BUTTON_HOVER,
-                theme::DANGER_BUTTON,
-            ),
-        };
+    fn new(text: &str, kind: ButtonKind) -> Self {
         Self {
             text: text.to_owned(),
             font: theme::BUTTON_FONT,
-            back: normal,
-            fore: theme::PRIMARY_TEXT,
-            border: theme::BUTTON_BORDER,
-            border_size: theme::BUTTON_BORDER_SIZE,
-            over_back: None,
-            down_back: None,
+            kind,
             align: Align::MiddleCenter,
-            hover: Hover::Shared {
-                normal,
-                hover,
-                pressed,
-            },
         }
     }
 
-    /// `Buttons.ApplyStyle(button, ButtonVariant.Secondary)`.
-    pub fn secondary(text: &str) -> Self {
-        Self::shared(text, Variant::Secondary)
+    /// The window's main action (`Buttons.ApplyStyle(button, ButtonVariant.Primary)`).
+    pub fn primary(text: &str) -> Self {
+        Self::new(text, ButtonKind::Primary)
     }
 
-    /// `Buttons.ApplyStyle(button, ButtonVariant.Primary)`.
-    pub fn primary(text: &str) -> Self {
-        Self::shared(text, Variant::Primary)
+    /// Any other action (`Buttons.ApplyStyle(button, ButtonVariant.Secondary)`).
+    pub fn outline(text: &str) -> Self {
+        Self::new(text, ButtonKind::Outline)
+    }
+
+    /// An action that deletes something.
+    pub fn destructive(text: &str) -> Self {
+        Self::new(text, ButtonKind::Destructive)
+    }
+
+    /// A main window sidebar section item (left aligned, body font).
+    pub fn sidebar(text: &str) -> Self {
+        Self {
+            font: theme::SECTION_BUTTON_FONT,
+            align: Align::MiddleLeft,
+            ..Self::new(text, ButtonKind::Sidebar)
+        }
     }
 }
 
@@ -543,14 +500,9 @@ fn fill(hdc: HDC, r: Rect, color: Color) {
     unsafe { FillRect(hdc, &rc, brush.handle()) };
 }
 
-/// `ControlPaint.DrawBorderSimple` / `HDC.DrawRectangle`: a 1-pixel frame inside `r`.
-fn frame(hdc: HDC, r: Rect, color: Color) {
-    border_with_size(hdc, r, color, 1);
-}
-
-/// `ButtonBaseAdapter.DrawFlatBorderWithSize`.
-fn border_with_size(hdc: HDC, b: Rect, color: Color, size: i32) {
-    let size = size.min(b.w.min(b.h));
+/// A 1-pixel frame inside `r` (the square frame of text boxes and lists).
+fn frame(hdc: HDC, b: Rect, color: Color) {
+    let size = theme::STROKE.min(b.w.min(b.h));
     if size <= 0 {
         return;
     }
@@ -584,6 +536,125 @@ fn border_with_size(hdc: HDC, b: Rect, color: Color, size: i32) {
         },
         color,
     );
+}
+
+/// A rounded rectangle path (`DESIGN.md` 5: anti-aliased shapes are drawn with tiny-skia).
+fn rounded(r: Rect, radius: i32, inset: f32) -> Option<tiny_skia::Path> {
+    let (x, y) = (r.x as f32 + inset, r.y as f32 + inset);
+    let (w, h) = (r.w as f32 - 2.0 * inset, r.h as f32 - 2.0 * inset);
+    let rad = (radius as f32).min(w / 2.0).min(h / 2.0).max(0.0);
+    // Bezier circle-quadrant control distance.
+    let k = rad * 0.552_284_8;
+    let (right, bottom) = (x + w, y + h);
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(x + rad, y);
+    pb.line_to(right - rad, y);
+    pb.cubic_to(right - rad + k, y, right, y + rad - k, right, y + rad);
+    pb.line_to(right, bottom - rad);
+    pb.cubic_to(
+        right,
+        bottom - rad + k,
+        right - rad + k,
+        bottom,
+        right - rad,
+        bottom,
+    );
+    pb.line_to(x + rad, bottom);
+    pb.cubic_to(x + rad - k, bottom, x, bottom - rad + k, x, bottom - rad);
+    pb.line_to(x, y + rad);
+    pb.cubic_to(x, y + rad - k, x + rad - k, y, x + rad, y);
+    pb.close();
+    pb.finish()
+}
+
+fn skia_color(c: Color) -> tiny_skia::Color {
+    tiny_skia::Color::from_rgba8(c.r, c.g, c.b, 255)
+}
+
+fn skia_paint(c: Color) -> tiny_skia::Paint<'static> {
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color(skia_color(c));
+    paint.anti_alias = true;
+    paint
+}
+
+/// Draws a rounded rectangle over `background` into a pixmap of `r`'s size and copies it to the
+/// DC at `r`. `fill` covers the whole rectangle; `border` is a 1 px stroke on its edge.
+fn rounded_rect(
+    hdc: HDC,
+    r: Rect,
+    radius: i32,
+    background: Color,
+    fill_color: Option<Color>,
+    border: Option<Color>,
+) {
+    let Some(mut pixmap) = tiny_skia::Pixmap::new(r.w.max(0) as u32, r.h.max(0) as u32) else {
+        return;
+    };
+    pixmap.fill(skia_color(background));
+    let local = Rect { x: 0, y: 0, ..r };
+    let id = tiny_skia::Transform::identity();
+    if let (Some(color), Some(path)) = (fill_color, rounded(local, radius, 0.0)) {
+        pixmap.fill_path(
+            &path,
+            &skia_paint(color),
+            tiny_skia::FillRule::Winding,
+            id,
+            None,
+        );
+    }
+    // A stroke centred half a pixel inside the edge covers exactly the outermost pixel ring.
+    if let (Some(color), Some(path)) = (border, rounded(local, radius, 0.5)) {
+        let stroke = tiny_skia::Stroke {
+            width: theme::STROKE as f32,
+            ..Default::default()
+        };
+        pixmap.stroke_path(&path, &skia_paint(color), &stroke, id, None);
+    }
+    blit(hdc, r.x, r.y, &pixmap);
+}
+
+/// Copies an opaque pixmap (premultiplied RGBA) to the DC as a 32-bit top-down DIB.
+fn blit(hdc: HDC, x: i32, y: i32, pixmap: &tiny_skia::Pixmap) {
+    let (w, h) = (pixmap.width(), pixmap.height());
+    if w == 0 || h == 0 {
+        return;
+    }
+    let bgra: Vec<u8> = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|p| [p.blue(), p.green(), p.red(), p.alpha()])
+        .collect();
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w as i32,
+            biHeight: -(h as i32),
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    // SAFETY: `bgra` holds w*h*4 bytes laid out as the header describes and lives through the
+    // call; the DC is valid for the caller's paint.
+    unsafe {
+        SetDIBitsToDevice(
+            hdc,
+            x,
+            y,
+            w,
+            h,
+            0,
+            0,
+            0,
+            h,
+            bgra.as_ptr().cast(),
+            &bmi,
+            DIB_RGB_COLORS,
+        );
+    }
 }
 
 fn text_height(hdc: HDC, font: HFONT) -> i32 {
@@ -755,125 +826,111 @@ fn align_in(size: Size, within: Rect, align: Align) -> Rect {
 }
 
 // ---------------------------------------------------------------------------------------------
-// WinForms color math (ControlPaint.HLSColor, ButtonBaseAdapter.ColorOptions)
+// Focus ring (DESIGN.md 5: 1 px, 3 px outside the control, so the container paints it)
 // ---------------------------------------------------------------------------------------------
 
-const HLS_MAX: i32 = 240;
-const RGB_MAX: i32 = 255;
-const UNDEFINED_HUE: i32 = HLS_MAX * 2 / 3;
-
-struct Hls {
-    hue: i32,
-    lum: i32,
-    sat: i32,
+/// The control's rectangle in its parent's client coordinates.
+fn rect_in_parent(hwnd: HWND) -> Option<Rect> {
+    let mut rc = RECT::default();
+    // SAFETY: Writable RECT; a dead handle fails and yields None.
+    unsafe { GetWindowRect(hwnd, &mut rc) }.ok()?;
+    // SAFETY: Read-only parent query.
+    let parent = unsafe { GetParent(hwnd) }.ok()?;
+    let mut pts = [
+        POINT {
+            x: rc.left,
+            y: rc.top,
+        },
+        POINT {
+            x: rc.right,
+            y: rc.bottom,
+        },
+    ];
+    // SAFETY: Converts two points of a live window; a failure (0 with no error) leaves them.
+    unsafe { MapWindowPoints(None, Some(parent), &mut pts) };
+    Some(Rect {
+        x: pts[0].x,
+        y: pts[0].y,
+        w: pts[1].x - pts[0].x,
+        h: pts[1].y - pts[0].y,
+    })
 }
 
-fn hls(c: Color) -> Hls {
-    let (r, g, b) = (i32::from(c.r), i32::from(c.g), i32::from(c.b));
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let sum = max + min;
-    let lum = (sum * HLS_MAX + RGB_MAX) / (2 * RGB_MAX);
-    let dif = max - min;
-    if dif == 0 {
-        return Hls {
-            hue: UNDEFINED_HUE,
-            lum,
-            sat: 0,
-        };
-    }
-    let sat = if lum <= HLS_MAX / 2 {
-        (dif * HLS_MAX + sum / 2) / sum
-    } else {
-        (dif * HLS_MAX + (2 * RGB_MAX - sum) / 2) / (2 * RGB_MAX - sum)
+/// The ring rectangle around a focused control, in parent coordinates.
+fn ring_rect(hwnd: HWND, dpi: u32) -> Option<Rect> {
+    let offset = dpi::scale(theme::FOCUS_RING_OFFSET, dpi);
+    Some(rect_in_parent(hwnd)?.deflate(Pad {
+        l: -offset,
+        t: -offset,
+        r: -offset,
+        b: -offset,
+    }))
+}
+
+/// Repaints the parent's area under a control's focus ring (focus or focus-cue change).
+fn invalidate_ring(st: &CtlState) {
+    // SAFETY: Read-only parent query.
+    let Ok(parent) = (unsafe { GetParent(st.hwnd) }) else {
+        return;
     };
-    let delta = |v: i32| ((max - v) * (HLS_MAX / 6) + dif / 2) / dif;
-    let (rd, gd, bd) = (delta(r), delta(g), delta(b));
-    let mut hue = if r == max {
-        bd - gd
-    } else if g == max {
-        HLS_MAX / 3 + rd - bd
-    } else {
-        2 * HLS_MAX / 3 + gd - rd
+    let Some(r) = ring_rect(st.hwnd, st.dpi.get()) else {
+        return;
     };
-    if hue < 0 {
-        hue += HLS_MAX;
+    let rc = rect(r.deflate(Pad {
+        l: -1,
+        t: -1,
+        r: -1,
+        b: -1,
+    }));
+    // SAFETY: Invalidates a rectangle of a live parent window; erase repaints its back color.
+    unsafe {
+        let _ = InvalidateRect(Some(parent), Some(&rc), true);
     }
-    if hue > HLS_MAX {
-        hue -= HLS_MAX;
-    }
-    Hls { hue, lum, sat }
 }
 
-fn hue_to_rgb(n1: i32, n2: i32, hue: i32) -> i32 {
-    let hue = if hue < 0 {
-        hue + HLS_MAX
-    } else if hue > HLS_MAX {
-        hue - HLS_MAX
-    } else {
-        hue
+/// Paints the focus ring of `parent`'s focused kit button, if focus cues are on. Called from the
+/// container's `WM_PAINT`; `background` is the container's back color.
+pub(crate) fn paint_focus_ring(parent: HWND, hdc: HDC, background: Color) {
+    // SAFETY: Reads this thread's focus window.
+    let focus = unsafe { GetFocus() };
+    // SAFETY: Read-only parent query of the focus window.
+    if focus.is_invalid() || unsafe { GetParent(focus) } != Ok(parent) {
+        return;
+    }
+    let Some(st) = state_of(focus) else {
+        return;
     };
-    if hue < HLS_MAX / 6 {
-        n1 + ((n2 - n1) * hue + HLS_MAX / 12) / (HLS_MAX / 6)
-    } else if hue < HLS_MAX / 2 {
-        n2
-    } else if hue < HLS_MAX * 2 / 3 {
-        n1 + ((n2 - n1) * (HLS_MAX * 2 / 3 - hue) + HLS_MAX / 12) / (HLS_MAX / 6)
-    } else {
-        n1
+    if !matches!(st.data, Data::Button(_)) || !st.ui_state().0 {
+        return;
     }
-}
-
-fn from_hls(hue: i32, lum: i32, sat: i32) -> Color {
-    if sat == 0 {
-        let v = (lum * RGB_MAX / HLS_MAX) as u8;
-        return Color::rgb(v, v, v);
-    }
-    let m2 = if lum <= HLS_MAX / 2 {
-        (lum * (HLS_MAX + sat) + HLS_MAX / 2) / HLS_MAX
-    } else {
-        lum + sat - (lum * sat + HLS_MAX / 2) / HLS_MAX
+    let dpi = st.dpi.get();
+    let Some(r) = ring_rect(focus, dpi) else {
+        return;
     };
-    let m1 = 2 * lum - m2;
-    let ch = |h: i32| ((hue_to_rgb(m1, m2, h) * RGB_MAX + HLS_MAX / 2) / HLS_MAX) as u8;
-    Color::rgb(ch(hue + HLS_MAX / 3), ch(hue), ch(hue - HLS_MAX / 3))
+    rounded_rect(
+        hdc,
+        r,
+        dpi::scale(theme::FOCUS_RING_RADIUS, dpi),
+        background,
+        None,
+        Some(theme::FOCUS_RING),
+    );
 }
 
-/// `ControlPaint.Dark` (`Darker(0.5)`).
-fn dark(c: Color) -> Color {
-    let h = hls(c);
-    let zero = h.lum * (-333 + 1000) / 1000;
-    from_hls(h.hue, zero - (zero as f32 * 0.5) as i32, h.sat)
-}
-
-/// `ControlPaint.LightLight` (`Lighter(1.0)`).
-fn light_light(c: Color) -> Color {
-    let h = hls(c);
-    let one = ((i64::from(h.lum) * (1000 - 500) + i64::from(HLS_MAX + 1) * 500) / 1000) as i32;
-    from_hls(h.hue, one, h.sat)
-}
-
-/// `Color.GetBrightness`.
-fn brightness(c: Color) -> f32 {
-    let max = c.r.max(c.g).max(c.b) as f32;
-    let min = c.r.min(c.g).min(c.b) as f32;
-    (max + min) / (255.0 * 2.0)
-}
-
-fn adjust(c: Color, factor: f32) -> Color {
-    let a = |v: u8| ((factor * f32::from(v)) as i32).min(255) as u8;
-    Color::rgb(a(c.r), a(c.g), a(c.b))
-}
-
-/// `ColorData.LowButtonFace`.
-fn low_button_face(face: Color) -> Color {
-    adjust(face, if brightness(face) < 0.5 { 1.2 } else { 0.9 })
-}
-
-/// `ColorData.LowHighlight`.
-fn low_highlight(face: Color) -> Color {
-    let hi = light_light(face);
-    adjust(hi, if brightness(hi) < 0.5 { 1.2 } else { 0.9 })
+/// The focus ring rectangle (parent coordinates) of a kit button that has the focus, for the
+/// layout pass to repaint when the button moves.
+pub(crate) fn focused_ring(hwnd: HWND) -> Option<RECT> {
+    // SAFETY: Reads this thread's focus window.
+    if unsafe { GetFocus() } != hwnd || !is_button(hwnd) {
+        return None;
+    }
+    let dpi = state_of(hwnd)?.dpi.get();
+    Some(rect(ring_rect(hwnd, dpi)?.deflate(Pad {
+        l: -1,
+        t: -1,
+        r: -1,
+        b: -1,
+    })))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -882,10 +939,9 @@ fn low_highlight(face: Color) -> Color {
 
 struct ButtonData {
     spec: RefCell<ButtonSpec>,
-    back: Cell<Color>,
-    fore: Cell<Color>,
     hover: Cell<bool>,
-    is_default: Cell<bool>,
+    /// Sidebar item of the shown section (C# finds it by its `BackColor`).
+    active: Cell<bool>,
 }
 
 struct EditData {
@@ -968,10 +1024,8 @@ pub(crate) fn create(
             WINDOW_EX_STYLE(0),
             Data::Button(ButtonData {
                 spec: RefCell::new(b.clone()),
-                back: Cell::new(b.back),
-                fore: Cell::new(b.fore),
                 hover: Cell::new(false),
-                is_default: Cell::new(false),
+                active: Cell::new(false),
             }),
         ),
         Ctl::Label(l) => (
@@ -1160,14 +1214,33 @@ impl CtlState {
     fn message(&self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
         let hwnd = self.hwnd;
         match (&self.data, msg) {
+            (Data::Button(_), WM_SETFOCUS) => {
+                super::window::focus_changed(hwnd);
+                invalidate_ring(self);
+                None
+            }
             (_, WM_SETFOCUS) => {
                 super::window::focus_changed(hwnd);
                 None
             }
-            (Data::Button(_) | Data::Label(_), WM_ERASEBKGND) => Some(LRESULT(1)),
+            (Data::Button(_), WM_KILLFOCUS) => {
+                invalidate_ring(self);
+                None
+            }
+            (Data::Button(_) | Data::Label(_) | Data::Progress, WM_ERASEBKGND) => Some(LRESULT(1)),
             (Data::Label(_), WM_PAINT) => {
                 self.paint_label();
                 Some(LRESULT(0))
+            }
+            (Data::Progress, WM_PAINT) => {
+                self.paint_progress();
+                Some(LRESULT(0))
+            }
+            (Data::Edit(_) | Data::List(_), WM_NCPAINT) => {
+                // Scroll bars and the native frame first, then the 1 px token frame over it.
+                let r = def(hwnd, msg, wparam, lparam);
+                self.paint_frame();
+                Some(r)
             }
             (Data::Button(b), WM_MOUSEMOVE) => {
                 if !b.hover.get() {
@@ -1182,35 +1255,14 @@ impl CtlState {
                     unsafe {
                         let _ = TrackMouseEvent(&mut tme);
                     }
-                    self.on_mouse_enter(b);
+                    invalidate(hwnd);
                 }
                 None
             }
             (Data::Button(b), WM_MOUSELEAVE) => {
                 b.hover.set(false);
-                self.on_mouse_leave(b);
-                None
-            }
-            (Data::Button(b), WM_LBUTTONDOWN | WM_LBUTTONDBLCLK) => {
-                // C# parity: Buttons.cs MouseDown (WinForms has no separate double-click down).
-                if let Hover::Shared { pressed, .. } = b.spec.borrow().hover
-                    && self.enabled()
-                {
-                    b.back.set(pressed);
-                }
                 invalidate(hwnd);
                 None
-            }
-            (Data::Button(b), WM_LBUTTONUP) => {
-                // C# parity: Button.OnMouseUp raises Click before the MouseUp handler runs.
-                let r = def(hwnd, msg, wparam, lparam);
-                if let Hover::Shared { hover, .. } = b.spec.borrow().hover
-                    && self.enabled()
-                {
-                    b.back.set(hover);
-                }
-                invalidate(hwnd);
-                Some(r)
             }
             (Data::Button(_), WM_SETCURSOR) => {
                 if (lparam.0 & 0xFFFF) as u32 == HTCLIENT {
@@ -1226,7 +1278,7 @@ impl CtlState {
             }
             (Data::Button(_), WM_UPDATEUISTATE) => {
                 let r = def(hwnd, msg, wparam, lparam);
-                invalidate(hwnd);
+                invalidate_ring(self);
                 Some(r)
             }
             (Data::Edit(_), WM_GETDLGCODE) => {
@@ -1261,22 +1313,51 @@ impl CtlState {
         unsafe { IsWindowEnabled(self.hwnd).as_bool() }
     }
 
-    fn on_mouse_enter(&self, b: &ButtonData) {
-        match b.spec.borrow().hover {
-            Hover::Shared { hover, .. } if self.enabled() => b.back.set(hover),
-            Hover::EnterLeave { hover, .. } => b.back.set(hover),
-            _ => {}
+    /// The 1 px token frame over the native non-client border of a text box or list; the inner
+    /// pixel of a `WS_EX_CLIENTEDGE` frame takes the box's back color.
+    fn paint_frame(&self) {
+        let back = match &self.data {
+            Data::Edit(e) => e.spec.back,
+            Data::List(l) => l.spec.back,
+            _ => return,
+        };
+        let mut rc = RECT::default();
+        let mut origin = POINT::default();
+        // SAFETY: Writable RECT and POINT of our own window.
+        let known = unsafe {
+            GetWindowRect(self.hwnd, &mut rc).is_ok()
+                && ClientToScreen(self.hwnd, &mut origin).as_bool()
+        };
+        if !known {
+            return;
         }
-        invalidate(self.hwnd);
-    }
-
-    fn on_mouse_leave(&self, b: &ButtonData) {
-        match b.spec.borrow().hover {
-            Hover::Shared { normal, .. } if self.enabled() => b.back.set(normal),
-            Hover::EnterLeave { normal, .. } => b.back.set(normal),
-            _ => {}
+        // The native frame width (1 px for WS_BORDER, SM_CXEDGE for WS_EX_CLIENTEDGE, which
+        // scales with DPI) is the distance from the window edge to the client origin.
+        let width = origin.x - rc.left;
+        let outer = Rect {
+            x: 0,
+            y: 0,
+            w: rc.right - rc.left,
+            h: rc.bottom - rc.top,
+        };
+        // SAFETY: The window DC of our own control, released below.
+        let hdc = unsafe { GetWindowDC(Some(self.hwnd)) };
+        if hdc.is_invalid() {
+            return;
         }
-        invalidate(self.hwnd);
+        for i in 0..width {
+            let ring = outer.deflate(Pad {
+                l: i,
+                t: i,
+                r: i,
+                b: i,
+            });
+            frame(hdc, ring, if i == 0 { theme::BORDER } else { back });
+        }
+        // SAFETY: Releases the DC obtained above.
+        unsafe {
+            ReleaseDC(Some(self.hwnd), hdc);
+        }
     }
 
     /// Sends a control event to the form (`window.rs` turns it into `Event`).
@@ -1291,68 +1372,88 @@ impl CtlState {
 
     // -- button ----------------------------------------------------------------------------
 
-    /// `ButtonFlatAdapter.PaintUp/PaintOver/PaintDown` for the current state.
+    /// Paints the button for its kind and state (`DESIGN.md` section 6); the text layout keeps
+    /// the WinForms `ButtonFlatAdapter` math so the C# positions hold.
     fn paint_button(&self, b: &ButtonData, hdc: HDC, area: Rect) {
         let spec = b.spec.borrow();
         let enabled = self.enabled();
-        let pushed = send(self.hwnd, BM_GETSTATE, 0, 0).0 & BST_PUSHED != 0;
-        // SAFETY: Reads the focus window of this thread.
-        let focused = unsafe { GetFocus() } == self.hwnd;
-        let (show_focus, show_accel) = self.ui_state();
-        let back = b.back.get();
-        let bg = if !enabled {
-            back
-        } else if pushed {
-            spec.down_back.unwrap_or_else(|| low_highlight(back))
-        } else if b.hover.get() {
-            spec.over_back.unwrap_or_else(|| low_button_face(back))
-        } else {
-            back
-        };
-        // C# parity: ColorOptions.Calculate paints disabled text in ControlPaint.Dark(BackColor),
-        // ignoring ForeColor (so ThemeColors.DisabledText never shows).
-        let text_color = if enabled { b.fore.get() } else { dark(back) };
-        let contrast_shadow = if brightness(back) < 0.5 {
-            low_highlight(back)
-        } else {
-            dark(back)
-        };
-        let bs = spec.border_size;
-        let is_default = b.is_default.get();
-        let client_rect = area;
-        buffered(hdc, area, |hdc| {
-            fill(
-                hdc,
-                Rect {
-                    x: client_rect.x + bs,
-                    y: client_rect.y + bs,
-                    w: client_rect.w - 2 * bs,
-                    h: client_rect.h - 2 * bs,
+        let pushed = enabled && send(self.hwnd, BM_GETSTATE, 0, 0).0 & BST_PUSHED != 0;
+        let hover = enabled && b.hover.get();
+        let (_, show_accel) = self.ui_state();
+        let container = self.back.get();
+        let (fill_color, text_color, border) = match spec.kind {
+            ButtonKind::Primary => (
+                if !enabled {
+                    theme::DISABLED_BUTTON
+                } else if pushed {
+                    theme::PRIMARY_BUTTON_PRESSED
+                } else if hover {
+                    theme::PRIMARY_BUTTON_HOVER
+                } else {
+                    theme::PRIMARY_BUTTON
                 },
-                bg,
-            );
+                if enabled {
+                    theme::BG
+                } else {
+                    theme::DISABLED_TEXT
+                },
+                None,
+            ),
+            ButtonKind::Outline | ButtonKind::Destructive => (
+                if pushed {
+                    theme::BUTTON_BORDER
+                } else if hover {
+                    theme::BUTTON_HOVER
+                } else {
+                    theme::BUTTON_BACKGROUND
+                },
+                if !enabled {
+                    theme::DISABLED_TEXT
+                } else if spec.kind == ButtonKind::Destructive {
+                    theme::DANGER_BUTTON
+                } else {
+                    theme::PRIMARY_TEXT
+                },
+                Some(if hover {
+                    theme::BORDER_STRONG
+                } else {
+                    theme::BUTTON_BORDER
+                }),
+            ),
+            ButtonKind::Sidebar => (
+                if b.active.get() {
+                    theme::SIDEBAR_ITEM_ACTIVE
+                } else if hover || pushed {
+                    theme::SIDEBAR_ITEM_HOVER
+                } else {
+                    container
+                },
+                if b.active.get() {
+                    theme::SIDEBAR_ITEM_ACTIVE_TEXT
+                } else {
+                    theme::SIDEBAR_ITEM_TEXT
+                },
+                None,
+            ),
+        };
+        let bs = theme::BUTTON_BORDER_SIZE;
+        let radius = dpi::scale(theme::BUTTON_RADIUS, self.dpi.get());
+        buffered(hdc, area, |hdc| {
+            rounded_rect(hdc, area, radius, container, Some(fill_color), border);
             // Text layout: Client = client - Padding; Face = Client - border; Field = Face - 2.
             let pad = self.padding.get();
-            let field = client_rect.deflate(pad).deflate(Pad {
+            let field = area.deflate(pad).deflate(Pad {
                 l: bs + 2,
                 t: bs + 2,
                 r: bs + 2,
                 b: bs + 2,
             });
-            let mut max_bounds = field.deflate(Pad {
+            let max_bounds = field.deflate(Pad {
                 l: TEXT_IMAGE_INSET,
                 t: TEXT_IMAGE_INSET,
                 r: TEXT_IMAGE_INSET,
                 b: TEXT_IMAGE_INSET,
             });
-            if is_default {
-                max_bounds = max_bounds.deflate(Pad {
-                    l: -1,
-                    t: -1,
-                    r: -1,
-                    b: -1,
-                });
-            }
             let mut flags = align_flags(spec.align) | DT_WORDBREAK | DT_EDITCONTROL;
             if !show_accel {
                 flags |= DT_HIDEPREFIX;
@@ -1361,37 +1462,6 @@ impl CtlState {
             let size = measure_text(hdc, &spec.text, font, max_bounds.size(), flags);
             let text_bounds = align_in(size, max_bounds, spec.align);
             draw_text(hdc, &spec.text, font, text_bounds, text_color, flags);
-            if focused && show_focus {
-                let focus = field.deflate(Pad {
-                    l: 1,
-                    t: 1,
-                    r: 1,
-                    b: 1,
-                });
-                let focus = Rect {
-                    x: focus.x - pad.l,
-                    y: focus.y - pad.t,
-                    w: focus.w + pad.horizontal(),
-                    h: focus.h + pad.vertical(),
-                };
-                frame(hdc, focus, contrast_shadow);
-            }
-            let mut r = client_rect;
-            if is_default {
-                // ButtonBaseAdapter.DrawDefaultBorder: one extra ring at the client edge.
-                frame(hdc, r, spec.border);
-                r = r.deflate(Pad {
-                    l: 1,
-                    t: 1,
-                    r: 1,
-                    b: 1,
-                });
-            }
-            if bs == 1 {
-                frame(hdc, r, spec.border);
-            } else {
-                border_with_size(hdc, r, spec.border, bs);
-            }
         });
     }
 
@@ -1433,6 +1503,45 @@ impl CtlState {
             fill(hdc, area, back);
             let flags = self.label_flags(&spec, hdc, face.size());
             draw_text(hdc, &spec.text, self.font.get(), face, spec.fore, flags);
+        });
+    }
+
+    // -- progress --------------------------------------------------------------------------
+
+    /// `HOVER` track and `TEXT` fill (the themed bar ignores colors, the classic one adds a
+    /// sunken edge). The native control still owns the value and the marquee timer; a marquee
+    /// shows a third-width block that moves with the clock.
+    fn paint_progress(&self) {
+        let paint = Paint::begin(self.hwnd);
+        let area = client(self.hwnd);
+        let pos = send(self.hwnd, PBM_GETPOS, 0, 0).0.clamp(0, 100) as i32;
+        // SAFETY: Reads the style of our own control.
+        let marquee =
+            unsafe { GetWindowLongPtrW(self.hwnd, GWL_STYLE) } & PBS_MARQUEE as isize != 0;
+        let bar = if marquee {
+            let block = area.w / 3;
+            // SAFETY: Plain tick count query.
+            let tick = unsafe { GetTickCount() } as i32;
+            let travel = area.w + block;
+            let steps = (travel / theme::MARQUEE_STEP_PX).max(1);
+            let x = (tick / theme::MARQUEE_STEP_MS).rem_euclid(steps) * theme::MARQUEE_STEP_PX;
+            Rect {
+                x: x - block,
+                y: 0,
+                w: block,
+                h: area.h,
+            }
+        } else {
+            Rect {
+                x: 0,
+                y: 0,
+                w: area.w * pos / 100,
+                h: area.h,
+            }
+        };
+        buffered(paint.hdc(), area, |hdc| {
+            fill(hdc, area, theme::PROGRESS_TRACK);
+            fill(hdc, bar, theme::PROGRESS_FILL);
         });
     }
 
@@ -1688,7 +1797,7 @@ pub(crate) fn measure(ctl: &Ctl, font: HFONT, padding: Pad, min: Size, proposed:
         Ctl::Button(b) => {
             // ButtonFlatAdapter.PaintFlatLayout(up: false, check: true): border + 1, padding 1,
             // plus 2 for GrowBorderBy1PxWhenDefault.
-            let linear = (b.border_size + 1) * 2 + 2 + 2;
+            let linear = (theme::BUTTON_BORDER_SIZE + 1) * 2 + 2 + 2;
             let inset = TEXT_IMAGE_INSET * 2;
             // Prefix processing hides `&` with or without cues, so the width is the same.
             let flags = align_flags(b.align) | DT_EDITCONTROL | DT_HIDEPREFIX;
@@ -1786,17 +1895,6 @@ pub(crate) fn apply_dpi(hwnd: HWND, font: HFONT, padding: Pad, dpi: u32) {
     }
 }
 
-/// Marks a button as the form's default button (extra border ring) or not.
-pub(crate) fn set_default(hwnd: HWND, is_default: bool) {
-    if let Some(st) = state_of(hwnd)
-        && let Data::Button(b) = &st.data
-        && b.is_default.get() != is_default
-    {
-        b.is_default.set(is_default);
-        invalidate(hwnd);
-    }
-}
-
 /// Whether `hwnd` is a kit button.
 pub(crate) fn is_button(hwnd: HWND) -> bool {
     state_of(hwnd).is_some_and(|s| matches!(s.data, Data::Button(_)))
@@ -1830,51 +1928,57 @@ pub fn text(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf)
 }
 
-/// `Control.Enabled = value`, with the C# `EnabledChanged` color swap of `Buttons.ApplyStyle`.
+/// `Control.Enabled = value`. Focus is never lost: disabling the focused control first moves
+/// the focus to the next tab stop, like WinForms `SelectNextIfFocused` (DESIGN.md 8.2).
 pub fn set_enabled(hwnd: HWND, enabled: bool) {
-    // SAFETY: Enables or disables a child window of this thread.
-    let was_disabled = unsafe { EnableWindow(hwnd, enabled) }.as_bool();
-    let was_enabled = !was_disabled;
-    if was_enabled == enabled {
-        return;
+    // SAFETY: Focus, tab-order, and enable-state calls on windows of this thread.
+    unsafe {
+        if !enabled && GetFocus() == hwnd {
+            let root = GetAncestor(hwnd, GA_ROOT);
+            if let Ok(next) = GetNextDlgTabItem(root, Some(hwnd), false)
+                && next != hwnd
+            {
+                let _ = SetFocus(Some(next));
+            }
+        }
+        let _ = EnableWindow(hwnd, enabled);
     }
     if let Some(st) = state_of(hwnd)
         && let Data::Button(b) = &st.data
+        && !enabled
     {
-        if !enabled {
-            b.hover.set(false);
-        }
-        if let Hover::Shared { normal, .. } = b.spec.borrow().hover {
-            if enabled {
-                b.back.set(normal);
-                b.fore.set(theme::PRIMARY_TEXT);
-            } else {
-                b.back.set(theme::DISABLED_BUTTON);
-                b.fore.set(theme::DISABLED_TEXT);
-            }
-        }
+        b.hover.set(false);
     }
     invalidate(hwnd);
 }
 
-/// Sets a button's current back, text, and border colors (for example the active sidebar item).
-pub fn set_button_colors(hwnd: HWND, back: Color, fore: Color, border: Color) {
+/// Marks a sidebar button as the active item (the shown section) or not.
+pub fn set_active(hwnd: HWND, active: bool) {
     if let Some(st) = state_of(hwnd)
         && let Data::Button(b) = &st.data
+        && b.active.get() != active
     {
-        b.back.set(back);
-        b.fore.set(fore);
-        b.spec.borrow_mut().border = border;
+        b.active.set(active);
         invalidate(hwnd);
     }
 }
 
-/// Returns a button's current `BackColor`.
-pub fn button_back(hwnd: HWND) -> Option<Color> {
-    state_of(hwnd).and_then(|s| match &s.data {
-        Data::Button(b) => Some(b.back.get()),
-        _ => None,
+/// Whether a sidebar button is the active item.
+pub fn is_active(hwnd: HWND) -> bool {
+    state_of(hwnd).is_some_and(|s| match &s.data {
+        Data::Button(b) => b.active.get(),
+        _ => false,
     })
+}
+
+/// Sets a label's text color (the status map of `DESIGN.md` section 3).
+pub fn set_label_color(hwnd: HWND, color: Color) {
+    if let Some(st) = state_of(hwnd)
+        && let Data::Label(l) = &st.data
+    {
+        l.borrow_mut().fore = color;
+        invalidate(hwnd);
+    }
 }
 
 /// Replaces the whole text of an edit.

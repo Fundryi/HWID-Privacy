@@ -1,6 +1,6 @@
 //! Owned by WP-14: device removal confirmation dialog (`DeviceRemovalConfirmationForm.cs`).
 
-use super::controls::{Align, ButtonSpec, Ctl, Hover, LabelSpec};
+use super::controls::{Align, ButtonSpec, Ctl, LabelSpec};
 use super::layout::{Anchor, FlowDir, Node, Size, Track};
 use super::msgbox::{self, Buttons, Icon};
 use super::theme;
@@ -106,7 +106,7 @@ fn tree(count: usize) -> Vec<Node> {
                     MESSAGE,
                     &format!("Remove {count} ghost devices?"),
                     theme::CONFIRM_MESSAGE_FONT,
-                    theme::WHITE,
+                    theme::CONFIRM_MESSAGE_TEXT,
                     theme::CONFIRM_MESSAGE_MARGIN,
                 )
                 .cell(0, 0),
@@ -114,7 +114,7 @@ fn tree(count: usize) -> Vec<Node> {
                     WARNING,
                     "Warning: This action cannot be undone",
                     theme::CONFIRM_WARNING_FONT,
-                    theme::ORANGE,
+                    theme::CONFIRM_WARNING_TEXT,
                     theme::CONFIRM_WARNING_MARGIN,
                 )
                 .cell(0, 1),
@@ -139,50 +139,23 @@ fn tree(count: usize) -> Vec<Node> {
     ]
 }
 
-/// `CreateActionButton` (`DeviceRemovalConfirmationForm.cs:139-166`); not the shared style.
+/// `CreateActionButton` (`DeviceRemovalConfirmationForm.cs:139-166`): the C# primary flag picks
+/// the kit's primary kind (`Yes (Autoclose)` is the accept button), the others are outline.
 fn button(id: u16, text: &str, primary: bool) -> Node {
-    let (back, border, hover, font, border_size, min_w) = if primary {
-        (
-            theme::CONFIRM_PRIMARY,
-            theme::CONFIRM_PRIMARY_BORDER,
-            theme::CONFIRM_PRIMARY_HOVER,
-            theme::CONFIRM_PRIMARY_FONT,
-            theme::CONFIRM_PRIMARY_BORDER_SIZE,
-            theme::CONFIRM_PRIMARY_MIN_WIDTH,
-        )
+    let (spec, min_w) = if primary {
+        (ButtonSpec::primary(text), theme::CONFIRM_PRIMARY_MIN_WIDTH)
     } else {
         (
-            theme::CONFIRM_SECONDARY,
-            theme::CONFIRM_SECONDARY_BORDER,
-            theme::CONFIRM_SECONDARY_HOVER,
-            theme::CONFIRM_SECONDARY_FONT,
-            theme::CONFIRM_SECONDARY_BORDER_SIZE,
+            ButtonSpec::outline(text),
             theme::CONFIRM_SECONDARY_MIN_WIDTH,
         )
     };
-    Node::leaf(
-        id,
-        Ctl::Button(ButtonSpec {
-            text: text.to_owned(),
-            font,
-            back,
-            fore: theme::WHITE,
-            border,
-            border_size,
-            over_back: None,
-            down_back: None,
-            align: Align::MiddleCenter,
-            hover: Hover::EnterLeave {
-                normal: back,
-                hover,
-            },
-        }),
-    )
-    .auto_size()
-    .min(Size {
-        w: min_w,
-        h: theme::CONFIRM_BUTTON_HEIGHT,
-    })
-    .padding(theme::CONFIRM_BUTTON_PADDING)
-    .margin(theme::CONFIRM_BUTTON_MARGIN)
+    Node::leaf(id, Ctl::Button(spec))
+        .auto_size()
+        .min(Size {
+            w: min_w,
+            h: theme::CONFIRM_BUTTON_HEIGHT,
+        })
+        .padding(theme::CONFIRM_BUTTON_PADDING)
+        .margin(theme::CONFIRM_BUTTON_MARGIN)
 }

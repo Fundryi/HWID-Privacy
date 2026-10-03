@@ -1,7 +1,9 @@
-//! Owned by WP-10a: every color, font, size, padding and margin of the C# forms (IMPROVEMENTS A8).
+//! Owned by WP-10a (values by WP-18): every color, font, size, padding and margin of the forms.
 //!
-//! Names follow `UI/Components/ThemeColors.cs` and the C# form constants. Sizes are logical
-//! pixels at 96 DPI; `dpi::scale` converts them. Form code uses these names, never literals.
+//! Colors and fonts are the `DESIGN.md` tokens. The C# names from `UI/Components/ThemeColors.cs`
+//! and the form constants stay as names and point at the tokens, so the code still maps to the
+//! C# forms. Sizes are logical pixels at 96 DPI; `dpi::scale` converts them. Form code uses these
+//! names, never literals.
 
 use super::layout::{Pad, Point, Size};
 use windows::Win32::Foundation::COLORREF;
@@ -23,32 +25,34 @@ impl Color {
         Self { r, g, b }
     }
 
+    /// Builds a color from a `0xRRGGBB` value (the `DESIGN.md` notation).
+    pub const fn hex(v: u32) -> Self {
+        Self::rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
+    }
+
     /// Returns the GDI `COLORREF` (0x00BBGGRR).
     pub const fn colorref(self) -> COLORREF {
         COLORREF(self.r as u32 | (self.g as u32) << 8 | (self.b as u32) << 16)
     }
 }
 
-/// A WinForms `Font` constructor call: face, size in points, style.
+/// A GDI font request: face, size in points, weight (`DESIGN.md` section 4).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FontSpec {
-    /// Font family name passed to GDI as `lfFaceName`.
+    /// Font family name (`UI_FACE` or `DATA_FACE`); `dpi::Font` resolves the weight face.
     pub face: &'static str,
-    /// Size in points (WinForms `GraphicsUnit.Point`).
+    /// Size in points (`px * 72 / 96`, so the pixel size of the type scale lands exactly).
     pub points: f32,
-    /// `FontStyle.Bold`.
-    pub bold: bool,
-    /// `FontStyle.Italic`.
-    pub italic: bool,
+    /// `lfWeight`: 400, 500, or 600.
+    pub weight: i32,
 }
 
 impl FontSpec {
-    const fn new(face: &'static str, points: f32, bold: bool, italic: bool) -> Self {
+    const fn new(face: &'static str, points: f32, weight: i32) -> Self {
         Self {
             face,
             points,
-            bold,
-            italic,
+            weight,
         }
     }
 }
@@ -66,143 +70,222 @@ const fn size(w: i32, h: i32) -> Size {
 }
 
 // ---------------------------------------------------------------------------------------------
-// ThemeColors.cs (1:1, same order)
+// DESIGN.md section 3: color tokens
+// ---------------------------------------------------------------------------------------------
+
+/// Window background, sidebar, title bar.
+pub const BG: Color = Color::hex(0x09090B);
+/// Panels, text boxes, list boxes, outline button at rest.
+pub const CARD: Color = Color::hex(0x111114);
+/// Hover fill, selected sidebar item, progress track.
+pub const HOVER: Color = Color::hex(0x18181B);
+/// Every divider and outline.
+pub const BORDER: Color = Color::hex(0x27272A);
+/// Hovered outline, dialog outline, text selection.
+pub const BORDER_STRONG: Color = Color::hex(0x3F3F46);
+/// Primary text.
+pub const TEXT: Color = Color::hex(0xFAFAFA);
+/// Supporting text, inactive icons, focus ring.
+pub const SECONDARY: Color = Color::hex(0xA1A1AA);
+/// Captions, placeholders, disabled text.
+pub const FAINT: Color = Color::hex(0x71717A);
+/// Done, removed, cleared, up to date.
+pub const SUCCESS: Color = Color::hex(0x4ADE80);
+/// Skipped, cancelled, dry run, presence unclear.
+pub const WARNING: Color = Color::hex(0xFBBF24);
+/// Failed, error, destructive action text.
+pub const DANGER: Color = Color::hex(0xF87171);
+/// Running, loading, notices.
+pub const INFO: Color = Color::hex(0x60A5FA);
+/// Primary button hover (fixed one-off value).
+pub const PRIMARY_HOVER: Color = Color::hex(0xE4E4E7);
+/// Primary button pressed (fixed one-off value).
+pub const PRIMARY_PRESSED: Color = Color::hex(0xD4D4D8);
+/// Log and raw-report text well (fixed one-off value).
+pub const TEXT_WELL: Color = Color::hex(0x0C0C0E);
+
+// ---------------------------------------------------------------------------------------------
+// ThemeColors.cs (1:1, same order), pointed at the tokens
 // ---------------------------------------------------------------------------------------------
 
 /// `ThemeColors.MainBackground`.
-pub const MAIN_BACKGROUND: Color = Color::rgb(30, 30, 30);
+pub const MAIN_BACKGROUND: Color = BG;
 /// `ThemeColors.SecondaryBackground`.
-pub const SECONDARY_BACKGROUND: Color = Color::rgb(35, 35, 35);
-/// `ThemeColors.ContentBackground`.
-pub const CONTENT_BACKGROUND: Color = Color::rgb(45, 45, 45);
-/// `ThemeColors.SurfaceBackground`.
-pub const SURFACE_BACKGROUND: Color = Color::rgb(26, 26, 26);
+pub const SECONDARY_BACKGROUND: Color = CARD;
+/// `ThemeColors.ContentBackground` (section header panel).
+pub const CONTENT_BACKGROUND: Color = CARD;
+/// `ThemeColors.SurfaceBackground` (content area around the header and text).
+pub const SURFACE_BACKGROUND: Color = BG;
 /// `ThemeColors.BorderSubtle`.
-pub const BORDER_SUBTLE: Color = Color::rgb(58, 58, 62);
+pub const BORDER_SUBTLE: Color = BORDER;
 /// `ThemeColors.SidebarBackground`.
-pub const SIDEBAR_BACKGROUND: Color = Color::rgb(34, 34, 36);
-/// `ThemeColors.SidebarItemBackground`.
-pub const SIDEBAR_ITEM_BACKGROUND: Color = Color::rgb(46, 46, 50);
+pub const SIDEBAR_BACKGROUND: Color = BG;
+/// `ThemeColors.SidebarItemBackground` (a sidebar item has no fill at rest).
+pub const SIDEBAR_ITEM_BACKGROUND: Color = BG;
 /// `ThemeColors.SidebarItemHover`.
-pub const SIDEBAR_ITEM_HOVER: Color = Color::rgb(60, 60, 66);
+pub const SIDEBAR_ITEM_HOVER: Color = HOVER;
 /// `ThemeColors.SidebarItemActive`.
-pub const SIDEBAR_ITEM_ACTIVE: Color = Color::rgb(0, 120, 215);
+pub const SIDEBAR_ITEM_ACTIVE: Color = HOVER;
 /// `ThemeColors.SidebarItemText`.
-pub const SIDEBAR_ITEM_TEXT: Color = Color::rgb(210, 210, 210);
-/// `ThemeColors.SidebarItemActiveText` (`Color.White`).
-pub const SIDEBAR_ITEM_ACTIVE_TEXT: Color = WHITE;
+pub const SIDEBAR_ITEM_TEXT: Color = SECONDARY;
+/// `ThemeColors.SidebarItemActiveText`.
+pub const SIDEBAR_ITEM_ACTIVE_TEXT: Color = TEXT;
 /// `ThemeColors.SidebarHeaderText`.
-pub const SIDEBAR_HEADER_TEXT: Color = Color::rgb(235, 235, 235);
+pub const SIDEBAR_HEADER_TEXT: Color = TEXT;
 /// `ThemeColors.MutedText`.
-pub const MUTED_TEXT: Color = Color::rgb(165, 165, 170);
+pub const MUTED_TEXT: Color = FAINT;
 /// `ThemeColors.SuccessText`.
-pub const SUCCESS_TEXT: Color = Color::rgb(125, 205, 125);
-/// `ThemeColors.ButtonBackground`.
-pub const BUTTON_BACKGROUND: Color = Color::rgb(45, 45, 48);
+pub const SUCCESS_TEXT: Color = SUCCESS;
+/// `ThemeColors.ButtonBackground` (outline button at rest).
+pub const BUTTON_BACKGROUND: Color = CARD;
 /// `ThemeColors.ButtonHover`.
-pub const BUTTON_HOVER: Color = Color::rgb(62, 62, 66);
+pub const BUTTON_HOVER: Color = HOVER;
 /// `ThemeColors.ButtonBorder`.
-pub const BUTTON_BORDER: Color = Color::rgb(80, 80, 83);
-/// `ThemeColors.PrimaryButton`.
-pub const PRIMARY_BUTTON: Color = Color::rgb(0, 120, 215);
+pub const BUTTON_BORDER: Color = BORDER;
+/// `ThemeColors.PrimaryButton` (white fill).
+pub const PRIMARY_BUTTON: Color = TEXT;
 /// `ThemeColors.PrimaryButtonHover`.
-pub const PRIMARY_BUTTON_HOVER: Color = Color::rgb(0, 140, 230);
+pub const PRIMARY_BUTTON_HOVER: Color = PRIMARY_HOVER;
 /// `ThemeColors.PrimaryButtonPressed`.
-pub const PRIMARY_BUTTON_PRESSED: Color = Color::rgb(0, 102, 184);
-/// `ThemeColors.DisabledButton`.
-pub const DISABLED_BUTTON: Color = Color::rgb(74, 74, 76);
-/// `ThemeColors.DisabledText` (set as ForeColor; WinForms flat buttons ignore it when painting).
-pub const DISABLED_TEXT: Color = Color::rgb(160, 160, 160);
-/// `ThemeColors.DangerButton`.
-pub const DANGER_BUTTON: Color = Color::rgb(170, 55, 55);
-/// `ThemeColors.DangerButtonHover`.
-pub const DANGER_BUTTON_HOVER: Color = Color::rgb(190, 65, 65);
-/// `ThemeColors.PrimaryText` (`Color.White`).
-pub const PRIMARY_TEXT: Color = WHITE;
+pub const PRIMARY_BUTTON_PRESSED: Color = PRIMARY_PRESSED;
+/// `ThemeColors.DisabledButton` (disabled primary fill).
+pub const DISABLED_BUTTON: Color = BORDER;
+/// `ThemeColors.DisabledText`.
+pub const DISABLED_TEXT: Color = FAINT;
+/// `ThemeColors.DangerButton`: the destructive button is an outline button whose text is this.
+pub const DANGER_BUTTON: Color = DANGER;
+/// `ThemeColors.DangerButtonHover` (same hover fill as every outline button).
+pub const DANGER_BUTTON_HOVER: Color = HOVER;
+/// `ThemeColors.PrimaryText`.
+pub const PRIMARY_TEXT: Color = TEXT;
 /// `ThemeColors.SecondaryText`.
-pub const SECONDARY_TEXT: Color = Color::rgb(220, 220, 220);
-/// `ThemeColors.TextBoxBackground`.
-pub const TEXT_BOX_BACKGROUND: Color = Color::rgb(45, 45, 45);
+pub const SECONDARY_TEXT: Color = SECONDARY;
+/// `ThemeColors.TextBoxBackground` (hardware sections, whitelist list).
+pub const TEXT_BOX_BACKGROUND: Color = CARD;
 /// `ThemeColors.TextBoxText`.
-pub const TEXT_BOX_TEXT: Color = Color::rgb(220, 220, 220);
+pub const TEXT_BOX_TEXT: Color = TEXT;
 /// `ThemeColors.ButtonPanelBackground`.
-pub const BUTTON_PANEL_BACKGROUND: Color = Color::rgb(35, 35, 35);
+pub const BUTTON_PANEL_BACKGROUND: Color = BG;
 /// `ThemeColors.LoadingLabelBackground` (defined in C#, never applied).
-pub const LOADING_LABEL_BACKGROUND: Color = Color::rgb(45, 45, 45);
-/// `ThemeColors.LoadingLabelText`.
-pub const LOADING_LABEL_TEXT: Color = Color::rgb(220, 220, 220);
+pub const LOADING_LABEL_BACKGROUND: Color = CARD;
+/// `ThemeColors.LoadingLabelText` (status: loading).
+pub const LOADING_LABEL_TEXT: Color = INFO;
 
 // ---------------------------------------------------------------------------------------------
-// Named System.Drawing colors and literals used outside ThemeColors.cs
+// Colors used outside ThemeColors.cs
 // ---------------------------------------------------------------------------------------------
-
-/// `Color.White`.
-pub const WHITE: Color = Color::rgb(255, 255, 255);
-/// `Color.Orange` (confirm dialog warning text).
-pub const ORANGE: Color = Color::rgb(255, 165, 0);
 
 /// Confirm dialog back color (`DeviceRemovalConfirmationForm.cs:44`).
-pub const CONFIRM_BACKGROUND: Color = Color::rgb(45, 45, 48);
-/// Confirm dialog primary button back (`:147`).
-pub const CONFIRM_PRIMARY: Color = Color::rgb(0, 122, 204);
-/// Confirm dialog primary button border (`:156`).
-pub const CONFIRM_PRIMARY_BORDER: Color = Color::rgb(0, 150, 255);
-/// Confirm dialog primary button hover (`:162`).
-pub const CONFIRM_PRIMARY_HOVER: Color = Color::rgb(0, 140, 230);
-/// Confirm dialog secondary button back (`:147`).
-pub const CONFIRM_SECONDARY: Color = Color::rgb(60, 60, 63);
-/// Confirm dialog secondary button border (`:157`).
-pub const CONFIRM_SECONDARY_BORDER: Color = Color::rgb(80, 80, 83);
-/// Confirm dialog secondary button hover (`:162`).
-pub const CONFIRM_SECONDARY_HOVER: Color = Color::rgb(80, 80, 83);
-
+pub const CONFIRM_BACKGROUND: Color = BG;
+/// Confirm dialog message text (`Color.White`).
+pub const CONFIRM_MESSAGE_TEXT: Color = TEXT;
+/// Confirm dialog warning text (`Color.Orange`; status: warning).
+pub const CONFIRM_WARNING_TEXT: Color = WARNING;
 /// Old View window back color (`SectionedViewForm.cs:841`).
-pub const OLD_VIEW_BACKGROUND: Color = Color::rgb(32, 32, 32);
-/// Old View text box back color (`SectionedViewForm.cs:851`).
-pub const OLD_VIEW_TEXT_BACKGROUND: Color = Color::rgb(25, 25, 25);
+pub const OLD_VIEW_BACKGROUND: Color = BG;
+/// Old View text box back color (`SectionedViewForm.cs:851`; raw-report text well).
+pub const OLD_VIEW_TEXT_BACKGROUND: Color = TEXT_WELL;
 /// Old View text box text color (`SectionedViewForm.cs:852`).
-pub const OLD_VIEW_TEXT: Color = Color::rgb(220, 220, 220);
+pub const OLD_VIEW_TEXT: Color = TEXT;
+/// Device Cleaning and Log Cleaning output back color (log text well).
+pub const CLEANER_OUTPUT_BACKGROUND: Color = TEXT_WELL;
+/// Update window back color (`SystemColors.Control` in C#).
+pub const UPDATE_BACKGROUND: Color = BG;
+/// Update window label text (`SystemColors.ControlText` in C#).
+pub const UPDATE_TEXT: Color = TEXT;
+/// Whitelist list selected item back color (`SystemColors.Highlight` in C#).
+pub const LIST_SELECTED_BACKGROUND: Color = BORDER_STRONG;
+/// Whitelist list selected item text color (`SystemColors.HighlightText` in C#).
+pub const LIST_SELECTED_TEXT: Color = TEXT;
+/// Progress bar track.
+pub const PROGRESS_TRACK: Color = HOVER;
+/// Progress bar fill.
+pub const PROGRESS_FILL: Color = TEXT;
+/// Focus ring color.
+pub const FOCUS_RING: Color = SECONDARY;
+/// Marquee block advance per step (device pixels).
+pub const MARQUEE_STEP_PX: i32 = 4;
+/// Marquee step period: the progress control's `PBM_SETMARQUEE` timer.
+pub const MARQUEE_STEP_MS: i32 = 30;
 
 // ---------------------------------------------------------------------------------------------
-// Fonts
+// DESIGN.md section 5: shape
 // ---------------------------------------------------------------------------------------------
 
-/// WinForms `Control.DefaultFont` (Segoe UI 9) for controls without an explicit font.
-pub const DEFAULT_FONT: FontSpec = FontSpec::new("Segoe UI", 9.0, false, false);
-/// `Buttons.ButtonFont` (Segoe UI 9), applied by `Buttons.ApplyStyle`.
-pub const BUTTON_FONT: FontSpec = FontSpec::new("Segoe UI", 9.0, false, false);
-/// Main window section title label.
-pub const SECTION_TITLE_FONT: FontSpec = FontSpec::new("Segoe UI Semibold", 12.5, true, false);
+/// Button corner radius.
+pub const BUTTON_RADIUS: i32 = 6;
+/// Focus ring corner radius.
+pub const FOCUS_RING_RADIUS: i32 = 8;
+/// Focus ring distance outside the control.
+pub const FOCUS_RING_OFFSET: i32 = 3;
+/// Focus ring and border stroke width (device pixels, never scaled).
+pub const STROKE: i32 = 1;
+
+// ---------------------------------------------------------------------------------------------
+// DESIGN.md section 4: type
+// ---------------------------------------------------------------------------------------------
+
+/// UI font family (embedded Inter; `dpi::Font` falls back to Segoe UI).
+pub const UI_FACE: &str = "Inter";
+/// Data font family.
+pub const DATA_FACE: &str = "Consolas";
+/// Font weight 400.
+pub const REGULAR: i32 = 400;
+/// Font weight 500.
+pub const MEDIUM: i32 = 500;
+/// Font weight 600.
+pub const SEMIBOLD: i32 = 600;
+
+/// Points for a 96-DPI pixel size (11 px = 8.25 pt and so on).
+const fn px(pixels: f32) -> f32 {
+    pixels * 0.75
+}
+
+/// 11 px 600: small captions, section meta.
+pub const CAPTION_FONT: FontSpec = FontSpec::new(UI_FACE, px(11.0), SEMIBOLD);
+/// 12 px 400: secondary lines, sidebar subtitles, hints.
+pub const SMALL_FONT: FontSpec = FontSpec::new(UI_FACE, px(12.0), REGULAR);
+/// 13 px 400: body, inputs.
+pub const BODY_FONT: FontSpec = FontSpec::new(UI_FACE, px(13.0), REGULAR);
+/// 13 px 500: buttons.
+pub const BUTTON_FONT: FontSpec = FontSpec::new(UI_FACE, px(13.0), MEDIUM);
+/// 15 px 600: section titles.
+pub const TITLE_FONT: FontSpec = FontSpec::new(UI_FACE, px(15.0), SEMIBOLD);
+/// 18 px 600: window titles inside content.
+pub const HEADING_FONT: FontSpec = FontSpec::new(UI_FACE, px(18.0), SEMIBOLD);
+
+/// WinForms `Control.DefaultFont` for controls without an explicit font (body).
+pub const DEFAULT_FONT: FontSpec = BODY_FONT;
+/// Main window section title label (`Segoe UI Semibold` 12.5 in C#).
+pub const SECTION_TITLE_FONT: FontSpec = HEADING_FONT;
 /// Main window `Section {i} of {n}` label.
-pub const SECTION_META_FONT: FontSpec = FontSpec::new("Segoe UI", 9.0, false, false);
-/// Main window content text box.
-pub const CONTENT_FONT: FontSpec = FontSpec::new("Consolas", 10.0, false, false);
+pub const SECTION_META_FONT: FontSpec = CAPTION_FONT;
+/// Main window content text box (data).
+pub const CONTENT_FONT: FontSpec = FontSpec::new(DATA_FACE, 10.0, REGULAR);
 /// Main window loading overlay label.
-pub const LOADING_FONT: FontSpec = FontSpec::new("Segoe UI", 10.0, false, false);
-/// Sidebar `Hardware Sections` title.
-pub const SIDEBAR_TITLE_FONT: FontSpec = FontSpec::new("Segoe UI Semibold", 13.0, true, false);
+pub const LOADING_FONT: FontSpec = BODY_FONT;
+/// Sidebar `Hardware Sections` title (`Segoe UI Semibold` 13 in C#).
+pub const SIDEBAR_TITLE_FONT: FontSpec = TITLE_FONT;
 /// Sidebar `{n} sections` subtitle.
-pub const SIDEBAR_SUBTITLE_FONT: FontSpec = FontSpec::new("Segoe UI", 8.75, false, false);
-/// Sidebar section buttons.
-pub const SECTION_BUTTON_FONT: FontSpec = FontSpec::new("Segoe UI", 9.75, false, false);
-/// Device Cleaning and Log Cleaning output boxes.
-pub const CLEANER_OUTPUT_FONT: FontSpec = FontSpec::new("Consolas", 9.75, false, false);
+pub const SIDEBAR_SUBTITLE_FONT: FontSpec = SMALL_FONT;
+/// Sidebar section buttons (`Segoe UI` 9.75 = 13 px in C#).
+pub const SECTION_BUTTON_FONT: FontSpec = BODY_FONT;
+/// Device Cleaning and Log Cleaning output boxes (data).
+pub const CLEANER_OUTPUT_FONT: FontSpec = FontSpec::new(DATA_FACE, 9.75, REGULAR);
 /// Whitelist window header label.
-pub const WHITELIST_HEADER_FONT: FontSpec = FontSpec::new("Segoe UI", 10.0, false, false);
-/// Whitelist checked list box.
-pub const WHITELIST_LIST_FONT: FontSpec = FontSpec::new("Consolas", 9.75, false, false);
+pub const WHITELIST_HEADER_FONT: FontSpec = BODY_FONT;
+/// Whitelist checked list box (data).
+pub const WHITELIST_LIST_FONT: FontSpec = FontSpec::new(DATA_FACE, 9.75, REGULAR);
 /// Confirm dialog message label.
-pub const CONFIRM_MESSAGE_FONT: FontSpec = FontSpec::new("Segoe UI", 10.0, false, false);
-/// Confirm dialog warning label.
-pub const CONFIRM_WARNING_FONT: FontSpec = FontSpec::new("Segoe UI", 8.5, false, true);
-/// Confirm dialog `Yes (Autoclose)` button.
-pub const CONFIRM_PRIMARY_FONT: FontSpec = FontSpec::new("Segoe UI", 8.5, true, false);
-/// Confirm dialog `Yes` and `No` buttons.
-pub const CONFIRM_SECONDARY_FONT: FontSpec = FontSpec::new("Segoe UI", 8.5, false, false);
-/// Old View text box.
-pub const OLD_VIEW_FONT: FontSpec = FontSpec::new("Consolas", 9.0, false, false);
-/// Update window detail label.
-pub const UPDATE_DETAIL_FONT: FontSpec = FontSpec::new("Segoe UI", 8.0, false, false);
+pub const CONFIRM_MESSAGE_FONT: FontSpec = BODY_FONT;
+/// Confirm dialog warning label (`Segoe UI` 8.5 italic in C#; the type scale has no italic).
+pub const CONFIRM_WARNING_FONT: FontSpec = SMALL_FONT;
+/// Old View text box (data).
+pub const OLD_VIEW_FONT: FontSpec = FontSpec::new(DATA_FACE, 9.0, REGULAR);
+/// Update window progress label.
+pub const UPDATE_LABEL_FONT: FontSpec = BODY_FONT;
+/// Update window detail label (`Segoe UI` 8 in C#).
+pub const UPDATE_DETAIL_FONT: FontSpec = SMALL_FONT;
 
 // ---------------------------------------------------------------------------------------------
 // WinForms framework defaults (used when C# does not set a value)
@@ -241,7 +324,7 @@ pub const SCROLL_LINE: i32 = 5;
 
 /// `Buttons.ApplyStyle` padding (overrides every constructor padding).
 pub const SHARED_BUTTON_PADDING: Pad = pad(10, 5, 10, 5);
-/// `FlatAppearance.BorderSize = 1`.
+/// `FlatAppearance.BorderSize = 1` (kept in the preferred-size math of every button).
 pub const BUTTON_BORDER_SIZE: i32 = 1;
 
 // ---------------------------------------------------------------------------------------------
@@ -367,10 +450,6 @@ pub const CONFIRM_BUTTON_HEIGHT: i32 = 34;
 pub const CONFIRM_PRIMARY_MIN_WIDTH: i32 = 150;
 /// `Yes` and `No` minimum width.
 pub const CONFIRM_SECONDARY_MIN_WIDTH: i32 = 80;
-/// Primary button border size.
-pub const CONFIRM_PRIMARY_BORDER_SIZE: i32 = 2;
-/// Secondary button border size.
-pub const CONFIRM_SECONDARY_BORDER_SIZE: i32 = 1;
 /// Label wrap width = max(this, client width - `CONFIRM_LABEL_WRAP_INSET`).
 pub const CONFIRM_LABEL_WRAP_MIN: i32 = 220;
 /// See `CONFIRM_LABEL_WRAP_MIN`.

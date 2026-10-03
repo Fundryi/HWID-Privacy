@@ -50,23 +50,24 @@ use windows::{
                 BeginDeferWindowPos, CREATESTRUCTW, CS_DBLCLKS, CreateWindowExW, DefWindowProcW,
                 DeferWindowPos, DestroyWindow, DispatchMessageW, EndDeferWindowPos, GA_ROOT,
                 GCW_ATOM, GWLP_USERDATA, GetAncestor, GetClassLongPtrW, GetClientRect,
-                GetCursorPos, GetMessageW, GetNextDlgTabItem, GetWindowLongPtrW, GetWindowRect,
-                GetWindowThreadProcessId, HICON, IDC_ARROW, IsDialogMessageW, IsWindow, KillTimer,
-                LoadCursorW, LoadIconW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MINMAXINFO, MSG,
+                GetCursorPos, GetMessageW, GetNextDlgTabItem, GetSystemMetrics, GetWindowLongPtrW,
+                GetWindowRect, GetWindowThreadProcessId, HICON, IDC_ARROW, IMAGE_ICON,
+                IsDialogMessageW, IsIconic, IsWindow, KillTimer, LR_DEFAULTCOLOR, LoadCursorW,
+                LoadIconW, LoadImageW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MINMAXINFO, MSG,
                 MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassExW,
                 RegisterWindowMessageW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
-                SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL, SIZE_MINIMIZED, SM_CXVSCROLL,
-                SW_SHOWMAXIMIZED, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-                SWP_NOSIZE, SWP_NOZORDER, SetTimer, SetWindowLongPtrW, SetWindowPos,
-                SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE,
-                WINDOW_STYLE, WM_ACTIVATE, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT,
-                WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM,
-                WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_MOUSEWHEEL, WM_NCCREATE,
-                WM_NCDESTROY, WM_NULL, WM_PAINT, WM_SETFOCUS, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER,
-                WM_VKEYTOITEM, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-                WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
-                WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME,
-                WS_VISIBLE, WS_VSCROLL,
+                SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL, SIZE_MINIMIZED, SM_CXSMICON,
+                SM_CXVSCROLL, SM_CYSMICON, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, SWP_NOACTIVATE,
+                SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetTimer,
+                SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage,
+                WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_CLOSE, WM_COMMAND,
+                WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED,
+                WM_DRAWITEM, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_MOUSEWHEEL,
+                WM_NCCREATE, WM_NCDESTROY, WM_NULL, WM_PAINT, WM_SETFOCUS, WM_SIZE, WM_SYSKEYDOWN,
+                WM_TIMER, WM_VKEYTOITEM, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+                WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT,
+                WS_EX_DLGMODALFRAME, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
+                WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -285,16 +286,19 @@ struct FormState {
     rx: Receiver<(u64, Box<dyn Any + Send>)>,
     layout_count: Cell<u32>,
     in_dpi_change: Cell<bool>,
-    default_button: Cell<HWND>,
     last_focus: Cell<HWND>,
     destroyed: Cell<bool>,
     destroying: Cell<bool>,
     maximize: Cell<bool>,
+    /// Live timers (id, interval): killed while minimized, restarted on restore (DESIGN.md 8.6).
+    timers: RefCell<HashMap<usize, u32>>,
+    minimized: Cell<bool>,
 }
 
 type HandlerRc = Rc<dyn Fn(&Form, Event) -> bool>;
 
 struct PanelState {
+    back: Color,
     brush: controls::Brush,
 }
 
@@ -345,6 +349,20 @@ fn atoms() -> &'static Atoms {
             )
         }
         .unwrap_or(HICON::default());
+        // The small icon is loaded at the small-icon size, so the title bar and the taskbar
+        // get a sharp image instead of a scaled-down large one (DESIGN.md section 7).
+        // SAFETY: Same resource; the handle is a shared icon owned by the module.
+        let small = unsafe {
+            LoadImageW(
+                Some(instance.into()),
+                PCWSTR(std::ptr::without_provenance(1)),
+                IMAGE_ICON,
+                GetSystemMetrics(SM_CXSMICON),
+                GetSystemMetrics(SM_CYSMICON),
+                LR_DEFAULTCOLOR,
+            )
+        }
+        .map_or(icon, |h| HICON(h.0));
         // SAFETY: IDC_ARROW is a shared system cursor.
         let cursor = unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default();
         let form = WNDCLASSEXW {
@@ -352,6 +370,7 @@ fn atoms() -> &'static Atoms {
             lpfnWndProc: Some(form_proc),
             hInstance: instance.into(),
             hIcon: icon,
+            hIconSm: small,
             hCursor: cursor,
             lpszClassName: form_class(),
             ..Default::default()
@@ -439,8 +458,15 @@ fn fill_client(hwnd: HWND, hdc: HDC, brush: &controls::Brush) {
     }
 }
 
-fn validate_paint(hwnd: HWND) {
-    let _paint = controls::Paint::begin(hwnd);
+/// Validates a container's update region and paints the focus ring of its focused button
+/// (nothing is painted while the window is minimized, DESIGN.md 8.6).
+fn paint_container(hwnd: HWND, back: Color) {
+    let paint = controls::Paint::begin(hwnd);
+    // SAFETY: Read-only state query of the top-level window.
+    if unsafe { IsIconic(root_of(hwnd)) }.as_bool() {
+        return;
+    }
+    controls::paint_focus_ring(hwnd, paint.hdc(), back);
 }
 
 impl FormState {
@@ -607,11 +633,36 @@ impl FormState {
                 SetScrollInfo(h, SB_VERT, &si, true);
             }
         }
-        for (_, child, new, old) in &placements {
+        for (parent, child, new, old) in &placements {
             if new.w != old.w || new.h != old.h {
                 // SAFETY: Repaint request for a child of this form.
                 unsafe {
                     let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(*child), None, true);
+                }
+            }
+            if new != old
+                && let Some(ring) = controls::focused_ring(*child)
+            {
+                // The ring sits outside the child, so a move leaves it behind: repaint the
+                // parent around the old and the new place.
+                let moved = RECT {
+                    left: ring.left + old.x - new.x,
+                    top: ring.top + old.y - new.y,
+                    right: ring.right + old.x - new.x,
+                    bottom: ring.bottom + old.y - new.y,
+                };
+                // SAFETY: Invalidates rectangles of a live parent window of this form.
+                unsafe {
+                    let _ = windows::Win32::Graphics::Gdi::InvalidateRect(
+                        Some(*parent),
+                        Some(&moved),
+                        true,
+                    );
+                    let _ = windows::Win32::Graphics::Gdi::InvalidateRect(
+                        Some(*parent),
+                        Some(&ring),
+                        true,
+                    );
                 }
             }
         }
@@ -713,25 +764,24 @@ impl FormState {
 
     fn focus_changed(&self, hwnd: HWND) {
         self.last_focus.set(hwnd);
-        let accept = self
-            .spec
-            .accept
-            .and_then(|id| self.hwnd_of(id))
-            .unwrap_or_default();
-        let new_default = if controls::is_button(hwnd) {
-            hwnd
-        } else {
-            accept
-        };
-        let old = self.default_button.get();
-        if old != new_default {
-            if !old.is_invalid() {
-                controls::set_default(old, false);
+    }
+
+    /// `WM_SIZE`: timers stop while minimized and restart on restore (DESIGN.md 8.6).
+    fn minimized_changed(&self, minimized: bool) {
+        if self.minimized.replace(minimized) == minimized {
+            return;
+        }
+        let timers: Vec<(usize, u32)> =
+            self.timers.borrow().iter().map(|(i, m)| (*i, *m)).collect();
+        for (id, ms) in timers {
+            // SAFETY: Window timers on our own window, no callback.
+            unsafe {
+                if minimized {
+                    let _ = KillTimer(Some(self.hwnd.get()), id);
+                } else {
+                    SetTimer(Some(self.hwnd.get()), id, ms, None);
+                }
             }
-            if !new_default.is_invalid() {
-                controls::set_default(new_default, true);
-            }
-            self.default_button.set(new_default);
         }
     }
 
@@ -852,6 +902,7 @@ fn assign_ids(node: &mut Node, next: &mut u16) {
 
 fn create_panel(parent: HWND, node: &Node, back: Color) -> win::Result<HWND> {
     let state = Rc::new(PanelState {
+        back,
         brush: controls::Brush::new(back),
     });
     let vis = if node.visible {
@@ -935,7 +986,8 @@ fn panel_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option
             Some(LRESULT(1))
         }
         WM_PAINT => {
-            validate_paint(hwnd);
+            let state: Rc<PanelState> = user_rc(hwnd, atoms().panel)?;
+            paint_container(hwnd, state.back);
             Some(LRESULT(0))
         }
         WM_VSCROLL => {
@@ -1039,11 +1091,13 @@ fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             Some(LRESULT(1))
         }
         WM_PAINT => {
-            validate_paint(hwnd);
+            paint_container(hwnd, state.spec.back);
             Some(LRESULT(0))
         }
         WM_SIZE => {
-            if wparam.0 as u32 == SIZE_MINIMIZED {
+            let minimized = wparam.0 as u32 == SIZE_MINIMIZED;
+            state.minimized_changed(minimized);
+            if minimized {
                 return Some(LRESULT(0));
             }
             if state.in_dpi_change.get() || state.tree.try_borrow().is_err() {
@@ -1222,11 +1276,12 @@ impl Form {
             rx,
             layout_count: Cell::new(0),
             in_dpi_change: Cell::new(false),
-            default_button: Cell::new(HWND::default()),
             last_focus: Cell::new(HWND::default()),
             destroyed: Cell::new(false),
             destroying: Cell::new(false),
             maximize: Cell::new(false),
+            timers: RefCell::new(HashMap::new()),
+            minimized: Cell::new(false),
         });
         let work = work_area(owner, spec.start);
         let title = to_wide(&spec.title);
@@ -1267,10 +1322,6 @@ impl Form {
         if let Err(e) = built {
             state.destroy();
             return Err(e);
-        }
-        if let Some(accept) = spec.accept.and_then(|id| state.hwnd_of(id)) {
-            controls::set_default(accept, true);
-            state.default_button.set(accept);
         }
         let outer = match spec.size {
             WindowSize::Client(s) => {
@@ -1515,14 +1566,19 @@ impl Form {
         self.with_control(id, |h| controls::progress_marquee(h, on));
     }
 
-    /// Sets a button's back, text, and border colors.
-    pub fn set_button_colors(&self, id: u16, back: Color, fore: Color, border: Color) {
-        self.with_control(id, |h| controls::set_button_colors(h, back, fore, border));
+    /// Marks a sidebar button as the active item or not.
+    pub fn set_active(&self, id: u16, active: bool) {
+        self.with_control(id, |h| controls::set_active(h, active));
     }
 
-    /// A button's current back color.
-    pub fn button_back(&self, id: u16) -> Option<Color> {
-        self.control(id).and_then(controls::button_back)
+    /// Whether a sidebar button is the active item.
+    pub fn is_active(&self, id: u16) -> bool {
+        self.control(id).is_some_and(controls::is_active)
+    }
+
+    /// Sets a label's text color (status map).
+    pub fn set_label_color(&self, id: u16, color: Color) {
+        self.with_control(id, |h| controls::set_label_color(h, color));
     }
 
     /// Sets the window title.
@@ -1602,11 +1658,16 @@ impl Form {
         self.state().map_or(0, |s| s.layout_count.get())
     }
 
-    /// Starts or restarts timer `id` (`Event::Timer(id)` every `ms`).
+    /// Starts or restarts timer `id` (`Event::Timer(id)` every `ms`); while the window is
+    /// minimized it is only recorded and starts on restore.
     pub fn set_timer(&self, id: usize, ms: u32) {
-        let Some(_state) = self.state() else {
+        let Some(state) = self.state() else {
             return;
         };
+        state.timers.borrow_mut().insert(id, ms);
+        if state.minimized.get() {
+            return;
+        }
         // SAFETY: Window timer on our own window, no callback.
         unsafe {
             SetTimer(Some(self.hwnd), id, ms, None);
@@ -1615,9 +1676,10 @@ impl Form {
 
     /// Stops timer `id`.
     pub fn kill_timer(&self, id: usize) {
-        let Some(_state) = self.state() else {
+        let Some(state) = self.state() else {
             return;
         };
+        state.timers.borrow_mut().remove(&id);
         // SAFETY: Window timer on our own window.
         unsafe {
             let _ = KillTimer(Some(self.hwnd), id);
@@ -1852,7 +1914,9 @@ fn dark_api() -> &'static DarkApi {
     })
 }
 
-/// Dark title bar (`DWMWA_USE_IMMERSIVE_DARK_MODE`: 20, or 19 before build 18985).
+/// Dark title bar (`DWMWA_USE_IMMERSIVE_DARK_MODE`: 20, or 19 before build 18985) and, on
+/// Windows 11, the token colors for the caption (35), border (34), and caption text (36).
+/// Failures are recorded, never fatal: the window then keeps the system frame colors.
 pub fn dark_title_bar(hwnd: HWND) {
     let build = os_build();
     if build < 17763 {
@@ -1869,8 +1933,34 @@ pub fn dark_title_bar(hwnd: HWND) {
             std::mem::size_of::<BOOL>() as u32,
         )
     };
-    // Dark mode is optional polish; unsupported attributes retain a light title bar.
-    let _ = r;
+    if let Err(error) = r {
+        win::record(win::Error::from_win(
+            "DwmSetWindowAttribute dark mode",
+            error,
+        ));
+    }
+    if build < 22000 {
+        return;
+    }
+    for (attr, name, color) in [
+        (35, "DwmSetWindowAttribute caption color", theme::BG),
+        (34, "DwmSetWindowAttribute border color", theme::BORDER),
+        (36, "DwmSetWindowAttribute caption text color", theme::TEXT),
+    ] {
+        let value = color.colorref();
+        // SAFETY: `value` is a 4-byte COLORREF that lives through the call.
+        let r = unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWINDOWATTRIBUTE(attr),
+                (&value as *const windows::Win32::Foundation::COLORREF).cast(),
+                std::mem::size_of::<windows::Win32::Foundation::COLORREF>() as u32,
+            )
+        };
+        if let Err(error) = r {
+            win::record(win::Error::from_win(name, error));
+        }
+    }
 }
 
 /// Dark scroll bars on a scrollable control (build 17763 or later; otherwise unchanged).

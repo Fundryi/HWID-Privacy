@@ -4,7 +4,7 @@
 //! loading overlay shown; one worker runs all providers; the sections fill only when all are done
 //! (OPT-4). Each load has an id, so only the newest load's result is applied (F26, AD-41).
 
-use super::controls::{Align, ButtonSpec, Ctl, EditBorder, EditSpec, Hover, LabelSpec};
+use super::controls::{ButtonSpec, Ctl, EditBorder, EditSpec, LabelSpec};
 use super::layout::{Anchor, FlowDir, Kind, Node, Point, Size, Track};
 use super::msgbox::{self, Buttons, Icon};
 use super::window::{self, Event, Form, FormSpec, StartPosition, WindowSize};
@@ -16,8 +16,7 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetActiveWindow, GetFocus, SetFocus};
-use windows::Win32::UI::WindowsAndMessaging::{GetNextDlgTabItem, SM_CXVSCROLL};
+use windows::Win32::UI::WindowsAndMessaging::SM_CXVSCROLL;
 
 const MAIN_TABLE: u16 = 1;
 const SIDEBAR: u16 = 2;
@@ -178,23 +177,10 @@ fn on_click(form: &Form, state: &State, id: u16) {
 }
 
 fn set_button_text(form: &Form, id: u16, enabled: bool, text: &str) {
-    let button = form.control(id).unwrap_or_default();
-    // SAFETY: Reads this thread's focus window.
-    let focused = !button.is_invalid() && unsafe { GetFocus() } == button;
+    // The kit moves the focus off a disabled control and relayouts AutoSize buttons on a text
+    // change (DESIGN.md 8.2).
     form.set_enabled(id, enabled);
-    if focused && !enabled {
-        // C# parity: Control.Enabled = false moves the focus to the form's next tab stop
-        // (`SelectNextIfFocused`, wrapping); a disabled window keeps none.
-        // SAFETY: Tab-order query and focus change among this thread's windows.
-        unsafe {
-            if let Ok(next) = GetNextDlgTabItem(form.hwnd(), Some(button), false) {
-                let _ = SetFocus(Some(next));
-            }
-        }
-    }
     form.set_text(id, text);
-    // AutoSize footer buttons follow their text.
-    form.relayout();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -302,11 +288,9 @@ fn show_pending_update_error() {
     );
 }
 
-/// C# `MessageBox.Show` without an owner uses the active window. Never pass the main form while
-/// a modal child disabled it: the box would enable it again when it closes.
+/// C# `MessageBox.Show` without an owner uses the active window (`msgbox::active_window`).
 fn active_window() -> HWND {
-    // SAFETY: Reads this thread's active window; no pointers.
-    unsafe { GetActiveWindow() }
+    msgbox::active_window()
 }
 
 fn set_loading(form: &Form, show: bool) {
@@ -359,19 +343,8 @@ fn show_section(form: &Form, state: &State, index: usize) {
 fn highlight(form: &Form, state: &State, index: usize) {
     // C# parity: SectionedViewForm.cs:461-475.
     for i in 0..hw::PROVIDERS.len() {
-        form.set_button_colors(
-            section_id(i),
-            theme::SIDEBAR_ITEM_BACKGROUND,
-            theme::SIDEBAR_ITEM_TEXT,
-            theme::BORDER_SUBTLE,
-        );
+        form.set_active(section_id(i), i == index);
     }
-    form.set_button_colors(
-        section_id(index),
-        theme::SIDEBAR_ITEM_ACTIVE,
-        theme::SIDEBAR_ITEM_ACTIVE_TEXT,
-        theme::PRIMARY_BUTTON_HOVER,
-    );
     state.active.set(index);
 }
 
@@ -531,18 +504,7 @@ fn sidebar() -> Node {
         .margin(theme::SIDEBAR_SUBTITLE_MARGIN),
     ];
     items.extend(hw::PROVIDERS.iter().enumerate().map(|(i, p)| {
-        let spec = ButtonSpec {
-            text: format!("{} {}", section_icon(p.title), p.title),
-            font: theme::SECTION_BUTTON_FONT,
-            back: theme::SIDEBAR_ITEM_BACKGROUND,
-            fore: theme::SIDEBAR_ITEM_TEXT,
-            border: theme::BORDER_SUBTLE,
-            border_size: theme::BUTTON_BORDER_SIZE,
-            over_back: Some(theme::SIDEBAR_ITEM_HOVER),
-            down_back: Some(theme::SIDEBAR_ITEM_ACTIVE),
-            align: Align::MiddleLeft,
-            hover: Hover::None,
-        };
+        let spec = ButtonSpec::sidebar(&format!("{} {}", section_icon(p.title), p.title));
         Node::leaf(section_id(i), Ctl::Button(spec))
             .size(Size {
                 w: item_w,
@@ -624,10 +586,16 @@ fn content() -> Node {
 
 fn footer() -> Node {
     // C# parity: SectionedViewForm.cs:223-233, 304-321 (ApplyStyle sets the padding last).
+    // DESIGN.md 6: Refresh is the window's one primary button (the main action).
     let buttons = FOOTER_BUTTONS
         .iter()
         .map(|&(id, text)| {
-            Node::leaf(id, Ctl::Button(ButtonSpec::secondary(text)))
+            let spec = if id == REFRESH {
+                ButtonSpec::primary(text)
+            } else {
+                ButtonSpec::outline(text)
+            };
+            Node::leaf(id, Ctl::Button(spec))
                 .auto_size()
                 .min(theme::FOOTER_BUTTON_MIN)
                 .padding(theme::SHARED_BUTTON_PADDING)
@@ -690,7 +658,7 @@ mod live {
         DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SelectObject,
     };
     use windows::Win32::UI::Controls::EM_GETSEL;
-    use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetActiveWindow, GetFocus, IsWindowEnabled};
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, FindWindowExW, GetClassNameW, GetClientRect, GetDlgItem, GetWindowRect,
         GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow, PostMessageW,
@@ -995,6 +963,28 @@ mod live {
                         text_of(button),
                     ));
                     shot(h, "oldview");
+                    // A second DPI for the design check (WP-18): synthetic change to 96 or 144.
+                    let dpi = dpi::window_dpi(h);
+                    let other: u32 = if dpi == 96 { 144 } else { 96 };
+                    let scale = |v: i32| v * other as i32 / dpi as i32;
+                    let suggested = RECT {
+                        left: r.left,
+                        top: r.top,
+                        right: r.left + scale(r.right - r.left),
+                        bottom: r.top + scale(r.bottom - r.top),
+                    };
+                    // SAFETY: Synchronous message with a pointer to a live RECT; the UI thread
+                    // pumps while this helper thread waits.
+                    unsafe {
+                        SendMessageW(
+                            h,
+                            WM_DPICHANGED,
+                            Some(WPARAM((other | (other << 16)) as usize)),
+                            Some(LPARAM(&suggested as *const RECT as isize)),
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(400));
+                    shot(h, &format!("oldview-synthetic-{other}"));
                     // SAFETY: Value-only message to our own window.
                     unsafe {
                         let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
@@ -1107,14 +1097,8 @@ mod live {
         form.click(section_id(2));
         pump_for(200);
         shot(form.hwnd(), &format!("main-{dpi_now}-section3"));
-        assert_eq!(
-            form.button_back(section_id(2)),
-            Some(theme::SIDEBAR_ITEM_ACTIVE)
-        );
-        assert_eq!(
-            form.button_back(section_id(0)),
-            Some(theme::SIDEBAR_ITEM_BACKGROUND)
-        );
+        assert!(form.is_active(section_id(2)));
+        assert!(!form.is_active(section_id(0)));
 
         // Export through the real button; the box names the file.
         form.click(EXPORT);
@@ -1159,7 +1143,7 @@ mod live {
             loading(&form),
             form.text(SECTION_META),
             form.text(CONTENT),
-            form.button_back(section_id(0)) == Some(theme::SIDEBAR_ITEM_ACTIVE)
+            form.is_active(section_id(0))
         ));
         let took = pump_while(Duration::from_secs(150), || loading(&form));
         pump_for(3000);
