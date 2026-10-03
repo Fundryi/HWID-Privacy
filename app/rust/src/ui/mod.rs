@@ -9,6 +9,8 @@ pub mod layout;
 pub mod main_window;
 pub mod msgbox;
 pub mod raw_view;
+#[cfg(test)]
+mod spike;
 pub mod theme;
 pub mod update_progress;
 pub mod whitelist;
