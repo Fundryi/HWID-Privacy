@@ -90,3 +90,4 @@ site/.vitepress/cache/
 app/rust/target/
 app/rust/golden/*
 !app/rust/golden/README.md
+!app/rust/release.ps1
