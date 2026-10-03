@@ -198,9 +198,7 @@ impl Device<'_> {
             }
             match self.property_raw(property, required as usize) {
                 Ok(raw) => return Ok(raw),
-                Err(error)
-                    if error.code == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0).0 as u32 =>
-                {
+                Err(error) if error.code == ERROR_INSUFFICIENT_BUFFER.0 => {
                     // The property grew after the size query; retry with a fresh size.
                     continue;
                 }

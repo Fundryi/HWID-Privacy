@@ -1,14 +1,12 @@
-//! Owned by WP-13: download once, validate, then install the retained file.
+//! Owned by WP-13: download once, validate, then install the retained bytes.
 
 use crate::{
     clean, report,
     win::{self, hash, http, process},
 };
 use std::{
-    ffi::OsString,
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    os::windows::{ffi::OsStrExt, process::CommandExt},
+    fs,
+    os::windows::ffi::OsStrExt,
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -19,7 +17,6 @@ use std::{
 pub const UPDATE_URL: &str = "https://github.com/Fundryi/HWID-Privacy/raw/main/HWIDChecker.exe";
 /// A checked download whose private owner preserves its bytes and cleans up on decline.
 pub struct Downloaded {
-    pub path: PathBuf,
     pub size: u64,
     pub sha256: String,
     response: http::Download,
@@ -31,7 +28,7 @@ pub enum UpdateCheck {
     Available(Downloaded),
 }
 
-/// Downloads once and compares SHA-256, retaining the size-checked file when available.
+/// Downloads once and compares SHA-256, retaining the size-checked bytes when available.
 pub fn check() -> Result<UpdateCheck, String> {
     check_with_progress(&process::Cancel::new(), &mut |_, _| {})
 }
@@ -77,11 +74,7 @@ fn check_url(
     let remote =
         |e: win::Error| format!("Failed to get GitHub file SHA256 for HWIDChecker.exe: {e}");
     let response = http::download(url, cancel, progress).map_err(remote)?;
-    let sha256 = response
-        .temp
-        .file()
-        .and_then(hash::sha256_file)
-        .map_err(remote)?;
+    let sha256 = hash::sha256_bytes(&response.bytes).map_err(remote)?;
     // A local hash failure is returned instead of silently treating it as a mismatch.
     let local = hash::sha256(executable).map_err(text)?;
     // C# parity: Services/AutoUpdateService.cs:66-77 (hash equality, never version ordering).
@@ -89,7 +82,6 @@ fn check_url(
         return Ok(UpdateCheck::UpToDate);
     }
     Ok(UpdateCheck::Available(Downloaded {
-        path: response.temp.path().to_owned(),
         size: response.size,
         sha256,
         response,
@@ -112,20 +104,16 @@ pub fn install_and_restart(mut d: Downloaded) -> Result<(), String> {
 fn install(d: &mut Downloaded) -> win::Result<()> {
     let current =
         std::env::current_exe().map_err(|e| hash::io_error("Locate current executable", e))?;
-    if current != d.executable || d.path != d.response.temp.path() || d.size != d.response.size {
+    if current != d.executable || d.size != d.response.size {
         return Err(win::Error::msg(
             "Update install",
             "retained download metadata changed",
         ));
     }
     checked_path(&current)?;
-    checked_path(&d.path)?;
-    let file = d.response.temp.file()?;
-    let size = file
-        .metadata()
-        .map_err(|e| hash::io_error("Read update size", e))?
-        .len();
-    if size != d.size
+    let size = d.response.bytes.len() as u64;
+    if size > http::MAX_DOWNLOAD
+        || size != d.size
         || d.response
             .content_length
             .is_some_and(|expected| expected != size)
@@ -135,15 +123,28 @@ fn install(d: &mut Downloaded) -> win::Result<()> {
             "retained size differs from Content-Length or checked size",
         ));
     }
-    hash::validate_x64_pe(file)?;
-    if !report::eq_ignore_case(&hash::sha256_file(file)?, &d.sha256) {
+    if !report::eq_ignore_case(&hash::sha256_bytes(&d.response.bytes)?, &d.sha256) {
         return Err(win::Error::msg(
             "Update SHA256",
             "retained download hash changed",
         ));
     }
     const WHAT: &str = "install update and restart";
-    match clean::destructive(WHAT, || launch_installer(d)) {
+    match clean::destructive(WHAT, || {
+        // The locked snapshot lets the existing parser inspect exactly the in-memory
+        // bytes without changing hash.rs or introducing a second PE implementation.
+        http::validate_x64_pe(&d.response.bytes)?;
+        swap_and_restart(&current, &d.response.bytes, |path| {
+            let child = Command::new(path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| hash::io_error("Update restart", e))?;
+            drop(child); // The restarted application owns its lifetime.
+            Ok(())
+        })
+    }) {
         Some(result) => result?,
         // The guard's contract: the caller shows `[DRY RUN] {what}` (stderr is lost in the GUI).
         None => {
@@ -153,7 +154,7 @@ fn install(d: &mut Downloaded) -> win::Result<()> {
             ));
         }
     }
-    // C# parity: Services/AutoUpdateService.cs:272-273 (exit only after helper launch).
+    // C# parity: Services/AutoUpdateService.cs:272-273 (exit only after the new executable starts).
     std::process::exit(0)
 }
 
@@ -196,155 +197,238 @@ fn checked_path(path: &Path) -> win::Result<()> {
     Ok(())
 }
 
-fn appended(path: &Path, suffix: &str) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(suffix);
-    PathBuf::from(name)
-}
-
-fn pending_error_path(executable: &Path) -> win::Result<PathBuf> {
-    let bytes: Vec<u8> = executable
-        .as_os_str()
-        .encode_wide()
-        .flat_map(u16::to_le_bytes)
-        .collect();
-    Ok(std::env::temp_dir().join(format!(
-        "HWIDChecker_update_error_{}.txt",
-        hash::sha256_bytes(&bytes)?
-    )))
-}
-
-/// Reads and consumes a replacement failure for the startup UI's Update Error message box.
+/// Kept for the startup UI; in-process failures return to the current update dialog.
 pub fn take_pending_error() -> Result<Option<String>, String> {
-    caught("Read update error", || pending_error().map_err(text))
+    Ok(None)
 }
 
-fn pending_error() -> win::Result<Option<String>> {
-    let executable =
-        std::env::current_exe().map_err(|e| hash::io_error("Locate current executable", e))?;
-    let path = pending_error_path(&executable)?;
-    let file = match File::open(&path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(hash::io_error("Open update error", error)),
-    };
-    let mut message = String::new();
-    (&file)
-        .take(4096)
-        .read_to_string(&mut message)
-        .map_err(|e| hash::io_error("Read update error", e))?;
-    drop(file);
-    // An empty reserved marker is not a failed replacement; leave it for its helper.
-    if message.is_empty() {
-        return Ok(None);
-    }
-    fs::remove_file(&path).map_err(|e| hash::io_error("Delete update error", e))?;
-    Ok(Some(format!("Update failed: {}", message.trim_end())))
-}
-
-struct ErrorMarker {
-    path: PathBuf,
-    keep: bool,
-}
-impl Drop for ErrorMarker {
-    fn drop(&mut self) {
-        if !self.keep
-            && let Err(error) = fs::remove_file(&self.path)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            win::record(hash::io_error("Delete update error", error));
+fn swap_and_restart(
+    executable: &Path,
+    bytes: &[u8],
+    restart: impl FnOnce(&Path) -> win::Result<()>,
+) -> win::Result<()> {
+    let mut swap = http::ExecutableSwap::begin(executable)?;
+    let result = swap.write(bytes).and_then(|()| restart(executable));
+    if let Err(error) = result {
+        if let Err(rollback) = swap.rollback() {
+            let detail = format!("{error}; rollback failed: {rollback}");
+            win::record(rollback);
+            return Err(win::Error::msg("Update install", detail));
         }
+        return Err(error);
     }
-}
-
-fn launch_installer(d: &mut Downloaded) -> win::Result<()> {
-    let mut script = http::TempFile::create("bat")?;
-    let new = appended(&d.executable, ".new");
-    let lock = appended(&d.executable, ".update-lock");
-    let error = pending_error_path(&d.executable)?;
-    let cmd = process::system32("cmd.exe");
-    let ping = process::system32("ping.exe");
-    for path in [script.path(), &new, &lock, &error, &cmd, &ping] {
-        checked_path(path)?;
-    }
-    // Reserve this installation's failure marker; never overwrite an unread old failure.
-    drop(
-        OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&error)
-            .map_err(|e| hash::io_error("Reserve update error", e))?,
-    );
-    let mut marker = ErrorMarker {
-        path: error,
-        keep: false,
-    };
-    let mut file = script.file()?;
-    file.write_all(INSTALL_SCRIPT.as_bytes())
-        .map_err(|e| hash::io_error("Write update batch", e))?;
-    file.sync_all()
-        .map_err(|e| hash::io_error("Flush update batch", e))?;
-    // The batch is ASCII. UTF-16 environment values preserve Unicode paths without
-    // a console/code-page dependency; delayed expansion is off, so ! remains literal.
-    let mut argument = OsString::from("\"\"");
-    argument.push(script.path());
-    argument.push("\"\"");
-    let child = Command::new(cmd)
-        .args(["/d", "/s", "/c"])
-        .raw_arg(argument)
-        .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .env("HWID_U_SOURCE", &d.path)
-        .env("HWID_U_EXE", &d.executable)
-        .env("HWID_U_NEW", new)
-        .env("HWID_U_LOCK", lock)
-        .env("HWID_U_ERROR", &marker.path)
-        .env("HWID_U_SCRIPT", script.path())
-        .env("HWID_U_PING", ping)
-        .spawn()
-        .map_err(|e| hash::io_error("Start update batch", e))?;
-    // Child owns its OS handles; dropping them leaves the detached helper running.
-    drop(child);
-    script.keep();
-    marker.keep = true;
-    d.response.temp.keep();
+    swap.commit();
     Ok(())
 }
 
-// Each wait is a two-packet loopback ping (finite 1000 ms replies). timeout.exe
-// needs console input and is unsuitable under CREATE_NO_WINDOW. Move retries also
-// wait for the old executable's image lock to be released. The directory lock
-// serializes two installers sharing the prescribed <exe>.new staging filename.
-// C# parity: Services/AutoUpdateService.cs:253 (START's empty title and quoted exe).
-const INSTALL_SCRIPT: &str = concat!(
-    "@echo off\r\nsetlocal EnableExtensions DisableDelayedExpansion\r\n",
-    "set /a HWID_U_TRIES=0\r\n:lock\r\n",
-    "mkdir \"%HWID_U_LOCK%\" >nul 2>&1\r\nif not errorlevel 1 goto stage\r\n",
-    "set /a HWID_U_TRIES+=1\r\nif %HWID_U_TRIES% GEQ 30 goto lock_failed\r\n",
-    "\"%HWID_U_PING%\" -n 2 -w 1000 127.0.0.1 >nul 2>&1\r\ngoto lock\r\n",
-    ":stage\r\ncopy /B /Y \"%HWID_U_SOURCE%\" \"%HWID_U_NEW%\" >nul 2>&1\r\n",
-    "if errorlevel 1 goto stage_failed\r\nset /a HWID_U_TRIES=0\r\n:replace\r\n",
-    "move /Y \"%HWID_U_NEW%\" \"%HWID_U_EXE%\" >nul 2>&1\r\nif not errorlevel 1 goto installed\r\n",
-    "set /a HWID_U_TRIES+=1\r\nif %HWID_U_TRIES% GEQ 30 goto replace_failed\r\n",
-    "\"%HWID_U_PING%\" -n 2 -w 1000 127.0.0.1 >nul 2>&1\r\ngoto replace\r\n",
-    ":installed\r\ndel /Q \"%HWID_U_ERROR%\" >nul 2>&1\r\ngoto restart\r\n",
-    ":stage_failed\r\n>\"%HWID_U_ERROR%\" echo Update install failed: 0x00000000 could not copy the retained update to the staging file; the previous version was restarted.\r\ngoto failed\r\n",
-    ":replace_failed\r\n>\"%HWID_U_ERROR%\" echo Update install failed: 0x00000000 could not replace the executable after 30 attempts; the previous version was restarted.\r\n",
-    ":failed\r\ndel /Q \"%HWID_U_NEW%\" >nul 2>&1\r\n",
-    ":restart\r\nrmdir \"%HWID_U_LOCK%\" >nul 2>&1\r\n",
-    "start \"\" \"%HWID_U_EXE%\"\r\nif not errorlevel 1 goto cleanup\r\n",
-    ">\"%HWID_U_ERROR%\" echo Update restart failed: 0x00000000 could not start the executable; start HWID Checker manually to read this error.\r\ngoto cleanup\r\n",
-    ":lock_failed\r\n>\"%HWID_U_ERROR%\" echo Update install failed: 0x00000000 could not acquire the installation lock after 30 attempts; the previous version was restarted.\r\n",
-    "start \"\" \"%HWID_U_EXE%\"\r\n",
-    ":cleanup\r\ndel /Q \"%HWID_U_SOURCE%\" >nul 2>&1\r\n",
-    "del /Q \"%HWID_U_SCRIPT%\" >nul 2>&1 & exit /b\r\n",
-);
+/// Removes previous images at startup, recording every inspection or deletion failure.
+pub fn cleanup_old_executables() {
+    let result = caught("Update cleanup", || {
+        let executable = std::env::current_exe()
+            .map_err(|e| text(hash::io_error("Locate current executable", e)))?;
+        cleanup_old_siblings(&executable, |path| {
+            let what = format!("delete old update executable {}", path.display());
+            clean::destructive(&what, || http::delete_old_executable(path)).unwrap_or_else(|| {
+                Err(win::Error::msg(
+                    "Update cleanup",
+                    format!("[DRY RUN] {what}"),
+                ))
+            })
+        })
+        .map_err(text)
+    });
+    if let Err(error) = result {
+        win::record(win::Error::msg("Update cleanup", error));
+    }
+}
+
+fn cleanup_old_siblings(
+    executable: &Path,
+    mut delete: impl FnMut(&Path) -> win::Result<()>,
+) -> win::Result<()> {
+    let parent = executable
+        .parent()
+        .ok_or_else(|| win::Error::msg("Update cleanup", "missing executable parent"))?;
+    let mut prefix = executable
+        .file_name()
+        .ok_or_else(|| win::Error::msg("Update cleanup", "missing executable name"))?
+        .encode_wide()
+        .collect::<Vec<_>>();
+    prefix.extend(".old-".encode_utf16());
+    let siblings = fs::read_dir(parent).map_err(|e| hash::io_error("Read update directory", e))?;
+    for sibling in siblings {
+        match sibling {
+            Ok(entry)
+                if entry
+                    .file_name()
+                    .encode_wide()
+                    .collect::<Vec<_>>()
+                    .starts_with(&prefix) =>
+            {
+                if let Err(error) = delete(&entry.path()) {
+                    win::record(error);
+                }
+            }
+            Ok(_) => {}
+            Err(error) => win::record(hash::io_error("Read old update entry", error)),
+        }
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "HWIDChecker_swap_test_{}",
+                hash::random_name().expect("test random name")
+            ));
+            fs::create_dir(&path).expect("exclusively create scratch directory");
+            Self(path)
+        }
+
+        fn executable(&self) -> PathBuf {
+            self.0.join("HWIDChecker.exe")
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).expect("remove only owned scratch directory");
+        }
+    }
+
+    #[test]
+    fn swap_renames_and_writes_only_a_temp_copy() {
+        let scratch = Scratch::new();
+        let executable = scratch.executable();
+        fs::write(&executable, b"old image").expect("fixture image");
+        // Exercise the same transaction as production, solely on a fabricated temp image.
+        swap_and_restart(&executable, b"checked new bytes", |path| {
+            assert!(path.is_absolute());
+            assert_eq!(
+                fs::read(path).expect("closed new image"),
+                b"checked new bytes"
+            );
+            let old = fs::read_dir(&scratch.0)
+                .expect("scratch siblings")
+                .map(|entry| entry.expect("entry").path())
+                .find(|path| {
+                    path.file_name()
+                        .expect("name")
+                        .to_string_lossy()
+                        .starts_with("HWIDChecker.exe.old-")
+                })
+                .expect("old image sibling");
+            assert_eq!(fs::read(old).expect("old bytes"), b"old image");
+            Ok(()) // Never launch either fixture.
+        })
+        .expect("fixture swap");
+        assert_eq!(
+            fs::read(executable).expect("installed bytes"),
+            b"checked new bytes"
+        );
+    }
+
+    #[test]
+    fn create_new_refuses_existing_file_and_directory_without_deleting_them() {
+        for directory in [false, true] {
+            let scratch = Scratch::new();
+            let executable = scratch.executable();
+            fs::write(&executable, b"old image").expect("fixture image");
+            let mut swap = http::ExecutableSwap::begin(&executable).expect("rename fixture");
+            if directory {
+                fs::create_dir(&executable).expect("interfering directory");
+                fs::write(executable.join("unrelated.txt"), b"keep me")
+                    .expect("directory contents");
+            } else {
+                fs::write(&executable, b"unrelated file").expect("interfering file");
+            }
+            assert!(swap.write(b"new bytes").is_err());
+            assert!(
+                swap.rollback().is_err(),
+                "rollback must not replace the unowned path"
+            );
+            if directory {
+                assert_eq!(
+                    fs::read(executable.join("unrelated.txt")).expect("preserved contents"),
+                    b"keep me"
+                );
+                fs::remove_file(executable.join("unrelated.txt")).expect("fixture cleanup");
+                fs::remove_dir(&executable).expect("fixture directory cleanup");
+            } else {
+                assert_eq!(
+                    fs::read(&executable).expect("preserved file"),
+                    b"unrelated file"
+                );
+                fs::remove_file(&executable).expect("fixture file cleanup");
+            }
+            swap.rollback()
+                .expect("restore after fixture interference removed");
+            assert_eq!(fs::read(executable).expect("restored bytes"), b"old image");
+        }
+    }
+
+    #[test]
+    fn restart_failure_and_unfinished_swap_restore_the_old_temp_file() {
+        let scratch = Scratch::new();
+        let executable = scratch.executable();
+        fs::write(&executable, b"old image").expect("fixture image");
+        let error = swap_and_restart(&executable, b"new bytes", |_| {
+            Err(win::Error::msg(
+                "Update restart",
+                "fabricated start failure",
+            ))
+        })
+        .expect_err("restart failure");
+        assert_eq!(error.op, "Update restart");
+        assert_eq!(fs::read(&executable).expect("restored bytes"), b"old image");
+        let mut swap = http::ExecutableSwap::begin(&executable).expect("rename fixture");
+        swap.write(b"unfinished bytes").expect("fixture write");
+        drop(swap);
+        assert_eq!(
+            fs::read(executable).expect("RAII restored bytes"),
+            b"old image"
+        );
+        assert_eq!(
+            fs::read_dir(&scratch.0).expect("scratch siblings").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn startup_cleanup_skips_directories_and_unrelated_files() {
+        let scratch = Scratch::new();
+        let executable = scratch.executable();
+        fs::write(&executable, b"current image").expect("fixture current");
+        let old = scratch.0.join("HWIDChecker.exe.old-fabricated");
+        fs::write(&old, b"old image").expect("fixture old");
+        let directory = scratch.0.join("HWIDChecker.exe.old-directory");
+        fs::create_dir(&directory).expect("fixture directory");
+        fs::write(directory.join("keep.txt"), b"keep me").expect("fixture contents");
+        let unrelated = scratch.0.join("Other.exe.old-fabricated");
+        fs::write(&unrelated, b"unrelated image").expect("fixture unrelated");
+        cleanup_old_siblings(&executable, http::delete_old_executable).expect("fixture cleanup");
+        assert!(!old.exists());
+        assert_eq!(
+            fs::read(directory.join("keep.txt")).expect("preserved contents"),
+            b"keep me"
+        );
+        assert_eq!(
+            fs::read(unrelated).expect("preserved unrelated"),
+            b"unrelated image"
+        );
+        assert_eq!(
+            fs::read(executable).expect("preserved current"),
+            b"current image"
+        );
+    }
 
     #[test]
     fn installer_paths_refuse_percent_and_preserve_other_shell_characters() {
@@ -371,64 +455,19 @@ mod tests {
         match check() {
             Ok(UpdateCheck::UpToDate) => println!("NoUpdateAvailable: hashes match"),
             Ok(UpdateCheck::Available(d)) => {
-                hash::validate_x64_pe(d.response.temp.file().expect("retained file"))
-                    .expect("production x64 PE");
+                http::validate_x64_pe(&d.response.bytes).expect("production x64 PE");
                 println!(
                     "Available: different SHA256; valid x64 PE; size={}, Content-Length={:?}; SHA256={}",
                     d.size,
                     d.content_length(),
                     d.sha256
                 );
-                let path = d.path.clone();
-                println!("UserDeclined: retained file will be discarded; no install requested");
+                println!("UserDeclined: retained bytes discarded; no install requested");
                 drop(d);
-                assert!(!path.exists(), "decline must remove its unique download");
-                println!("Decline cleanup: passed");
             }
             Err(error) => panic!("Error checking for updates: {error}"),
         }
         println!("Elapsed: {} ms", start.elapsed().as_millis());
-    }
-
-    #[test]
-    #[ignore = "read-only cmd.exe Unicode/metacharacter launch check; no install script is run"]
-    fn wp13_hidden_cmd_paths() {
-        let script = http::TempFile::create("bat").expect("temp batch");
-        let output = http::TempFile::create("exe").expect("temp output reservation");
-        let path = appended(output.path(), " Größe & (test)!^.txt");
-        drop(output);
-        let mut file = script.file().expect("batch file");
-        file.write_all(b"@echo off\r\nsetlocal EnableExtensions DisableDelayedExpansion\r\n>\"%HWID_U_OUTPUT%\" echo fabricated fixture\r\n").expect("write batch");
-        let mut argument = OsString::from("\"\"");
-        argument.push(script.path());
-        argument.push("\"\"");
-        let mut child = Command::new(process::system32("cmd.exe"))
-            .args(["/d", "/s", "/c"])
-            .raw_arg(argument)
-            .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .env("HWID_U_OUTPUT", &path)
-            .spawn()
-            .expect("hidden cmd");
-        let start = std::time::Instant::now();
-        loop {
-            if let Some(status) = child.try_wait().expect("wait cmd") {
-                assert!(status.success());
-                break;
-            }
-            if start.elapsed() > std::time::Duration::from_secs(5) {
-                child.kill().expect("kill timed-out read-only helper");
-                panic!("read-only cmd timed out");
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        // Read the native output bytes: the value was passed through UTF-16 environment
-        // expansion, so the Unicode path is used for file opening regardless of stdout CP.
-        assert!(path.exists());
-        fs::remove_file(path).expect("remove harmless output");
-        println!("Hidden cmd /d /s /c: passed; no installer was executed");
     }
 
     #[test]
@@ -497,9 +536,8 @@ mod tests {
         };
         assert_eq!(d.content_length(), None);
         assert_eq!(d.size, 1024);
-        let path = d.path.clone();
+        assert_eq!(d.response.bytes, changed);
         drop(d);
-        assert!(!path.exists());
         requests(server, 1);
         println!("Different hash, unknown Content-Length, decline cleanup: passed");
 
@@ -559,7 +597,7 @@ mod tests {
         let current = std::env::current_exe().expect("test exe");
         for (body, expected) in [
             (&bytes[..], "[DRY RUN] install update and restart"),
-            (&b"not a PE"[..], "not a valid x64 PE"),
+            (&b"not a PE"[..], "[DRY RUN] install update and restart"),
         ] {
             let (url, server) = http::tests::serve(vec![(
                 Duration::ZERO,
@@ -575,33 +613,16 @@ mod tests {
             else {
                 panic!("different fixture");
             };
-            let path = d.path.clone();
+            assert_eq!(
+                http::validate_x64_pe(&d.response.bytes).is_ok(),
+                body == bytes
+            );
             let error = install_and_restart(d).expect_err("must not install");
             assert!(error.contains(expected), "{error}");
-            assert!(!path.exists());
             requests(server, 1);
         }
-        println!(
-            "Valid install: dry-run refusal; invalid PE: refused before install; no second GET"
-        );
+        println!("PE snapshot validation: passed; install: dry-run refusal; no second GET");
 
-        let path = pending_error_path(&current).expect("pending path");
-        let marker = ErrorMarker { path, keep: false };
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&marker.path)
-            .expect("private test marker");
-        file.write_all(b"Update install failed: 0x00000000 fabricated replacement failure.\r\n")
-            .expect("marker write");
-        drop(file);
-        assert_eq!(
-            take_pending_error().expect("pending error").as_deref(),
-            Some(
-                "Update failed: Update install failed: 0x00000000 fabricated replacement failure."
-            )
-        );
-        assert!(!marker.path.exists());
-        println!("Next-start failure read and consume: passed (UI wiring remains separate)");
+        assert_eq!(take_pending_error().expect("no next-start path"), None);
     }
 }

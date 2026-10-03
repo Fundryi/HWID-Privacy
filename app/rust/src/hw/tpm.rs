@@ -124,7 +124,10 @@ fn invoke_bool(
     let result = path
         .ok_or_else(|| Error::msg(method, "WMI object path is missing"))
         .and_then(|path| wmi::call_method(wmi::Namespace::MicrosoftTpm, path, method))
-        .map(|output| bool_value(&output, method));
+        // C# parity: Hardware/TpmInfo.cs:120-150 (alternate Boolean before initial state).
+        .map(|output| {
+            bool_value(&output, method).or_else(|| output.first_bool_except("ReturnValue"))
+        });
     resolve_bool(
         result,
         bool_value(row, &format!("{method}_InitialValue")),

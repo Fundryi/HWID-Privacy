@@ -119,19 +119,45 @@ function Assert-Implemented([string]$Text, [string]$Label) {
 # String equality is byte equality for strict UTF-8, with the BOM retained as U+FEFF.
 # Split only on LF so JSON displays CR, padding, BOM and missing final newlines.
 function Compare-Lines([string]$Before, [string]$After, [string]$Section,
-    [string]$LeftLabel = 'C#', [string]$RightLabel = 'Rust') {
+    [string]$LeftLabel = 'C#', [string]$RightLabel = 'Rust',
+    [System.Collections.Generic.Dictionary[string,string]]$ApprovedLines = $null) {
     if ([string]::Equals($Before, $After, [System.StringComparison]::Ordinal)) { return $true }
     $left = $Before.Split("`n")
     $right = $After.Split("`n")
+    $ok = $true
     for ($i = 0; $i -lt [Math]::Max($left.Count, $right.Count); $i++) {
         $a = if ($i -lt $left.Count) { ConvertTo-Json -InputObject $left[$i] -Compress -EscapeHandling EscapeNonAscii } else { '<missing>' }
         $b = if ($i -lt $right.Count) { ConvertTo-Json -InputObject $right[$i] -Compress -EscapeHandling EscapeNonAscii } else { '<missing>' }
         if ($i -ge $left.Count -or $i -ge $right.Count -or
             -not [string]::Equals($left[$i], $right[$i], [System.StringComparison]::Ordinal)) {
-            Write-Host "[$Section] line $($i + 1) needs approval: $LeftLabel=$a $RightLabel=$b"
+            $approval = $null
+            if ($null -ne $ApprovedLines -and $i -lt $right.Count) {
+                # The allowlist excludes line terminators, but preserves all other characters.
+                $line = $right[$i]
+                if ($line.EndsWith("`r", [System.StringComparison]::Ordinal)) { $line = $line.Substring(0, $line.Length - 1) }
+                $key = $Section + [char]0 + $line
+                if ($ApprovedLines.ContainsKey($key)) { $approval = $ApprovedLines[$key] }
+            }
+            $status = if ($null -ne $approval) { "approved ($approval)" } else { 'needs approval' }
+            Write-Host "[$Section] line $($i + 1) ${status}: $LeftLabel=$a $RightLabel=$b"
+            if ($null -eq $approval) { $ok = $false }
         }
     }
-    return $false
+    return $ok
+}
+
+function Read-ApprovedLines([string]$Path) {
+    $lines = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::Ordinal)
+    if (-not (Test-Path -LiteralPath $Path)) { return ,$lines }
+    foreach ($entry in [System.IO.File]::ReadAllLines($Path, $Utf8)) {
+        $columns = $entry.Split("`t", 3, [System.StringSplitOptions]::None)
+        if ($columns.Count -ne 3 -or $columns[0] -cnotmatch '^AD-[0-9]{2}$' -or
+            ($columns[1] -cne 'REPORT HEADER' -and $columns[1] -cnotin $SectionTitles)) {
+            throw "Invalid reviewed-line entry in ${Path}: expected AD-xx<TAB>section<TAB>exact Rust line."
+        }
+        $lines[$columns[1] + [char]0 + $columns[2]] = $columns[0]
+    }
+    return ,$lines
 }
 
 function Read-Report([string]$Path, [string[]]$ExpectedTitles) {
@@ -292,7 +318,13 @@ try {
     Write-Host "Private captures: $run"
 
     if ($Golden) {
-        Write-Host "Approval ledger: $approved (orchestrator review; no automatic rule matching)."
+        # The orchestrator reviews a capture, then writes owner-pc/approved-lines.txt.
+        # Each entry: AD-xx<TAB>section<TAB>exact Rust line (without its line terminator).
+        # Section and line comparisons are ordinal and exact; no wildcards or trimming.
+        # Missing file means no approval. C# repeat checks never consume this allowlist.
+        $approvedLinesPath = Join-Path $captureRoot 'approved-lines.txt'
+        $approvedLines = Read-ApprovedLines $approvedLinesPath
+        Write-Host "Approval ledger: $approved; reviewed lines: $approvedLinesPath ($($approvedLines.Count) entries)."
         $baseline = Join-Path $run 'csharp-report.txt'
         $second = Join-Path $run 'csharp-report-second.txt'
         Invoke-Capture $harnessExe @($baseline) $baseline
@@ -310,19 +342,19 @@ try {
             $dump = Join-Path $run 'rust-report.txt'
             Invoke-Capture $binary @('--dump', $dump) $dump
             $rustReport = Read-Report $dump $SectionTitles
-            if (-not (Compare-Lines $csharp.Preamble $rustReport.Preamble 'REPORT HEADER')) { $ok = $false }
+            if (-not (Compare-Lines $csharp.Preamble $rustReport.Preamble 'REPORT HEADER' -ApprovedLines $approvedLines)) { $ok = $false }
         }
         foreach ($title in $selected) {
             if ($Sections.Count) {
                 $dump = Join-Path $run ("rust-section-$([Array]::IndexOf($SectionTitles, $title)).txt")
                 Invoke-Capture $binary @('--dump', $dump, '--only', $title) $dump
                 $rustReport = Read-Report $dump @($title)
-                if (-not (Compare-Lines $csharp.Preamble $rustReport.Preamble 'REPORT HEADER')) { $ok = $false }
+                if (-not (Compare-Lines $csharp.Preamble $rustReport.Preamble 'REPORT HEADER' -ApprovedLines $approvedLines)) { $ok = $false }
             }
             $a = $csharp.Parts[$title]; $b = $rustReport.Parts[$title]
             Assert-Implemented $b $title
             if ($title -ceq 'USB DEVICES') { $a = Sort-UsbGroups $a; $b = Sort-UsbGroups $b }
-            if (-not (Compare-Lines $a $b $title)) { $ok = $false }
+            if (-not (Compare-Lines $a $b $title -ApprovedLines $approvedLines)) { $ok = $false }
         }
         if (-not $ok) { throw 'Golden differences need orchestrator approval; see the private captures and approval ledger.' }
         Write-Host 'Golden comparison passed.'
