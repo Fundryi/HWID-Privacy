@@ -1,6 +1,6 @@
 //! Optional DLLs are loaded at runtime exclusively from System32.
 
-use super::{Error, Result, wide};
+use super::{Error, Result, record, wide};
 use std::ffi::CStr;
 use windows::Win32::Foundation::{FARPROC, FreeLibrary, HMODULE};
 use windows::Win32::System::LibraryLoader::{
@@ -58,7 +58,7 @@ impl Library {
         // SAFETY: The module is held by self and name is a terminated C string.
         let address = unsafe { GetProcAddress(self.module, PCSTR(name.as_ptr().cast())) };
         if address.is_none() {
-            eprintln!("{}", Error::last("GetProcAddress"));
+            record(Error::last("GetProcAddress"));
         }
         address
     }
@@ -68,7 +68,7 @@ impl Drop for Library {
     fn drop(&mut self) {
         // SAFETY: The module is the uniquely owned reference acquired by LoadLibraryExW.
         if let Err(error) = unsafe { FreeLibrary(self.module) } {
-            eprintln!("{}", Error::from_win("FreeLibrary", error));
+            record(Error::from_win("FreeLibrary", error));
         }
     }
 }

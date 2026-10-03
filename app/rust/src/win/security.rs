@@ -1,6 +1,6 @@
 //! Token membership and privilege helpers.
 
-use super::{Error, OwnedHandle, Result, wide};
+use super::{Error, OwnedHandle, Result, record, wide};
 use windows::Win32::Foundation::{ERROR_SUCCESS, GetLastError, HANDLE, LUID, SetLastError};
 use windows::Win32::Security::{
     AdjustTokenPrivileges, AllocateAndInitializeSid, CheckTokenMembership, FreeSid,
@@ -39,7 +39,7 @@ pub fn is_admin() -> bool {
     }
     .is_err()
     {
-        eprintln!("{}", super::Error::last("AllocateAndInitializeSid"));
+        record(super::Error::last("AllocateAndInitializeSid"));
         return false;
     }
     let sid = OwnedSid(sid);
@@ -48,7 +48,7 @@ pub fn is_admin() -> bool {
     match unsafe { CheckTokenMembership(None, sid.0, &mut member) } {
         Ok(()) => member.as_bool(),
         Err(error) => {
-            eprintln!("{}", super::Error::from_win("CheckTokenMembership", error));
+            record(super::Error::from_win("CheckTokenMembership", error));
             false
         }
     }
@@ -59,7 +59,7 @@ pub fn enable_privilege(name: &str) -> bool {
     match try_enable_privilege(name) {
         Ok(()) => true,
         Err(error) => {
-            eprintln!("{error}");
+            record(error);
             false
         }
     }

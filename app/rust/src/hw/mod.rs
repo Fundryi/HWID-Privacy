@@ -21,7 +21,6 @@ use crate::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    panic::{AssertUnwindSafe, catch_unwind},
     sync::{Arc, OnceLock, mpsc},
     thread,
     time::{Duration, Instant},
@@ -177,13 +176,17 @@ fn collect_with_deadline(
         match thread::Builder::new()
             .name(provider.title.to_owned())
             .spawn(move || {
-                let section = collect_provider(&provider, &ctx);
-                if let Err(error) = sender.send((slot, Instant::now(), section)) {
-                    // Expected for an abandoned provider that finishes after collection ends.
-                    eprintln!(
-                        "Provider {} result delivery failed: {error}",
-                        provider.title
-                    );
+                if let Err(message) = win::catch_panic(|| {
+                    let section = collect_provider(&provider, &ctx);
+                    if let Err(error) = sender.send((slot, Instant::now(), section)) {
+                        // Expected for an abandoned provider that finishes after collection ends.
+                        win::record(win::Error::msg(
+                            "provider result delivery",
+                            format!("{}: {error}", provider.title),
+                        ));
+                    }
+                }) {
+                    win::record(win::Error::msg("provider worker", message));
                 }
             }) {
             // Dropping the join handle detaches the worker. A timed-out worker must
@@ -261,19 +264,12 @@ fn collect_with_deadline(
 pub fn collect_provider(provider: &Provider, ctx: &Ctx) -> Section {
     let start = Instant::now();
     let mut out = Out::new();
-    let result = match catch_unwind(AssertUnwindSafe(|| (provider.collect)(ctx, &mut out))) {
+    let result = match win::catch_panic(|| (provider.collect)(ctx, &mut out)) {
         Ok(result) => result,
-        Err(panic) => {
-            let message = panic
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| panic.downcast_ref::<&str>().copied())
-                .unwrap_or("non-string panic payload");
-            Err(win::Error::msg(
-                provider.title,
-                format!("provider panicked: {message}"),
-            ))
-        }
+        Err(message) => Err(win::Error::msg(
+            provider.title,
+            format!("provider panicked: {message}"),
+        )),
     };
     if let Err(error) = result {
         record_error(&mut out, provider.title, &error);
@@ -289,7 +285,7 @@ fn finish_section(out: Out, title: &'static str, start: Instant) -> Section {
 }
 
 fn record_error(out: &mut Out, title: &'static str, error: &win::Error) {
-    // C# parity: HardwareInfoManager.cs:77. Partial provider output is retained.
+    // Approved difference: retain partial output; C# drops it (HardwareInfoManager.cs:73-77).
     out.fallback_failed(title, error)
         .text(&format!("Error retrieving {title} information: {error}"));
 }
@@ -741,7 +737,6 @@ mod tests {
 
     #[test]
     fn raw_report_literal_preserves_empty_and_untrimmed_bodies() {
-        // TODO(1.9): confirm against GoldenDump --format.
         let sections = [
             Section {
                 title: "GPU",

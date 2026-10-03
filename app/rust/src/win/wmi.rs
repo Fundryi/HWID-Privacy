@@ -4,7 +4,7 @@
 //! only keeps array CIM types (empty arrays). The crate waits with WBEM_INFINITE, so the
 //! provider deadline in `hw::collect_all` bounds every call.
 
-use super::{Error, Result};
+use super::{Error, Result, record};
 use ::wmi::{IWbemClassWrapper, Variant, WMIConnection, WMIError};
 use std::{cell::RefCell, collections::HashMap};
 use windows::Win32::Foundation::{RPC_E_CHANGED_MODE, RPC_E_TOO_LATE};
@@ -36,7 +36,8 @@ impl Namespace {
 
 #[derive(Debug, Default)]
 pub struct Row {
-    _values: HashMap<String, Variant>,
+    // Preserve the WMI property order for method-output Boolean fallbacks.
+    _values: Vec<(String, Variant)>,
     // Variant::Array loses its element type when empty; retain the CIM metadata.
     array_types: HashMap<String, &'static str>,
 }
@@ -246,21 +247,31 @@ impl Row {
             names.extend(["__PATH".into(), "__RELPATH".into()]);
         }
         for name in names {
-            let value = object
-                .get_property(&name)
-                .map_err(|e| wmi_error("WMI Get", e))?;
-            if matches!(value, Variant::Array(_)) {
-                row.array_types
-                    .insert(name.clone(), array_type(&object, &name)?);
+            let value: Result<Variant> = (|| {
+                let value = object
+                    .get_property(&name)
+                    .map_err(|e| wmi_error("WMI Get", e))?;
+                if matches!(value, Variant::Array(_)) {
+                    row.array_types
+                        .insert(name.clone(), array_type(&object, &name)?);
+                }
+                Ok(value)
+            })();
+            match value {
+                Ok(value) => row._values.push((name, value)),
+                Err(mut error) => {
+                    error.detail = format!("{name}: {}", error.detail);
+                    record(error);
+                }
             }
-            row._values.insert(name, value);
         }
         Ok(row)
     }
 
     fn property(&self, name: &str) -> Option<(&str, &Variant)> {
         self._values
-            .get_key_value(name)
+            .iter()
+            .find(|(key, _)| key == name)
             .or_else(|| {
                 self._values
                     .iter()
@@ -269,7 +280,7 @@ impl Row {
             .map(|(key, value)| (key.as_str(), value))
     }
 
-    /// Returns .NET ToString-compatible property text, or None for null/empty.
+    /// Returns .NET ToString text, including `Some("")`; None means null or absent.
     pub fn str(&self, _name: &str) -> Option<String> {
         let (name, value) = self.property(_name)?;
         // C# parity: Hardware/RamInfo.cs:75-79 (untrimmed .NET ToString values).
@@ -319,6 +330,19 @@ impl Row {
             Variant::Bool(b) => Some(*b),
             _ => None,
         }
+    }
+    /// Returns the first Boolean in WMI order, excluding a name without case sensitivity.
+    pub fn first_bool_except(&self, excluded: &str) -> Option<bool> {
+        // C# parity: Hardware/TpmInfo.cs:131-136 (Boolean out-parameter fallback).
+        self._values.iter().find_map(|(name, value)| {
+            if name.eq_ignore_ascii_case(excluded) {
+                return None;
+            }
+            match value {
+                Variant::Bool(value) => Some(*value),
+                _ => None,
+            }
+        })
     }
     /// Reads a UInt16 array, including WmiMonitorID text arrays.
     pub fn u16_array(&self, _name: &str) -> Option<Vec<u16>> {
@@ -520,7 +544,7 @@ mod tests {
 
     fn scalar(value: Variant) -> Row {
         Row {
-            _values: HashMap::from([("Value".into(), value)]),
+            _values: vec![("Value".into(), value)],
             ..Row::default()
         }
     }
@@ -571,6 +595,22 @@ mod tests {
         assert_eq!(scalar(Variant::R8(42.0)).u64("Value"), None);
         assert_eq!(scalar(Variant::Bool(true)).bool("Value"), Some(true));
         assert_eq!(scalar(Variant::UI1(1)).bool("Value"), None);
+        let row = Row {
+            _values: vec![
+                ("ReturnValue".into(), Variant::Bool(true)),
+                ("Number".into(), Variant::UI4(1)),
+                ("ZFirst".into(), Variant::Bool(false)),
+                ("ALater".into(), Variant::Bool(true)),
+            ],
+            ..Row::default()
+        };
+        assert_eq!(row.first_bool_except("returnvalue"), Some(false));
+        assert_eq!(row.first_bool_except("zfirst"), Some(true));
+        assert_eq!(
+            scalar(Variant::UI4(0)).first_bool_except("ReturnValue"),
+            None
+        );
+        assert_eq!(scalar(Variant::Bool(true)).first_bool_except("VALUE"), None);
     }
 
     #[test]
@@ -604,7 +644,7 @@ mod tests {
         row.array_types.insert("Value".into(), "System.UInt16[]");
         assert_eq!(row.u16_array("value"), Some(vec![65, 0, 937]));
         assert_eq!(row.str("value").as_deref(), Some("System.UInt16[]"));
-        row._values.insert("Value".into(), Variant::Array(vec![]));
+        row._values[0].1 = Variant::Array(vec![]);
         assert_eq!(row.str("Value").as_deref(), Some("System.UInt16[]"));
         assert_eq!(row.u16_array("Value"), Some(vec![]));
         row.array_types.insert("Value".into(), "System.UInt32[]");

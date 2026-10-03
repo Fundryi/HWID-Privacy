@@ -1,6 +1,6 @@
 //! HKLM registry reads always use the 64-bit view.
 
-use super::{Error, Result, wide};
+use super::{Error, Result, record, wide};
 use windows::Win32::Foundation::{ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, WIN32_ERROR};
 use windows::Win32::System::Registry::{
     HKEY, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY, REG_ROUTINE_FLAGS, RRF_RT_REG_BINARY,
@@ -45,7 +45,7 @@ impl Drop for Key {
         // SAFETY: This is the unique owner of a key opened by RegOpenKeyExW.
         let status = unsafe { RegCloseKey(self.0) };
         if status.is_err() {
-            eprintln!("{}", status_error("RegCloseKey", status));
+            record(status_error("RegCloseKey", status));
         }
     }
 }
