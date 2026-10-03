@@ -85,3 +85,8 @@ TMP/*
 site/node_modules/
 site/.vitepress/dist/
 site/.vitepress/cache/
+
+# Rust port build outputs and private hardware captures
+app/rust/target/
+app/rust/golden/*
+!app/rust/golden/README.md
