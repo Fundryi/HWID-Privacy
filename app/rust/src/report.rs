@@ -241,7 +241,6 @@ mod tests {
 
     #[test]
     fn formatter_header_literals_and_utf16_centering() {
-        // TODO(1.9): confirm against GoldenDump --format.
         assert_eq!(separator(), RULE);
         assert_eq!(item_separator(), ITEM_RULE);
         assert_eq!(
@@ -271,7 +270,6 @@ mod tests {
 
     #[test]
     fn formatter_section_preserves_body_and_only_adds_missing_crlf() {
-        // TODO(1.9): confirm against GoldenDump --format.
         let heading = [
             RULE,
             "                                             GPU\r\n",
@@ -291,7 +289,6 @@ mod tests {
 
     #[test]
     fn formatter_info_combined_and_device_group_literals() {
-        // TODO(1.9): confirm against GoldenDump --format.
         assert_eq!(info_line("Série", "SN8D4C2A9"), "Série: SN8D4C2A9\r\n");
         assert_eq!(info_line("", ""), ": \r\n");
         assert_eq!(
@@ -315,7 +312,6 @@ mod tests {
 
     #[test]
     fn section_content_and_export_literals() {
-        // TODO(1.9): confirm against GoldenDump --format.
         assert_eq!(
             section_content(" \t\r\n\u{85}\u{a0}\u{2003}\u{2028}\u{3000}"),
             "No data available"
@@ -348,7 +344,6 @@ mod tests {
 
     #[test]
     fn utf16_padding_literals() {
-        // TODO(1.9): confirm against GoldenDump --format.
         assert_eq!(pad_right_utf16("A😀é", 6), "A😀é  ");
         assert_eq!(pad_right_utf16("A😀é", 4), "A😀é");
         assert_eq!(pad_right_utf16("A😀é", 1), "A😀é");
@@ -357,7 +352,6 @@ mod tests {
 
     #[test]
     fn out_keeps_identifiers_and_diagnostics_out_of_visible_text() {
-        // TODO(1.9): confirm against GoldenDump --format.
         let mut out = Out::new();
         out.info("Name", "Écran 😀")
             .id("Serial", "SN8D4C2A9")
