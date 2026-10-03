@@ -58,13 +58,13 @@
 
 - **Controller**: Maxio MAP1202 needed
 - **How-To**:
-  - [M.2 SSD Spoofing](guides/ssd-spoofing/ssd-spoofing.md/#m2-ssd-spoofing)
+  - [M.2 SSD Spoofing](guides/ssd-spoofing/ssd-spoofing.md#m2-ssd-spoofing)
 
 #### SATA SSDs (2.5")
 
 - **Controller**: YANSEN SSD needed
 - **How-To**:
-  - [NORMAL 2.5' SSD Spoofing](guides/ssd-spoofing/ssd-spoofing.md/#normal-25-ssd-spoofing)
+  - [NORMAL 2.5' SSD Spoofing](guides/ssd-spoofing/ssd-spoofing.md#normal-25-ssd-spoofing)
 
 > Modifying these drives can void warranties.  
 > Software/BIOS-based RAID0 is generally virtual and unsafe for HWID evasion.
