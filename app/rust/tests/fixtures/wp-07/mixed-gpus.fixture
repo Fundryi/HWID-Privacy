@@ -1,0 +1,10 @@
+GPU 0
+└── NVIDIA GeForce RTX 5080
+    └── UUID: GPU-358d91ef-2174-43eb-9221-d36a721cd603
+
+Board Serial Number: 042571983612
+
+GPU 1
+└── Intel(R) UHD Graphics 770
+    ├── PCI\VEN_8086&DEV_A780\3&24137E09&0&10
+    └── Hardware ID: PCI\VEN_8086&DEV_A780&SUBSYS_88881043&REV_04
