@@ -1,0 +1,29 @@
+IsPresent             : True
+PublicKey             : System.Security.Cryptography.RSACryptoServiceProvider
+PublicKeyHash         : 69d41e7a50be98ca3175d60fe29c408bca70961d8ea3b45fc27518ac634e902d
+ManufacturerCertificates : {[Subject]
+  CN=TPM EK
+
+[Issuer]
+  O=Intel Corporation, CN=Intel TPM EK Intermediate CA 01, C=US
+
+[Serial Number]
+  024FC9B8163D0A72
+
+[Thumbprint]
+  2741B683EE904D79C1280F5A6BC903E84D217F60
+
+[Subject]
+  CN=TPM EK
+
+[issuer]
+  O=Intel Corporation, CN=Intel TPM EK Intermediate CA 02, C=US
+  wrapped continuation is ignored
+
+[serial number]
+  0183BA26D5E7904FC218
+
+[thumbprint]
+  4EB8D15A9276CE3082AFA05D746CB319E8072D65
+}
+AdditionalCertificates : {}

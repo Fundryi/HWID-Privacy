@@ -1,6 +1,6 @@
 //! SetupAPI snapshots retain ownership while borrowed devices are inspected.
 
-use super::{Error, Result, wide};
+use super::{Error, Result, record, wide};
 use std::collections::{HashMap, HashSet};
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CM_MapCrToWin32Err, CR_NO_SUCH_DEVNODE,
@@ -89,7 +89,7 @@ impl Drop for DevInfoSet {
     fn drop(&mut self) {
         // SAFETY: Only open creates this uniquely owned set; borrowed devices cannot outlive it.
         if let Err(error) = unsafe { SetupDiDestroyDeviceInfoList(self.handle) } {
-            eprintln!("{}", Error::from_win("SetupDiDestroyDeviceInfoList", error));
+            record(Error::from_win("SetupDiDestroyDeviceInfoList", error));
         }
     }
 }
@@ -295,7 +295,7 @@ pub fn hardware_id_map() -> Result<HashMap<String, String>> {
                     map.insert(instance_id, hardware_id);
                 }
             }
-            Err(error) => eprintln!("{error}"),
+            Err(error) => record(error),
         }
     }
     Ok(map)
@@ -303,10 +303,16 @@ pub fn hardware_id_map() -> Result<HashMap<String, String>> {
 /// Returns uppercase present instance IDs, for case-insensitive membership checks.
 pub fn present_instance_ids() -> Result<HashSet<String>> {
     let set = DevInfoSet::enum_present_all()?;
-    set.devices()?
-        .iter()
-        .map(|device| device.instance_id().map(|id| id.to_uppercase()))
-        .collect()
+    let mut ids = HashSet::new();
+    for device in set.devices()? {
+        match device.instance_id() {
+            Ok(id) => {
+                ids.insert(id.to_uppercase());
+            }
+            Err(error) => record(error),
+        }
+    }
+    Ok(ids)
 }
 
 /// Rechecks an instance ID with normal-mode CM_Locate_DevNodeW; lookup errors stay errors.

@@ -1,6 +1,6 @@
 //! Local timestamps preserve the C# date and export filename formats.
 
-use super::{Error, Result};
+use super::{Error, Result, record};
 use windows::Win32::Foundation::SYSTEMTIME;
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::Time::{
@@ -13,7 +13,7 @@ pub fn unix_to_local(secs: i64) -> Option<String> {
     match local_time(secs, None) {
         Ok(local) => Some(display_time(&local)),
         Err(error) => {
-            eprintln!("{error}");
+            record(error);
             None
         }
     }

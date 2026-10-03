@@ -1,0 +1,14 @@
+[
+  {
+    "Name": "True",
+    "Description": "USB Gerät & <Reserve> 'A' + 🔒",
+    "HardwareId": "USB\\VID_046D&PID_C52B&REV_2401USB\\VID_046D&PID_C52B",
+    "Class": "USB"
+  },
+  {
+    "Name": "True",
+    "Description": "Historical device without an ID",
+    "HardwareId": "",
+    "Class": ""
+  }
+]

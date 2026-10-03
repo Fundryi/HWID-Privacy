@@ -1,6 +1,6 @@
 //! Raw firmware tables and bounds-checked SMBIOS access.
 
-use super::{Error, Result};
+use super::{Error, Result, record};
 use windows::Win32::System::SystemInformation::{FIRMWARE_TABLE_PROVIDER, GetSystemFirmwareTable};
 
 #[derive(Clone, Debug)]
@@ -71,23 +71,20 @@ pub fn parse_smbios(raw: &[u8]) -> Result<Smbios> {
     let mut offset = 0;
     while offset < table.len() {
         let Some(header) = table.get(offset..).and_then(|tail| tail.get(..4)) else {
-            eprintln!(
-                "{}",
-                Error::msg("SMBIOS parse", "truncated final structure header")
-            );
+            record(Error::msg(
+                "SMBIOS parse",
+                "truncated final structure header",
+            ));
             break;
         };
         let length = header[1] as usize;
         // C# parity: app/src/Services/Win32/FirmwareTable.cs:115-117
         // Preserve complete earlier structures when the final formatted area is truncated.
         if length < 4 || length > table.len() - offset {
-            eprintln!(
-                "{}",
-                Error::msg(
-                    "SMBIOS parse",
-                    "invalid or truncated final formatted structure"
-                )
-            );
+            record(Error::msg(
+                "SMBIOS parse",
+                "invalid or truncated final formatted structure",
+            ));
             break;
         }
         // C# parity: app/src/Services/Win32/FirmwareTable.cs:136-137
@@ -128,10 +125,10 @@ pub fn parse_smbios(raw: &[u8]) -> Result<Smbios> {
         match terminator {
             Some(end) => offset = formatted_end + end + 2,
             None => {
-                eprintln!(
-                    "{}",
-                    Error::msg("SMBIOS parse", "unterminated final string table")
-                );
+                record(Error::msg(
+                    "SMBIOS parse",
+                    "unterminated final string table",
+                ));
                 break;
             }
         }

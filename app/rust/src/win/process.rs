@@ -4,8 +4,7 @@ use std::{
     ffi::OsString,
     mem::size_of,
     os::windows::ffi::{OsStrExt, OsStringExt},
-    panic::{AssertUnwindSafe, catch_unwind},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -47,7 +46,7 @@ use windows::{
     core::{PCWSTR, PWSTR},
 };
 
-use super::{Error, OwnedHandle, wide::to_wide};
+use super::{Error, OwnedHandle, catch_panic, record, wide::to_wide};
 
 // Cargo's frozen feature list omits Win32_Globalization. Keep the one required
 // Kernel32 declaration here instead of changing the orchestrator-owned manifest.
@@ -101,13 +100,10 @@ pub fn run(
     }
     let application: Vec<u16> = exe.as_os_str().encode_wide().collect();
     if !exe.is_absolute() || application.contains(&0) || args.iter().any(|arg| arg.contains('\0')) {
-        eprintln!(
-            "{}",
-            Error::msg(
-                "CreateProcessW",
-                "absolute path and NUL-free arguments required"
-            )
-        );
+        record(Error::msg(
+            "CreateProcessW",
+            "absolute path and NUL-free arguments required",
+        ));
         return Err(start_text(exe));
     }
     let mut command = quote(&application);
@@ -116,10 +112,10 @@ pub fn run(
         command.extend(quote(&arg.encode_utf16().collect::<Vec<_>>()));
     }
     if command.len() >= 32767 {
-        eprintln!(
-            "{}",
-            Error::msg("CreateProcessW", "command line exceeds 32767 UTF-16 units")
-        );
+        record(Error::msg(
+            "CreateProcessW",
+            "command line exceeds 32767 UTF-16 units",
+        ));
         return Err(start_text(exe));
     }
     command.push(0);
@@ -223,7 +219,7 @@ pub fn run(
     };
     drop(attributes);
     if let Err(error) = created {
-        eprintln!("{}", Error::from_win("CreateProcessW", error));
+        record(Error::from_win("CreateProcessW", error));
         return Err(start_text(exe));
     }
     // SAFETY: Successful CreateProcessW transferred these two unique kernel handles.
@@ -244,7 +240,7 @@ pub fn run(
         Err(error) => {
             drop(job);
             if let Err(cleanup) = stdout.finish(Instant::now()) {
-                eprintln!("{cleanup}");
+                record(Error::msg("stdout cleanup", cleanup));
             }
             return Err(error);
         }
@@ -263,7 +259,7 @@ pub fn run(
     if result.is_err()
         && let Err(error) = terminate(&job, &process_handle, cleanup_started)
     {
-        eprintln!("{error}");
+        record(Error::msg("process cleanup", error));
     }
     // Close before joining: descendants may still own pipe writers after root exit.
     drop(job);
@@ -273,7 +269,7 @@ pub fn run(
         Ok(code) => code,
         Err(error) => {
             for failure in [stdout, stderr].into_iter().filter_map(Result::err) {
-                eprintln!("{failure}");
+                record(Error::msg("pipe cleanup", failure));
             }
             return Err(error);
         }
@@ -282,7 +278,7 @@ pub fn run(
         Ok(stdout) => stdout,
         Err(error) => {
             if let Err(other) = stderr {
-                eprintln!("{other}");
+                record(Error::msg("stderr cleanup", other));
             }
             return Err(error);
         }
@@ -305,17 +301,28 @@ pub fn system32(name: &str) -> PathBuf {
         Err(error) => {
             // The frozen infallible API must record failures and fail closed: run
             // rejects this empty path, rather than searching PATH or a fallback directory.
-            eprintln!("{error}");
+            record(error);
             PathBuf::new()
         }
     }
 }
 
+/// Resolves the System32 Windows PowerShell 5.1 executable without searching PATH.
+pub fn powershell() -> PathBuf {
+    system32(r"WindowsPowerShell\v1.0\powershell.exe")
+}
+
 fn system_path(name: &str) -> super::Result<PathBuf> {
-    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', ':', '\0']) {
+    let relative = Path::new(name);
+    if name.is_empty()
+        || name.contains([':', '\0'])
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
         return Err(Error::msg(
             "system32",
-            "a single executable filename is required",
+            "a relative executable path without parent components, a colon or NUL is required",
         ));
     }
     let mut buffer = vec![0_u16; 260];
@@ -418,7 +425,10 @@ fn pipe() -> Result<(OwnedHandle, OwnedHandle), String> {
     Ok((read, write))
 }
 
-struct Attributes(Vec<usize>);
+struct Attributes {
+    _storage: Vec<usize>,
+    raw: LPPROC_THREAD_ATTRIBUTE_LIST,
+}
 impl Attributes {
     fn new() -> Result<Self, String> {
         let mut bytes = 0;
@@ -441,11 +451,14 @@ impl Attributes {
         // SAFETY: Allocation is pointer-aligned and large enough for both attributes.
         unsafe { InitializeProcThreadAttributeList(Some(raw), 2, None, &mut bytes) }
             .map_err(|e| Error::from_win("InitializeProcThreadAttributeList", e).to_string())?;
-        Ok(Self(storage))
+        Ok(Self {
+            _storage: storage,
+            raw,
+        })
     }
 
     fn raw(&self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
-        LPPROC_THREAD_ATTRIBUTE_LIST(self.0.as_ptr().cast_mut().cast())
+        self.raw
     }
 }
 impl Drop for Attributes {
@@ -461,15 +474,17 @@ impl Reader {
         thread::Builder::new()
             .name(format!("process-{stream}"))
             .spawn(move || {
-                let result = match catch_unwind(AssertUnwindSafe(|| read_pipe(pipe))) {
+                let result = match catch_panic(|| read_pipe(pipe)) {
                     Ok(result) => result,
-                    Err(_) => {
-                        Err(Error::msg("ReadFile", format!("{stream} reader panicked")).to_string())
-                    }
+                    Err(message) => Err(Error::msg(
+                        "ReadFile",
+                        format!("{stream} reader panicked: {message}"),
+                    )
+                    .to_string()),
                 };
                 // Also record errors if bounded cleanup has already detached this reader.
                 if let Err(error) = &result {
-                    eprintln!("{error}");
+                    record(Error::msg("pipe reader", error.clone()));
                 }
                 result
             })
@@ -633,13 +648,6 @@ mod tests {
     use std::{fs, io, sync::atomic::AtomicUsize};
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
 
-    fn powershell() -> PathBuf {
-        system32("cmd.exe")
-            .parent()
-            .unwrap()
-            .join("WindowsPowerShell/v1.0/powershell.exe")
-    }
-
     fn ps(script: &str) -> Output {
         run(
             &powershell(),
@@ -724,16 +732,37 @@ mod tests {
         assert!(exe.is_absolute());
         assert!(exe.is_file());
         assert_eq!(exe.file_name().unwrap(), "cmd.exe");
+        let ps = powershell();
+        assert!(ps.is_file());
+        assert_eq!(
+            ps,
+            exe.parent()
+                .unwrap()
+                .join(r"WindowsPowerShell\v1.0\powershell.exe")
+        );
+        assert_eq!(system32("WindowsPowerShell/v1.0/powershell.exe"), ps);
         for name in [
             "",
             ".",
             "..",
             "../cmd.exe",
-            "sub\\cmd.exe",
+            "sub\\..\\cmd.exe",
+            r"\cmd.exe",
+            "/cmd.exe",
+            r"\\server\share\cmd.exe",
+            "cmd.exe:stream",
+            r"C:cmd.exe",
             "C:\\cmd.exe",
             "cmd.exe\0",
         ] {
-            assert!(system32(name).as_os_str().is_empty());
+            let path = system32(name);
+            assert!(path.as_os_str().is_empty());
+            assert_eq!(
+                run(&path, &[], Duration::from_secs(1), &Cancel::new())
+                    .err()
+                    .unwrap(),
+                "Failed to start process: "
+            );
         }
     }
 
