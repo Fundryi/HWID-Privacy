@@ -1,6 +1,6 @@
 //! Owned by WP-07: runtime-loaded NVIDIA APIs.
 
-use super::{Error, Result, dll, process, wide};
+use super::{Error, Result, dll, process, record, wide};
 use std::{
     ffi::{CStr, c_char, c_void},
     path::{Path, PathBuf},
@@ -100,7 +100,7 @@ impl Drop for VendorLibrary {
         if let Self::Standard(module) = self {
             // SAFETY: This is the sole module reference acquired by our loader.
             if let Err(error) = unsafe { FreeLibrary(*module) } {
-                eprintln!("{}", Error::from_win("FreeLibrary", error));
+                record(Error::from_win("FreeLibrary", error));
             }
         }
     }
@@ -137,7 +137,7 @@ impl Session<'_> {
 impl Drop for Session<'_> {
     fn drop(&mut self) {
         if let Err(error) = self.finish() {
-            eprintln!("{error}");
+            record(error);
         }
     }
 }

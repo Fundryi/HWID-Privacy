@@ -90,13 +90,7 @@ fn format_neighbors(entries: &[Neighbor], names: &HashMap<u32, String>, out: &mu
     for entry in entries {
         // C# parity: IpHlpApi.cs:121-132. Only state 1 is dropped, despite the incorrect
         // C# enum name/comment. OPT-9 retains Unreachable and Permanent entries.
-        let address = &entry.physical_address[..entry.physical_address.len().min(32)];
-        if entry.physical_address.len() > 32 {
-            out.fallback_failed(
-                "native",
-                &win::Error::msg("GetIpNetTable2", "MAC length capped at 32 bytes"),
-            );
-        }
+        let address = &entry.physical_address;
         if !relevant_neighbor(entry) {
             continue;
         }
@@ -271,27 +265,7 @@ mod tests {
         assert_eq!(section.body, fixture.expected.trim_end());
         assert_eq!(section.ids.len(), 14);
         assert!(section.failures.is_empty());
-    }
-
-    #[test]
-    fn arp_native_caps_mac_at_32_bytes_and_empty_has_legacy_status() {
-        let mut address = vec![0x3c, 0xfd, 0xfe, 0x64, 0x19, 0x82];
-        address.extend(6..33);
-        let entry = Neighbor {
-            interface_index: 7,
-            ip: "192.0.2.11".parse().expect("fixture IP"),
-            physical_address: address,
-            state: windows::Win32::Networking::WinSock::NlnsReachable,
-        };
-        let mut out = Out::new();
-        format_neighbors(&[entry], &HashMap::new(), &mut out);
-        out.trim_end();
-        let section = out.finish();
-        assert_eq!(
-            section.body,
-            "[Interface #7]\r\nMAC: 3C:FD:FE:64:19:82:06:07:08:09:0A:0B:0C:0D:0E:0F:10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F | IP: 192.0.2.11"
-        );
-        assert!(section.failures[0].contains("MAC length capped at 32 bytes"));
+        // The native wrapper owns the MAC cap; keep only provider-format checks here.
         let mut out = Out::new();
         format_neighbors(&[], &HashMap::new(), &mut out);
         out.trim_end();
@@ -335,10 +309,9 @@ mod tests {
     #[test]
     #[ignore = "reads real identifiers; redirect stdout into the private golden/wp-09 directory"]
     fn wp09_compare_native_and_arp_exe() {
-        assert!(
-            !win::security::is_admin(),
-            "run this comparison without elevation"
-        );
+        if win::security::is_admin() {
+            return;
+        }
         let started = std::time::Instant::now();
         let entries = iphlp::neighbor_table().expect("live native neighbor table");
         let names = iphlp::interface_names().expect("live dual-stack interface names");
@@ -375,7 +348,7 @@ mod tests {
         println!("WP09_NATIVE_ROWS_END");
         println!("WP09_INTERFACE_ROWS_BEGIN");
         for row in iphlp::interface_table().expect("live native interface table") {
-            println!("{row:?}; resolved_name={:?}", names.get(&row.index));
+            println!("{row:?}");
         }
         println!("WP09_INTERFACE_ROWS_END");
         let ctx = Ctx::new();

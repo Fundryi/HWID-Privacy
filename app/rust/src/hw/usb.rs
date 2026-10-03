@@ -1,11 +1,14 @@
 //! Present USB devnodes with the legacy instance-tail serial filter.
 
 use crate::{
-    hw::{Ctx, first_ok},
+    hw::Ctx,
     report::Out,
     win::{self, setupapi::DevInfoSet},
 };
-use windows::Win32::Devices::DeviceAndDriverInstallation::{SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME};
+use windows::Win32::{
+    Devices::DeviceAndDriverInstallation::{SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME},
+    Foundation::{ERROR_INVALID_DATA, ERROR_NOT_FOUND},
+};
 
 /// Collects this hardware section through the shared output builder.
 pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
@@ -17,26 +20,36 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             let instance_id = match device.instance_id() {
                 Ok(id) => id,
                 Err(error) => {
-                    out.fallback_failed("SetupAPI instance ID", &error)
-                        .info("Error", &error.to_string());
+                    // The unreadable devnode may not be USB; keep it diagnostic-only.
+                    out.fallback_failed("SetupAPI instance ID", &error);
                     continue;
                 }
             };
             let Some(serial) = serial_from_instance_id(&instance_id) else {
                 continue;
             };
-            let friendly = || device.property_string(SPDRP_FRIENDLYNAME);
-            let description = || device.property_string(SPDRP_DEVICEDESC);
-            let name = match first_ok(
-                out,
-                "USB name",
-                &[
-                    ("SetupAPI FRIENDLYNAME", &friendly),
-                    ("SetupAPI DEVICEDESC", &description),
-                ],
-            ) {
+            let name = match device.property_string(SPDRP_FRIENDLYNAME) {
                 Ok(name) => name,
-                Err(error) => error.to_string(),
+                Err(error) => {
+                    // Unset friendly names are normal; the description supplies the name.
+                    if !matches!(error.code, code if code == ERROR_INVALID_DATA.0 || code == ERROR_NOT_FOUND.0)
+                    {
+                        out.fallback_failed("SetupAPI FRIENDLYNAME", &error);
+                    }
+                    match device.property_string(SPDRP_DEVICEDESC) {
+                        Ok(name) => name,
+                        Err(error)
+                            if error.code == ERROR_INVALID_DATA.0
+                                || error.code == ERROR_NOT_FOUND.0 =>
+                        {
+                            String::new()
+                        }
+                        Err(error) => {
+                            out.fallback_failed("SetupAPI DEVICEDESC", &error);
+                            error.to_string()
+                        }
+                    }
+                }
             };
             append_device(out, &mut first, &name, serial);
         }
@@ -48,7 +61,6 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             .info("Error", "Unable to retrieve USB information")
             .info("Error", &error.to_string());
     }
-    out.source("native SetupAPI");
     Ok(())
 }
 

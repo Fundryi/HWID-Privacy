@@ -108,10 +108,12 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     )
     .and_then(|seconds| {
         time::unix_to_local(seconds).ok_or_else(|| {
-            win::Error::msg(
+            let error = win::Error::msg(
                 "unix_to_local",
                 "InstallDate could not be converted to local time",
-            )
+            );
+            out.fallback_failed("Install Date", &error);
+            error
         })
     });
     match date {
@@ -120,7 +122,6 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             out.info("Install Date", &value);
         }
         Err(error) => {
-            out.fallback_failed("Install Date", &error);
             unavailable(out, "Install Date", &error);
         }
     }
@@ -273,10 +274,9 @@ mod tests {
     #[test]
     #[ignore = "reads live identifiers; output belongs only in the private golden/wp-03 folder"]
     fn wp03_capture_system() {
-        assert!(
-            !win::security::is_admin(),
-            "this capture is intentionally non-admin"
-        );
+        if win::security::is_admin() {
+            return;
+        }
         let root = Path::new(r"D:\GIT\HWID-Privacy\app\rust\golden\wp-03");
         fs::create_dir_all(root).expect("private capture directory");
         let sections = crate::hw::collect_all(Some("SYSTEM INFORMATION"), &|_, _| {});

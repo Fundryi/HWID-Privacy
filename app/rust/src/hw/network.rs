@@ -121,6 +121,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         sources.push("native");
     }
     for (index, adapter) in adapters.iter().enumerate() {
+        let mut override_error = None;
         let permanent = permanent_mac(adapter.guid.as_deref(), &interfaces, out);
         let overridden = if permanent.is_none() {
             sources.push("registry");
@@ -128,7 +129,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                 Ok(overridden) => overridden,
                 Err(error) => {
                     out.fallback_failed("registry", &error);
-                    out.text(&format!("MAC override lookup: {error}"));
+                    override_error = Some(error);
                     false
                 }
             }
@@ -139,6 +140,9 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             .and_then(|map| map.get(&adapter.pnp_device_id.to_uppercase()))
             .map(String::as_str);
         append_adapter(adapter, hardware_id, permanent.as_deref(), overridden, out);
+        if let Some(error) = override_error {
+            out.text(&format!("MAC override lookup: {error}"));
+        }
         // C# parity: NetworkInfo.cs:139-143. No trailing item separator.
         if index + 1 < adapters.len() {
             out.separator();
@@ -166,7 +170,13 @@ fn permanent_mac(guid: Option<&str>, rows: &[Interface], out: &mut Out) -> Optio
         }
     };
     let mut matches = rows.iter().filter(|row| row.guid == guid);
-    let row = matches.next()?;
+    let Some(row) = matches.next() else {
+        out.fallback_failed(
+            "native",
+            &win::Error::msg("GetIfTable2", "no interface row matches WMI GUID"),
+        );
+        return None;
+    };
     if matches.next().is_some() {
         out.fallback_failed(
             "native",
@@ -370,6 +380,11 @@ mod tests {
         row.permanent_physical_address[..6].copy_from_slice(&[0x3c, 0xfd, 0xfe, 0x64, 0x19, 0x82]);
         let id = "{6eba2c67-791a-4cbd-bfaa-4b9bbfc438ad}";
         let mut out = Out::new();
+        assert!(permanent_mac(Some(id), &[], &mut out).is_none());
+        let missing = out.finish();
+        assert!(missing.body.is_empty());
+        assert!(missing.failures[0].contains("no interface row matches WMI GUID"));
+        let mut out = Out::new();
         assert!(permanent_mac(Some(id), &[row.clone(), row.clone()], &mut out).is_none());
         assert!(out.finish().failures[0].contains("ambiguous interface GUID"));
         row.permanent_physical_address = [0; 32];
@@ -379,10 +394,9 @@ mod tests {
     #[test]
     #[ignore = "reads real identifiers; redirect stdout into the private golden/wp-09 directory"]
     fn wp09_capture_network_and_arp() {
-        assert!(
-            !win::security::is_admin(),
-            "run this capture without elevation"
-        );
+        if win::security::is_admin() {
+            return;
+        }
         let ctx = Ctx::new();
         let sections: Vec<_> = crate::hw::PROVIDERS
             .iter()

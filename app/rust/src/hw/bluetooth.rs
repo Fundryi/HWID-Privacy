@@ -5,6 +5,7 @@ use win::wmi::{self, Namespace};
 
 /// Collects this hardware section through the shared output builder.
 pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
+    let mut unresolved = Vec::new();
     match win::bluetooth::radios() {
         Ok(scan) => {
             for error in &scan.failures {
@@ -26,17 +27,22 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                 }
                 return Ok(());
             }
+            unresolved.extend(
+                scan.failures
+                    .into_iter()
+                    .filter(|error| error.op != "BluetoothFindRadioClose"),
+            );
         }
         Err(error) => {
             out.fallback_failed("native Bluetooth radio API", &error);
+            unresolved.push(error);
         }
     }
-    legacy(out)
+    legacy(out, unresolved)
 }
 
-fn legacy(out: &mut Out) -> Result<(), win::Error> {
+fn legacy(out: &mut Out, mut unresolved: Vec<win::Error>) -> Result<(), win::Error> {
     let mut adapters = Vec::new();
-    let mut unresolved = Vec::new();
     // C# parity: Hardware/BluetoothInfo.cs:24-47. Keep this exact USB-name query.
     match wmi::query(
         Namespace::Cimv2,
@@ -245,7 +251,7 @@ mod tests {
         )
         .expect("private USB source evidence");
         let mut fallback = Out::new();
-        legacy(&mut fallback).expect("read-only legacy Bluetooth fallback");
+        legacy(&mut fallback, Vec::new()).expect("read-only legacy Bluetooth fallback");
         fs::write(directory.join("legacy-report.txt"), fallback.finish().body)
             .expect("private legacy fallback report");
     }

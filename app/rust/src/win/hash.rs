@@ -1,6 +1,6 @@
 //! Owned by WP-13: BCrypt SHA-256 hashing.
 
-use super::{Error, Result};
+use super::{Error, Result, record, wide};
 use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom},
@@ -8,15 +8,18 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::NTSTATUS,
+        Foundation::{NTSTATUS, RtlNtStatusToDosError},
         Security::Cryptography::{
             BCRYPT_ALG_HANDLE, BCRYPT_HASH_HANDLE, BCRYPT_OPEN_ALGORITHM_PROVIDER_FLAGS,
             BCRYPT_SHA256_ALGORITHM, BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptCloseAlgorithmProvider,
             BCryptCreateHash, BCryptDestroyHash, BCryptFinishHash, BCryptGenRandom, BCryptHashData,
             BCryptOpenAlgorithmProvider,
         },
+        System::Diagnostics::Debug::{
+            FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS, FormatMessageW,
+        },
     },
-    core::{HRESULT, PCWSTR},
+    core::{PCWSTR, PWSTR},
 };
 
 struct Algorithm(BCRYPT_ALG_HANDLE);
@@ -27,7 +30,7 @@ impl Drop for Algorithm {
         if let Err(error) = status("BCryptCloseAlgorithmProvider", unsafe {
             BCryptCloseAlgorithmProvider(self.0, 0)
         }) {
-            eprintln!("{error}");
+            record(error);
         }
     }
 }
@@ -86,7 +89,7 @@ impl Drop for Hash {
         if let Err(error) = status("BCryptDestroyHash", unsafe {
             BCryptDestroyHash(self.handle)
         }) {
-            eprintln!("{error}");
+            record(error);
         }
     }
 }
@@ -95,10 +98,31 @@ fn status(op: &'static str, result: NTSTATUS) -> Result<()> {
     if result.0 >= 0 {
         Ok(())
     } else {
+        // SAFETY: The translator accepts any NTSTATUS and returns its Win32 message code.
+        let code = unsafe { RtlNtStatusToDosError(result) };
+        let mut buffer = [0_u16; 2048];
+        // SAFETY: buffer is writable for the advertised UTF-16 length; no inserts are used.
+        let count = unsafe {
+            FormatMessageW(
+                FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                None,
+                code,
+                0,
+                PWSTR(buffer.as_mut_ptr()),
+                buffer.len() as u32,
+                None,
+            )
+        };
         Err(Error {
             op,
             code: result.0 as u32,
-            detail: windows::core::Error::from_hresult(HRESULT(result.0)).message(),
+            detail: if count == 0 {
+                "No system error description available.".to_owned()
+            } else {
+                wide::from_wide(&buffer[..count as usize])
+                    .trim_end()
+                    .to_owned()
+            },
         })
     }
 }
@@ -423,6 +447,13 @@ mod tests {
 
     #[test]
     fn cng_sha256_known_vectors() {
+        let error = status("BCryptHashData", NTSTATUS(0xC000_000D_u32 as i32))
+            .expect_err("STATUS_INVALID_PARAMETER is a failure");
+        assert_eq!(error.code, 0xC000_000D);
+        // Query the OS's localized Win32 counterpart, independently of the NTSTATUS formatter.
+        let expected =
+            windows::core::Error::from_hresult(windows::core::HRESULT::from_win32(87)).message();
+        assert_eq!(error.detail, expected.trim_end());
         assert_eq!(
             sha256_bytes(b"").expect("CNG"),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

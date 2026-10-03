@@ -41,9 +41,15 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
 }
 
 fn write_processor(out: &mut Out, name: &str, processor_id: &str, serial: Option<&str>) {
-    out.info("Name", name).id("ProcessorId", processor_id);
+    out.info("Name", name).info("ProcessorId", processor_id);
+    if !processor_id.is_empty() {
+        out.id_value(processor_id);
+    }
     if let Some(serial) = serial {
-        out.id("SerialNumber", serial);
+        out.info("SerialNumber", serial);
+        if !serial.is_empty() {
+            out.id_value(serial);
+        }
     }
 }
 
@@ -158,12 +164,16 @@ mod tests {
             [
                 "00AF0764C1EBFA29",
                 "00AF0764C1EBFA2A",
-                "",
                 "00AF0764C1EBFA2B",
                 "To Be Filled By O.E.M.",
                 "D48E7F156B3C2A91",
             ]
         );
+        let mut out = Out::new();
+        write_processor(&mut out, "", "", Some(""));
+        let empty = out.finish();
+        assert_eq!(empty.body, "Name: \r\nProcessorId: \r\nSerialNumber: \r\n");
+        assert!(empty.ids.is_empty());
     }
 
     #[test]

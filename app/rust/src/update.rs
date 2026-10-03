@@ -252,7 +252,7 @@ impl Drop for ErrorMarker {
             && let Err(error) = fs::remove_file(&self.path)
             && error.kind() != std::io::ErrorKind::NotFound
         {
-            eprintln!("{}", hash::io_error("Delete update error", error));
+            win::record(hash::io_error("Delete update error", error));
         }
     }
 }
