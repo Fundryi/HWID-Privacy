@@ -1,9 +1,12 @@
 import { defineConfig } from 'vitepress'
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repo = 'https://github.com/Fundryi/HWID-Privacy'
 const gettingStarted = '/guides/getting-started/getting-started'
+// srcDir is the repo root, so there is no public/ folder; the logo travels as a data URI
+const logo = `data:image/svg+xml;base64,${fs.readFileSync(new URL('./theme/logo.svg', import.meta.url)).toString('base64')}`
 
 // [C] [A] [CC] [S] evidence grades used across the guides
 const grades: Record<string, [type: string, title: string]> = {
@@ -28,6 +31,11 @@ export default defineConfig({
   rewrites: { 'site/home.md': 'index.md', 'README.md': 'overview.md' },
   appearance: 'dark', // matches the app
   lastUpdated: true,
+  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: logo }]],
+  // Landing page hero shows the logo
+  transformPageData(page) {
+    if (page.frontmatter.layout === 'home') page.frontmatter.hero.image = { src: logo, alt: '' }
+  },
   // Pages live above site/, so point their imports at site/node_modules
   vite: { resolve: { alias: { vue: fileURLToPath(new URL('../node_modules/vue', import.meta.url)) } } },
 
@@ -94,6 +102,7 @@ export default defineConfig({
   },
 
   themeConfig: {
+    logo,
     search: { provider: 'local', options: { detailedView: true } },
     nav: [
       { text: 'Get started', link: gettingStarted },

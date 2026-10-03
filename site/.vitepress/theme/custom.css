@@ -5,17 +5,55 @@
   max-width: 75ch;
 }
 
-/* Wide tables scroll sideways; long tables scroll inside with a sticky header */
-.vp-doc table {
-  max-height: 70vh;
-  overflow: auto;
+/* Brand: the app's accent blue (ThemeColors.PrimaryButton #0078D7).
+   Text uses a lighter tint so links stay readable on the dark background. */
+:root {
+  --vp-c-brand-1: #0067b8;
+  --vp-c-brand-2: #0078d7;
+  --vp-c-brand-3: #0078d7;
+  --vp-c-brand-soft: rgba(0, 120, 215, 0.14);
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #5cb8ff 20%, #0078d7);
+  --vp-home-hero-image-background-image: linear-gradient(-45deg, #0078d7 50%, #5cb8ff 50%);
+  --vp-home-hero-image-filter: blur(64px);
 }
-.vp-doc th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background-color: var(--vp-c-bg-alt);
+.dark {
+  --vp-c-brand-1: #4ba8f5;
+  --vp-c-brand-2: #2b93e8;
+  --vp-c-brand-3: #0078d7;
+  --vp-c-brand-soft: rgba(43, 147, 232, 0.16);
 }
+.VPHero .image-src { max-width: 220px; }
+.VPHero .image-bg { opacity: 0.45; }
+
+/* Wider doc column, so tables get room. Prose keeps the 75ch limit above. */
+:root .VPDoc.has-aside .content-container { max-width: 900px; }
+
+/* Long outline titles wrap instead of being cut off */
+:root .VPDocAsideOutline .outline-link {
+  white-space: normal;
+  line-height: 1.4;
+  padding: 5px 0;
+}
+
+/* Tables: no inner scroll box, only sideways scroll when a table is too wide */
+.vp-doc table { font-size: 14px; }
+.vp-doc th { background-color: var(--vp-c-bg-alt); }
+.vp-doc td, .vp-doc th { padding: 8px 12px; }
+
+/* Risk and difficulty chips on the landing page cards */
+.VPFeature .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.VPFeature .chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--vp-c-text-2);
+  background-color: var(--vp-c-default-soft);
+}
+.VPFeature .chip.low { color: var(--vp-c-green-1); background-color: var(--vp-c-green-soft); }
+.VPFeature .chip.medium { color: var(--vp-c-yellow-1); background-color: var(--vp-c-yellow-soft); }
+.VPFeature .chip.high { color: var(--vp-c-red-1); background-color: var(--vp-c-red-soft); }
 
 /* Clearer callouts: stronger tint plus a colored edge */
 :root {
@@ -26,6 +64,9 @@
   --vp-custom-block-caution-bg: var(--vp-c-red-soft);
 }
 .vp-doc .custom-block { border-left: 4px solid; }
+/* The box already sets the width; let its text fill it */
+.vp-doc .custom-block p,
+.vp-doc .custom-block li { max-width: none; }
 .vp-doc .custom-block.note { border-left-color: var(--vp-c-gray-1); }
 .vp-doc .custom-block.info { border-left-color: var(--vp-c-indigo-1); }
 .vp-doc .custom-block.tip { border-left-color: var(--vp-c-green-1); }
