@@ -1,13 +1,17 @@
 # NVRAM and EFI Variable Privacy Guide
 
+> [!NOTE]
+> **TL;DR:** Read-only inspection of the EFI variables your firmware stores. Writing or deleting variables can change identity-relevant data, but no generic write is supported here.
+> Who reads it: firmware itself, Windows through firmware-variable APIs, and anything that reads the UEFI variable store.
+> **Status:** read-only inspection verified against cited sources **[A]**. Writing or deleting EFI variables is untested. **[S]**
+> **Risk:** deleting the wrong variable can remove boot entries, break Secure Boot, trigger BitLocker recovery, or leave firmware unable to POST.
+
 > [!CAUTION]
-> EFI variables are firmware configuration data. Deleting the wrong variable can remove boot entries, break Secure Boot, trigger BitLocker recovery, or leave firmware unable to POST. **[A]** The Linux kernel makes many non-standard variables immutable because real firmware has failed to POST after their removal. **[A]**
+> EFI variables are firmware configuration data. The Linux kernel makes many non-standard variables immutable because real firmware has failed to POST after their removal. **[A]**
 
 This guide separates standard boot variables from identifier-like, vendor-specific variables. It provides a read-only inspection workflow. It does not provide a mass-deletion recipe.
 
-Evidence grades used here: **[C]** means confirmed first-hand by a named user with details. **[A]** means verified against a cited primary source. **[CC]** means supported by multiple independent community reports. **[S]** means a single or otherwise unverified claim.
-
-Writing or deleting EFI variables is untested.
+Evidence grades appear inline. See [How to read these guides](../getting-started/getting-started.md#how-to-read-these-guides).
 
 ## Table of contents
 
@@ -75,7 +79,7 @@ No third-party EFI-variable editor is required for the inspection workflow.
 
 ## Backup and recovery preparation
 
-1. Save BitLocker recovery keys. If you plan any firmware write rather than the read-only inspection below, suspend BitLocker first and resume it after the system boots normally. Microsoft documents that firmware and boot-component changes can trigger recovery. **[A]**
+1. Save BitLocker recovery keys. If you plan any firmware write rather than the read-only inspection below, suspend BitLocker first and resume it after the system boots normally. Microsoft documents that firmware and boot-component changes can trigger recovery. **[A]** See the [safety checklist](../getting-started/getting-started.md#safety-checklist).
 2. Record the current boot order in the firmware setup screen.
 3. Prepare the motherboard vendor's stock recovery image and recovery instructions.
 4. Run HWIDChecker and save the **(SM)BIOS**, **MOTHERBOARD**, and **CHASSIS** sections.
@@ -185,8 +189,7 @@ This separates two different evidence sources instead of treating either one as 
 
 ## Troubleshooting
 
-> [!WARNING]
-> The cases marked **[S]** below are diagnostic possibilities. They are not tested recovery procedures.
+The cases marked **[S]** below are diagnostic possibilities. They are not tested recovery procedures.
 
 ### `/sys/firmware/efi` does not exist
 

@@ -1,18 +1,17 @@
 # RAM Identifier Privacy Guide
 
-RAM modules store configuration and manufacturing data in Serial Presence Detect (SPD) non-volatile memory. System firmware presents memory information through SMBIOS Memory Device structures, Type 17. On Windows, `Win32_PhysicalMemory` maps fields such as `SerialNumber` and `PartNumber` from SMBIOS. It is an SMBIOS view, not proof that an application read the SPD device directly. **[A]**
-
-This guide covers DDR4 and DDR5 identity fields, read-only checks, and a conservative external-programmer workflow. The write and recovery procedures have not been tested by this project.
+> [!NOTE]
+> **TL;DR:** RAM modules store a serial number in SPD non-volatile memory. Modules that ship with null serials need no write; otherwise an external programmer can edit the SPD identity fields.
+> Who reads it: firmware builds an SMBIOS Type 17 structure from SPD; Windows exposes it through `Win32_PhysicalMemory`. Fingerprinting stacks read that view.
+> **Status:** field layouts, CRC coverage, and protection model verified against JEDEC, DMTF, and vendor sources **[A]**. The write and recovery procedures have not been tested by this project. **[S]**
+> **Risk:** a bad SPD write can prevent a module from completing memory initialization.
 
 > [!CAUTION]
 > A bad SPD write can prevent a module from completing memory initialization. Wrong organization, timing, voltage, or support-device data can also cause instability. Do not write to your only working module. Keep a verified full binary backup and a compatible external programmer before changing anything.
 
-Evidence grades used here:
+Evidence grades appear inline. See [How to read these guides](../getting-started/getting-started.md#how-to-read-these-guides).
 
-- **[C]** confirmed first-hand by a named user with hardware and procedure details
-- **[A]** verified against a cited primary source
-- **[CC]** supported by consistent reports from several independent users
-- **[S]** a single unverified claim or an untested procedure
+RAM modules store configuration and manufacturing data in Serial Presence Detect (SPD) non-volatile memory. System firmware presents memory information through SMBIOS Memory Device structures, Type 17. On Windows, `Win32_PhysicalMemory` maps fields such as `SerialNumber` and `PartNumber` from SMBIOS. It is an SMBIOS view, not proof that an application read the SPD device directly. **[A]**
 
 ## Table of contents
 
@@ -230,14 +229,13 @@ If slot labels are unclear, record the rows, shut down, remove one module, and c
 
 ## External-programmer procedure
 
-> [!WARNING]
-> Every numbered step in this section is **[S]**. This procedure combines primary device documentation with an untested external workflow. Stop if the programmer's official instructions differ.
+**Status:** untested by this project. **[S]** This procedure combines primary device documentation with an untested external workflow. Stop if the programmer's official instructions differ.
 
-### 1. Isolate one module **[S]**
+### 1. Isolate one module
 
 Shut down, disconnect external power, discharge residual power as the system manual directs, and use ESD protection. Remove only the target module. Keep a known-good module untouched.
 
-### 2. Confirm exact support **[S]**
+### 2. Confirm exact support
 
 Before connecting the module, confirm:
 
@@ -251,7 +249,7 @@ Before connecting the module, confirm:
 
 Use the supplied socket or documented adapter. If the programmer uses USB, use a data-capable cable. Do not connect the module if the manual is ambiguous.
 
-### 3. Read twice and back up **[S]**
+### 3. Read twice and back up
 
 1. Read the complete SPD address space.
 2. Save it as `module-a-original-read-1.bin`.
@@ -266,17 +264,17 @@ Get-FileHash .\module-a-original-read-2.bin -Algorithm SHA256
 
 The lengths and hashes must match. Keep one copy offline. If they differ, stop.
 
-### 4. Decode the untouched image **[S]**
+### 4. Decode the untouched image
 
 Confirm that the decoded generation, capacity, organization, manufacturer, part number, and serial are plausible for the physical module. Verify the existing CRC fields before editing. A decoder that identifies the wrong generation or omits blocks is not safe to use.
 
-### 5. Record protection before clearing it **[S]**
+### 5. Record protection before clearing it
 
 For DDR4, read the protection status for all four 128-byte blocks. Only block 2 contains the serial. If block 2 is already writable, do not clear all protection. If the exact device requires `VHV` to clear protection, use only a programmer that documents that operation.
 
 For DDR5, record `MR12` and `MR13`. Only `MR13` bit 0 controls block 8. If it is set, use documented offline-tester mode. Do not change unrelated protection bits.
 
-### 6. Change only the serial **[S]**
+### 6. Change only the serial
 
 Preserve all other fields, including:
 
@@ -292,7 +290,7 @@ The serial format is manufacturer-defined. For a four-byte hexadecimal display, 
 
 Do not impersonate another product. If the editor cannot isolate bytes 325-328 on DDR4 or 517-520 on DDR5, stop.
 
-### 7. Keep CRC bytes unchanged **[S]**
+### 7. Keep CRC bytes unchanged
 
 A serial-only edit is outside the defined CRC coverage on both generations:
 
@@ -301,7 +299,7 @@ A serial-only edit is outside the defined CRC coverage on both generations:
 
 If the tool insists on recalculating those fields after only a serial edit, stop and inspect its diff before writing.
 
-### 8. Write once and read back **[S]**
+### 8. Write once and read back
 
 Write the edited image once. Immediately read the full device into a new file. Use the programmer's verify function and compare the original, intended image, and readback.
 
@@ -312,11 +310,11 @@ For the narrow procedure in this guide, the only content differences should be:
 
 Any other changed byte means the write was broader than intended. Restore the original image before installing the module.
 
-### 9. Restore the original protection state **[S]**
+### 9. Restore the original protection state
 
 Restore each reversible protection bit to its recorded state. Read the protection map again. Do not introduce a new permanent lock or protect an area that was originally writable.
 
-### 10. Boot with a recovery path **[S]**
+### 10. Boot with a recovery path
 
 Install the edited module only after a full readback matches the intended image. Keep the programmer and original backup available. Use default firmware memory settings for the first boot.
 

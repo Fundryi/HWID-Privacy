@@ -1,16 +1,26 @@
 # Getting Started: Hardware Identity Privacy Fundamentals
 
+> [!NOTE]
+> This page is the map for the whole project: what an HWID is, which parts expose identity, the order of work, and how to prove a change.
+> The page itself changes no identifier. The linked part guides do that.
+> Risk lives in the part guides: firmware and device writes can brick hardware or void warranties.
+> This project covers privacy research, inventory validation, and education. It does not promise anonymity or unlinkability.
+> A changed value in one tool proves only that the displayed value changed.
+
 Hardware identity is not one number. A Windows PC exposes a collection of identifiers from component firmware, platform firmware, the operating system, file systems, drivers, and the local network. Privacy research starts by measuring those layers separately. **[A]**
 
-> [!NOTE]
-> This guide is for hardware privacy research, inventory validation, and education. It does not promise anonymity or unlinkability. A changed value in one tool proves only that the displayed value changed.
+## How to read these guides
 
-Evidence grades used here:
+Every guide states what a change does, what it bypasses, who reads the identifier, and how to verify the result.
+
+Evidence grades appear inline next to claims:
 
 - **[C]** confirmed first hand by a named user with hardware and procedure details.
 - **[A]** verified against a cited specification, vendor document, Microsoft document, or repository source.
 - **[CC]** supported by multiple independent community reports.
 - **[S]** a single claim or a procedure that has not been independently verified.
+
+Each procedure carries a status line naming who tested it. Risk boxes mark permanent or destructive operations. Treat anything graded **[S]** as a research lead, not a procedure.
 
 ## Table of Contents
 
@@ -19,10 +29,11 @@ Evidence grades used here:
 - [Persistent and software-level identifiers](#persistent-and-software-level-identifiers)
 - [Plan the work in the right order](#plan-the-work-in-the-right-order)
 - [Device restrictions](#device-restrictions)
-- [Clean Windows reinstall checklist](#clean-windows-reinstall-checklist)
-- [Take before and after snapshots](#take-before-and-after-snapshots)
-- [Known-spoofable hardware](#known-spoofable-hardware)
 - [Safety checklist](#safety-checklist)
+- [Take before and after snapshots](#take-before-and-after-snapshots)
+- [Clean Windows reinstall checklist](#clean-windows-reinstall-checklist)
+- [Known-spoofable hardware](#known-spoofable-hardware)
+- [Reported anti-cheat status](#reported-anti-cheat-status)
 - [Sources](#sources)
 
 ## What an HWID is
@@ -129,6 +140,49 @@ Use these rules:
 > [!WARNING]
 > Firmware menus, removable modules, and write protections are model-specific. The actions above are decision rules, not universal procedures. If the exact board or device manual does not confirm the action, treat it as **[S]** and stop before changing hardware.
 
+## Safety checklist
+
+Every part guide links back here. Apply this list before any firmware, SPD, EDID, TPM, storage, or network write.
+
+- Back up important files and verify the backup from another device.
+- Save every BitLocker recovery key before TPM, Secure Boot, boot-order, storage, or firmware work. Firmware and TPM changes can trigger recovery. **[A]** [Microsoft BitLocker recovery overview](https://learn.microsoft.com/en-us/windows/security/operating-system-security/data-protection/bitlocker/recovery-overview)
+- If a firmware or TPM change is planned, suspend BitLocker with Microsoft's documented procedure and resume it after the machine boots normally. **[A]** [Microsoft: suspend BitLocker for non-Microsoft firmware updates](https://learn.microsoft.com/en-us/troubleshoot/windows-client/windows-security/suspend-bitlocker-protection-non-microsoft-updates)
+- Record original identifiers and firmware versions before writing anything.
+- Use only firmware for the exact model and hardware revision. Download a stock recovery image only from the board or device vendor. Boards revision 1.x and 2.x of the same model can need different files. Verify vendor checksums or signatures when published.
+- Read the exact BIOS recovery procedure before flashing. A ROM dump is not automatically a usable recovery image.
+- Use stable power. Do not interrupt firmware writes.
+- Disconnect non-target storage before using any mass-production or erase tool.
+- Change one layer at a time. Reboot, rescan, and compare before moving on.
+- Stop on an unexpected model, capacity, controller, NAND, firmware, certificate, or write-protection result.
+- Do not disable Secure Boot, TPM, BitLocker, virtualization security, or driver-signing protections as a generic first step. Change a security control only when the exact documented procedure requires it, and restore it afterward.
+- Keep before/after exports private. They are an identity inventory.
+
+## Take before and after snapshots
+
+### HWIDChecker.exe
+
+1. Run [HWIDChecker.exe](/HWIDChecker.exe). The current application manifest requests administrator rights at launch. **[A]**
+2. Wait for all 14 sections to finish. A provider error appears inside that section rather than cancelling the whole scan.
+3. Select **Export**. The app writes a timestamped `HWID-EXPORT-*.txt` file beside the executable and shows the full path. Label a private copy `before` with the date, hardware configuration, and firmware versions.
+4. Make one approved change, then perform the reboot or full power cycle required by the dedicated guide.
+5. Run the same version of HWIDChecker again and export an `after` copy.
+6. Compare the relevant fields and the full output. Check that an intended change persisted and that unrelated manufacturer, model, capacity, firmware, or certificate fields did not change unexpectedly.
+
+For firmware-level changes, take three captures: before the change, immediately after the first reboot, and again after a full shutdown and cold boot. A value that returns after a cold boot was not proven persistent.
+
+For storage comparisons, record the connection path (native M.2, direct SATA, USB bridge, or RAID controller) and use the same path for both captures. A transport change can change what Windows is able to query. **[A]**
+
+> [!CAUTION]
+> The exports can contain a Windows product key, stable hardware identifiers, TPM certificate data, and network addresses. Keep them private. Redact identifiers before sharing excerpts.
+
+Do not use **Clean Devices**, **Clean Logs**, or the updater as part of measurement. Those paths change system state and are not required for a before/after comparison.
+
+### Batch-script fallback
+
+Use [the Windows 10 script](/app/scripts/hwid-check-w10.bat) or [the Windows 11 script](/app/scripts/hwid-check-w11.bat) when the GUI is unavailable. They display and can export 12 categories: disk, CPU, system, motherboard, BIOS, RAM, TPM, GPU, USB, monitor, NIC, and ARP data. Pressing a key at the prompt writes a timestamped `HWID_CHECK_EXPORT_*.txt` beside the script. **[A]**
+
+The batch scripts are not equivalent to the GUI. They omit the dedicated **CHASSIS** and **BLUETOOTH ADAPTERS** sections, do not collect MachineGuid or the hardware-profile GUID, use legacy WMI/WMIC paths in their export routines, and expose fewer low-level storage and TPM details. Use one method consistently for both snapshots.
+
 ## Clean Windows reinstall checklist
 
 A clean install removes personal files, apps, settings, and manufacturer customizations. Microsoft calls it an advanced option. **[A]** [Microsoft clean-install instructions](https://support.microsoft.com/en-us/windows/deployment/install-upgrade/reinstall-windows-with-the-installation-media)
@@ -163,67 +217,39 @@ A clean install removes personal files, apps, settings, and manufacturer customi
 - Reconnect one device at a time. Rescan after each connection when you need to attribute a new serial or PnP instance.
 - Re-enable security features that were temporarily changed, when the exact hardware guide and recovery state say it is safe. Confirm BitLocker protection is in the intended state.
 
-## Take before and after snapshots
-
-### HWIDChecker.exe
-
-1. Run [HWIDChecker.exe](/HWIDChecker.exe). The current application manifest requests administrator rights at launch. **[A]**
-2. Wait for all 14 sections to finish. A provider error appears inside that section rather than cancelling the whole scan.
-3. Select **Export**. The app writes a timestamped `HWID-EXPORT-*.txt` file beside the executable and shows the full path. Label a private copy `before` with the date, hardware configuration, and firmware versions.
-4. Make one approved change, then perform the reboot or full power cycle required by the dedicated guide.
-5. Run the same version of HWIDChecker again and export an `after` copy.
-6. Compare the relevant fields and the full output. Check that an intended change persisted and that unrelated manufacturer, model, capacity, firmware, or certificate fields did not change unexpectedly.
-
-> [!CAUTION]
-> The exports can contain a Windows product key, stable hardware identifiers, TPM certificate data, and network addresses. Keep them private. Redact identifiers before sharing excerpts.
-
-Do not use **Clean Devices**, **Clean Logs**, or the updater as part of measurement. Those paths change system state and are not required for a before/after comparison.
-
-### Batch-script fallback
-
-Use [the Windows 10 script](/app/scripts/hwid-check-w10.bat) or [the Windows 11 script](/app/scripts/hwid-check-w11.bat) when the GUI is unavailable. They display and can export 12 categories: disk, CPU, system, motherboard, BIOS, RAM, TPM, GPU, USB, monitor, NIC, and ARP data. Pressing a key at the prompt writes a timestamped `HWID_CHECK_EXPORT_*.txt` beside the script. **[A]**
-
-The batch scripts are not equivalent to the GUI. They omit the dedicated **CHASSIS** and **BLUETOOTH ADAPTERS** sections, do not collect MachineGuid or the hardware-profile GUID, use legacy WMI/WMIC paths in their export routines, and expose fewer low-level storage and TPM details. Use one method consistently for both snapshots.
-
 ## Known-spoofable hardware
 
-This table groups hardware by controller-level categories. It does not recommend a seller or promise that every retail device with the same name contains the same controller.
+This table lists one row per part guide. It does not recommend a seller or promise that every retail device with the same name contains the same controller.
 
 > [!WARNING]
-> Rows marked **[S]** are research leads, not verified procedures. Do not buy hardware or run a write tool from this table alone. Open the linked guide, verify the exact controller, board revision, firmware, NAND or EEPROM, backup path, and recovery method first.
+> Entries marked **[S]** are research leads, not verified procedures. Do not buy hardware or run a write tool from this table alone. Open the linked guide, verify the exact controller, board revision, firmware, NAND or EEPROM, backup path, and recovery method first.
 
-| Component | Controller or implementation | What can be changed or substituted | Evidence | Guide |
-|---|---|---|---|---|
-| Motherboard | AMI Aptio platform with firmware that permits SMBIOS writes | Supported Type 1 system, Type 2 baseboard, and Type 3 chassis fields | Field definitions **[A]**; exact write support and switches **[S]** | [Motherboard: what changes](../motherboard-spoofing/motherboard-spoofing.md#what-this-changes) |
-| NVMe SSD | Maxio MAP1202 on the project owner's tested hardware | Controller-reported model, serial, and firmware fields in the MP-tool workflow | Project-owner test **[C]**; not independently repeated | [SSD: M.2 workflow](../ssd-spoofing/ssd-spoofing.md#m2-ssd-spoofing) |
-| NVMe SSD | Silicon Motion SM2263XT | Controller serial and, where the exact firmware supports it, namespace EUI-related fields | Controller characteristics **[A]**; write workflow **[S]** | [SSD: SM2263XT notes](../ssd-spoofing/ssd-spoofing.md#silicon-motion-sm2263xt-notes) |
-| USB NVMe enclosure | Realtek RTL9210B bridge | USB/SCSI bridge strings and bridge serial. This does not rewrite the SSD's native NVMe identity | Layer distinction **[A]**; bridge behavior **[CC]**; write workflow **[S]** | [SSD: USB bridge identity](../ssd-spoofing/ssd-spoofing.md#usb-nvme-enclosures-and-bridge-serials) |
-| 2.5-inch SATA SSD | Exact YANSEN/KingSpec implementation in the workflow | Controller-reported model, serial, firmware, and optional WWN field | Project-owner test **[C]**; not independently repeated | [SSD: 2.5-inch workflow](../ssd-spoofing/ssd-spoofing.md#normal-25-ssd-spoofing) |
-| Ethernet adapter | NIC and driver that implement NDIS `NetworkAddress` | Current software MAC override. The permanent MAC remains separate | **[A]** | [MAC: Windows override](../mac-spoofing/mac-spoofing.md#windows-networkaddress-override-software-only) |
-| Ethernet adapter | Mellanox ConnectX-3 CX311A / MCX311A-XCAT, exact tested firmware family | Firmware base MAC in the documented workflow | Named hardware test **[C]** | [MAC: ConnectX-3 workflow](../mac-spoofing/mac-spoofing.md#mellanox-connectx-3-cx311a--mcx311a-xcat) |
-| Ethernet or USB NIC | Exact supported Intel, Realtek, or ASIX controller | Controller EEPROM, NVM, OTP, or eFuse MAC where the dedicated guide matches the device | Storage models **[A]**; individual procedures range from **[C]** to **[S]** | [MAC: controller storage](../mac-spoofing/mac-spoofing.md#controller-storage-efuse-eeprom-or-flash) |
-| RAM | Supported DDR4 EE1004 EEPROM or DDR5 SPD5118 hub with a compatible external programmer | Module SPD identity fields, subject to hardware and software write protection | Field layout and protection model **[A]**; write workflow **[S]** | [RAM: external-programmer procedure](../ram-spoofing/ram-spoofing.md#external-programmer-procedure) |
-| Monitor path | Programmable EDID emulator or a display with a documented writable EDID | EDID manufacturer, model, product code, and serial presented downstream | Observable fields **[A]**; write procedure device-specific | [Monitor: change methods](../monitor-spoofing/monitor-spoofing.md#what-this-changes) |
-| TPM | Board-compatible discrete TPM module | Replacing the module substitutes another TPM and its endorsement identity. This is hardware replacement, not a software spoof | Identity model **[A]**; compatibility is board-specific | [TPM: implementation types](../tpm-spoofing/tpm-spoofing.md#tpm-implementation-types) |
-| Platform fTPM | Exact platform and vendor firmware behavior | A standard clear changes state, not the EPS. Some firmware-specific identity-change reports exist, with mixed evidence | Clear semantics **[A]**; platform results range from **[C]** and **[CC]** to **[S]** | [fTPM reset evidence](../resets/ftpm-reset-tutorial.md#before-you-reset) |
-| Router or gateway | Routed isolation router under your control, including supported OpenWrt hardware | Substitutes the first-hop gateway and LAN-side MAC visible in the PC's neighbor table | Routed design **[A]**; exact menu is device-specific | [ARP: what changes](../arp-spoofing/arp-spoofing.md#what-this-changes) |
-| Motherboard UEFI variable store | Vendor-specific NVRAM/EFI-variable implementation | No generic change is supported. Use read-only inventory unless the vendor publishes an exact procedure | Read-only inspection **[A]**; unknown writes **[S]** | [NVRAM: why writes are excluded](../nvram-spoofing/nvram-spoofing.md#why-this-guide-does-not-delete-variables) |
+| Part | What can be changed or substituted | Evidence | Guide |
+|---|---|---|---|
+| Motherboard | Type 1 system, Type 2 baseboard, and Type 3 chassis fields on an AMI Aptio platform with firmware that permits SMBIOS writes | Field definitions **[A]**; exact write support and switches **[S]** | [Motherboard: what changes](../motherboard-spoofing/motherboard-spoofing.md#what-this-changes) |
+| NVRAM / EFI variables | No generic change is supported. Use read-only inventory unless the vendor publishes an exact procedure | Read-only inspection **[A]**; unknown writes **[S]** | [NVRAM: why writes are excluded](../nvram-spoofing/nvram-spoofing.md#why-this-guide-does-not-delete-variables) |
+| Storage | Controller-reported model, serial, and firmware on supported controllers: Maxio MAP1202, Silicon Motion SM2263XT (serial and, where the exact firmware supports it, namespace EUI-related fields), and the YANSEN / KingSpec 2.5-inch workflow (model, serial, firmware, optional WWN). A Realtek RTL9210B USB enclosure can change USB/SCSI bridge strings and the bridge serial; that does not rewrite the SSD's native NVMe identity | MAP1202 and YANSEN / KingSpec: project-owner tests **[C]**, not independently repeated. SM2263XT: controller characteristics **[A]**, write workflow **[S]**. USB bridge: layer distinction **[A]**, bridge behavior **[CC]**, write workflow **[S]** | [SSD: M.2 workflow](../ssd-spoofing/ssd-spoofing.md#m2-ssd-spoofing), [SM2263XT notes](../ssd-spoofing/ssd-spoofing.md#silicon-motion-sm2263xt-notes), [USB bridge identity](../ssd-spoofing/ssd-spoofing.md#usb-nvme-enclosures-and-bridge-serials), [SSD: 2.5-inch workflow](../ssd-spoofing/ssd-spoofing.md#normal-25-ssd-spoofing) |
+| NIC / MAC | Current software MAC override through NDIS `NetworkAddress` (the permanent MAC remains separate); firmware base MAC on the Mellanox ConnectX-3 CX311A / MCX311A-XCAT; controller EEPROM, NVM, OTP, or eFuse MAC where the dedicated guide matches an exact supported Intel, Realtek, or ASIX controller | Override model **[A]**; ConnectX-3 named hardware test **[C]**; storage models **[A]**; individual procedures range from **[C]** to **[S]** | [MAC: Windows override](../mac-spoofing/mac-spoofing.md#windows-networkaddress-override-software-only), [MAC: ConnectX-3 workflow](../mac-spoofing/mac-spoofing.md#mellanox-connectx-3-cx311a--mcx311a-xcat), [MAC: controller storage](../mac-spoofing/mac-spoofing.md#controller-storage-efuse-eeprom-or-flash) |
+| RAM | Module SPD identity fields on a supported DDR4 EE1004 EEPROM or DDR5 SPD5118 hub with a compatible external programmer, subject to hardware and software write protection | Field layout and protection model **[A]**; write workflow **[S]** | [RAM: external-programmer procedure](../ram-spoofing/ram-spoofing.md#external-programmer-procedure) |
+| Monitor | EDID manufacturer, model, product code, and serial presented downstream, through a programmable EDID emulator or a display with a documented writable EDID | Observable fields **[A]**; write procedure device-specific | [Monitor: change methods](../monitor-spoofing/monitor-spoofing.md#what-this-changes) |
+| TPM | dTPM: replacing a board-compatible discrete module substitutes another TPM and its endorsement identity. This is hardware replacement, not a software spoof. fTPM: a standard clear changes state, not the EPS; some firmware-specific identity-change reports exist, with mixed evidence | dTPM identity model **[A]**, compatibility board-specific; fTPM clear semantics **[A]**, platform results range from **[C]** and **[CC]** to **[S]** | [TPM: implementation types](../tpm-spoofing/tpm-spoofing.md#tpm-implementation-types), [fTPM reset evidence](../resets/ftpm-reset-tutorial.md#before-you-reset) |
+| Router or gateway | A routed isolation router under your control, including supported OpenWrt hardware, substitutes the first-hop gateway and LAN-side MAC visible in the PC's neighbor table | Routed design **[A]**; exact menu is device-specific | [ARP: what changes](../arp-spoofing/arp-spoofing.md#what-this-changes) |
 
 AMI publishes Aptio firmware utilities, but public availability of a utility does not prove that an end-user board permits a particular write. **[A]** [AMI Aptio Utilities](https://www.ami.com/resources/aptio-utilities/)
 
-## Safety checklist
+## Reported anti-cheat status
 
-- Back up important files and verify the backup from another device.
-- Save every BitLocker recovery key before TPM, Secure Boot, boot-order, storage, or firmware work. Firmware and TPM changes can trigger recovery. **[A]** [Microsoft BitLocker recovery overview](https://learn.microsoft.com/en-us/windows/security/operating-system-security/data-protection/bitlocker/recovery-overview)
-- Record original identifiers and firmware versions before writing anything.
-- Use only firmware for the exact model and hardware revision. Verify vendor checksums or signatures when published.
-- Read the exact BIOS recovery procedure before flashing. A ROM dump is not automatically a usable recovery image.
-- Use stable power. Do not interrupt firmware writes.
-- Disconnect non-target storage before using any mass-production or erase tool.
-- Change one layer at a time. Reboot, rescan, and compare before moving on.
-- Stop on an unexpected model, capacity, controller, NAND, firmware, certificate, or write-protection result.
-- Do not disable Secure Boot, TPM, BitLocker, virtualization security, or driver-signing protections as a generic first step. Change a security control only when the exact documented procedure requires it, and restore it afterward.
-- Keep before/after exports private. They are an identity inventory.
+These statuses are community-reported. This project has not verified them. Every row is **[S]**. The date is the date of the last reported issue, not a re-test.
+
+| Game(s) | Anti-cheat | Reported status | Last reported issue | Reported requirements |
+|---|---|---|---|---|
+| Rust | EasyAntiCheat | Undetected | 2026-08-16 ([RAID 0](../ssd-spoofing/ssd-spoofing.md#raid-disk-identity-and-volume-identity), [NVRAM](../nvram-spoofing/nvram-spoofing.md)) | dTPM, Secure Boot, IOMMU |
+| Fortnite | EasyAntiCheat | Undetected | 2026-08-16 ([RAID 0](../ssd-spoofing/ssd-spoofing.md#raid-disk-identity-and-volume-identity), [NVRAM](../nvram-spoofing/nvram-spoofing.md)) | dTPM, Secure Boot, IOMMU |
+| Any | BattlEye | Undetected | none listed | none listed |
+| Any | EA Javelin | Undetected | none listed | dTPM, Secure Boot |
+| Any | Tencent ACE | Undetected | none listed | dTPM, Secure Boot, IOMMU |
+
+The reported requirements are platform settings, not spoofing steps. **dTPM** is a discrete TPM module: a separate chip with its own endorsement identity, unlike a firmware TPM. **Secure Boot** is the UEFI feature that allows only signed boot loaders; the reported setups run with it on. **IOMMU** (Intel VT-d, AMD-Vi) is the processor feature that controls how devices access memory; the reported setups run with it on too. See [TPM implementation types](../tpm-spoofing/tpm-spoofing.md#tpm-implementation-types) for the dTPM-versus-fTPM difference. **[S]**
 
 ## Sources
 
@@ -237,6 +263,7 @@ AMI publishes Aptio firmware utilities, but public availability of a utility doe
 - [Microsoft: Windows 11 specifications and setup requirements](https://www.microsoft.com/en-us/windows/windows-11-specifications)
 - [Microsoft: Windows Backup](https://support.microsoft.com/en-us/windows/experience/backup-recovery/back-up-and-restore-with-windows-backup)
 - [Microsoft: BitLocker recovery overview](https://learn.microsoft.com/en-us/windows/security/operating-system-security/data-protection/bitlocker/recovery-overview)
+- [Microsoft: suspend BitLocker for non-Microsoft firmware updates](https://learn.microsoft.com/en-us/troubleshoot/windows-client/windows-security/suspend-bitlocker-protection-non-microsoft-updates)
 - [Microsoft Q&A: choosing a machine identifier](https://learn.microsoft.com/en-us/answers/questions/5762504/unique-id-of-machine) (supporting context, not a Windows product specification)
 - [AMI Aptio Utilities](https://www.ami.com/resources/aptio-utilities/)
 - [HWIDChecker hardware providers](https://github.com/Fundryi/HWID-Privacy/tree/main/app/src/Hardware) and [Windows batch scripts](https://github.com/Fundryi/HWID-Privacy/tree/main/app/scripts)

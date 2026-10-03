@@ -1,15 +1,14 @@
 # fTPM Identity Reset Guide (AMD AM5 + Intel status)
 
-> **Warning**: This guide changes TPM state. Read all of it before you touch anything.
-> **Warning**: If you use BitLocker or any drive encryption, suspend it or save your recovery key first. A TPM reset can lock you out of your drives.
-> **Warning**: BIOS flashing has real risk. Use only the exact BIOS file for your exact board revision. A power cut during a flash can kill the board.
->
-> Evidence grades used here: **[C]** confirmed first hand by a named user with details, **[A]** agent-verified live during research (2026-08-21), **[CC]** community consensus, many reports, **[S]** single unverified claim. Untested steps are marked.
-
 > [!NOTE]
-> **[A]** grades refer to linked primary sources or this repository's source.
+> **TL;DR:** Rotates the AMD fTPM endorsement identity by cycling BIOS versions that carry an fTPM firmware (TPM-B) change. Intel Z890 currently has no verified user-accessible rotation.
+> Who reads it: Windows attestation, BitLocker, and any relying party that validates the EK certificate chain.
+> **Status:** identity change confirmed on the boards listed below **[C]**. Certificate validity after rotation is untested in public.
+> This guide changes TPM state. Read all of it before you touch anything.
+> If you use BitLocker or any drive encryption, suspend it or save your recovery key first. A TPM reset can lock you out of your drives.
+> BIOS flashing has real risk. Use only the exact BIOS file for your exact board revision. A power cut during a flash can kill the board.
 
----
+Evidence grades appear inline. See [How to read these guides](../getting-started/getting-started.md#how-to-read-these-guides). **[C]** confirmed first hand by a named user with details, **[A]** verified against a cited primary source (or agent-verified live during research, 2026-08-21), **[CC]** community consensus, many reports, **[S]** single unverified claim. Untested steps are marked.
 
 ## Table of Contents
 
@@ -32,11 +31,9 @@
 - [Evidence ledger](#evidence-ledger)
 - [Sources](#sources)
 
----
-
 ## Before you reset
 
-Read the [TPM identity terms](../tpm-spoofing/tpm-spoofing.md#tpm-identity-and-terminology), [clear precautions](../tpm-spoofing/tpm-spoofing.md#what-clearing-the-tpm-changes), and [firmware-update limits](../tpm-spoofing/tpm-spoofing.md#firmware-updates-and-ek-continuity) first. Complete those precautions and capture the baseline below before any clear, firmware flash, or switch between fTPM, dTPM, and Pluton.
+Read the [TPM identity terms](../tpm-spoofing/tpm-spoofing.md#tpm-identity-and-terminology), [clear precautions](../tpm-spoofing/tpm-spoofing.md#what-clearing-the-tpm-changes), and [firmware-update limits](../tpm-spoofing/tpm-spoofing.md#firmware-updates-and-ek-continuity) first. Complete those precautions and capture the baseline below before any clear, firmware flash, or switch between fTPM, dTPM, and Pluton. See also the [safety checklist](../getting-started/getting-started.md#safety-checklist).
 
 ## How the AMD fTPM identity actually works
 
@@ -52,8 +49,6 @@ Consequence: a rotation path is only useful if your new EK also gets a valid cer
 
 > [!IMPORTANT]
 > Primary sources establish that a normal clear does not change the EPS and that AMD firmware TPMs need access to AMD's certificate-retrieval endpoint. They do not document AMD's EK derivation inputs, the endpoint's per-key suffix, or whether certificates are pre-registered rather than created on request. Treat those AMD-specific explanations above as community or live-service observations, not **[A]** facts. The TCG field-upgrade requirement also says the original manufacturer-certified EK must remain reproducible for the same template until `TPM2_ChangeEPS`. **[A]** [TCG architecture](https://trustedcomputinggroup.org/wp-content/uploads/Trusted-Platform-Module-2.0-Library-Part-1-Architecture_Version-185_pub.pdf) and [Windows Autopilot requirements](https://learn.microsoft.com/en-us/autopilot/requirements)
-
----
 
 ## Measure properly or you will fool yourself
 
@@ -71,7 +66,7 @@ $ek.ManufacturerCertificates | Export-Certificate -FilePath "$env:TEMP\ek.cer"
 certutil -dump "$env:TEMP\ek.cer" | Select-String "Serial|NotBefore|NotAfter|Issuer"
 ```
 
-If you can boot Linux, this bypasses Windows cache completely:
+If you can boot Linux, this bypasses the Windows cache completely:
 
 ```bash
 tpm2_getcap handles-persistent
@@ -82,17 +77,13 @@ openssl x509 -inform der -in ekcert.der -text -noout  # serial, NotBefore, issue
 
 Also run an MMIO-based checker if available. Community reports say cached readings and MMIO readings can disagree. **[CC]**
 
----
-
 ## Windows views and HWIDChecker baseline
 
 Use the commands and interpretation in [Inspect the TPM in Windows](../tpm-spoofing/tpm-spoofing.md#inspect-the-tpm-in-windows) and [Verify with HWIDChecker.exe](../tpm-spoofing/tpm-spoofing.md#verify-with-hwidcheckerexe) before and after each attempt. Preserve the raw PowerShell certificate collections. HWIDChecker is a convenient paired view, not an independent measurement or a complete certificate inventory.
 
----
-
 ## Method A: TPM-B firmware flash cycle
 
-This is the only AMD rotation path with multiple independent first-hand confirmations. It works because some BIOS updates ship a new version of the fTPM firmware itself ("TPM-B FW"). When the board boots with a different fTPM firmware version, the AMI screen appears and offers to reset fTPM. Accepting it brings up the TPM under the new firmware version, which derives a different EK.
+This is the only AMD rotation path with multiple independent first-hand confirmations. It works because some BIOS updates ship a new version of the fTPM firmware itself ("TPM-B FW"). When the board boots with a different fTPM firmware version, the AMI screen appears and offers to reset fTPM. Accepting it brings the TPM under the new firmware version, which derives a different EK.
 
 **Status**: identity change confirmed on the boards listed below. Certificate validity after rotation is UNTESTED in public. Verify yours with the check in the next section. If your new key has no server cert, this method gave you an identity that fails attestation, and you should cycle back.
 
@@ -159,8 +150,6 @@ Pattern: the method works when your old-to-new pair actually contains an fTPM fi
 - Pressing N keeps the old state. Nothing rotates. You must press Y.
 - Laptop OEMs may block rollback entirely (an HP case could not roll back at all).
 
----
-
 ## Method B: Pluton toggle (unverified)
 
 On AM5 Gigabyte boards: Advanced -> Miscellaneous -> Trusted Platform Module. Options: Auto, Disabled, Enable dTPM, Enable ASP fTPM, Enable Pluton fTPM. ASUS, MSI and Supermicro expose the same choice under their own names. **[A]**
@@ -180,8 +169,6 @@ Why we do not trust it yet:
 
 If you try it anyway: full paired measurement, cert serial check, and the server-cert lookup from the next section. Report results with both screenshots.
 
----
-
 ## Method C: dTPM module
 
 A discrete TPM module in the header carries its own factory EK and certificate. Mechanically this is a different chip's identity. Two problems:
@@ -190,8 +177,6 @@ A discrete TPM module in the header carries its own factory EK and certificate. 
 - Modules are interchangeable commodities. Their certs come from Infineon, Nuvoton, ST and friends, which makes provenance look odd for a desktop build that should have firmware TPM.
 
 Not recommended. Documented here so you do not waste money on it.
-
----
 
 ## What does NOT change the EK
 
@@ -206,37 +191,16 @@ Save yourself hours. These do nothing to the endorsement identity:
 > [!WARNING]
 > Reinstalling Windows as an EK-rotation procedure is **[S]** and untested. The cited report also included a BIOS flash, so it does not isolate the reinstall as the cause.
 
----
-
 ## Check your certificate after any rotation
 
 Run this after ANY identity change. It asks AMD's live server whether your current EK has a registered certificate.
 
-```powershell
-# PowerShell as admin. Best effort diagnostic for RSA EKs.
-$ek = Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256
-$p  = $ek.PublicKey.ExportParameters($false)
-
-$pre = [byte[]](0x00,0x00,0x22,0x22)
-$exp = [byte[]](0x00,0x01,0x00,0x01)   # e = 65537
-$sha = [System.Security.Cryptography.SHA256]::Create()
-$h = ($sha.ComputeHash(($pre + $exp + $p.Modulus)))[0..15]
-$url = "https://ftpm.amd.com/pki/aia/" + (($h | ForEach-Object { $_.ToString('X2') }) -join '')
-$url
-try {
-    $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 20
-    "HTTP $($r.StatusCode): certificate EXISTS server-side ($($r.RawContentLength) bytes)"
-} catch {
-    $code = $null; if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
-    "HTTP $code: NO certificate registered for this EK"
-}
-```
-
 > [!WARNING]
-> **Diagnostic evidence limit:** the API contract is **[A]**, based on Microsoft's documented `AsnEncodedData` output contract and .NET RSA import APIs. The procedure as a whole remains **[S]** because the real cmdlet output could not be parsed without elevation and AMD does not publish the endpoint-suffix construction. Use PowerShell 7 or later as administrator. Do not treat a request failure as proof that a certificate is absent.
+> **Diagnostic evidence limit:** the corrected script below was parser-tested with made-up keys; the full run on AMD hardware is not tested. Use PowerShell 7 or later as administrator. Do not treat a request failure as proof that a certificate is absent.
 
 ```powershell
 # PowerShell 7+ as administrator. Diagnostic for RSA EKs only.
+# PowerShell as admin. Best effort diagnostic for RSA EKs.
 $ek = Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256
 if ($ek -is [string]) { throw $ek }
 if (-not $ek.IsPresent -or $null -eq $ek.PublicKey) {
@@ -301,7 +265,31 @@ Reading the result:
 
 Caveats: this scheme matches the documented AMD URL format for default-template RSA EKs. If you get 404 but `ManufacturerCertificates` shows a valid-looking cert, trust the cert and note the discrepancy. ECC EKs use a longer hash form; the PowerShell above covers the RSA case only.
 
----
+<details><summary>Older info (outdated): the original script</summary>
+
+The first version of this check called `ExportParameters()` on `AsnEncodedData`, a method that does not exist there. It fails at runtime. Kept for reference:
+
+```powershell
+# PowerShell as admin. Best effort diagnostic for RSA EKs. (Broken: ExportParameters is not an AsnEncodedData method.)
+$ek = Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256
+$p  = $ek.PublicKey.ExportParameters($false)
+
+$pre = [byte[]](0x00,0x00,0x22,0x22)
+$exp = [byte[]](0x00,0x01,0x00,0x01)   # e = 65537
+$sha = [System.Security.Cryptography.SHA256]::Create()
+$h = ($sha.ComputeHash(($pre + $exp + $p.Modulus)))[0..15]
+$url = "https://ftpm.amd.com/pki/aia/" + (($h | ForEach-Object { $_.ToString('X2') }) -join '')
+$url
+try {
+    $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 20
+    "HTTP $($r.StatusCode): certificate EXISTS server-side ($($r.RawContentLength) bytes)"
+} catch {
+    $code = $null; if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+    "HTTP $code: NO certificate registered for this EK"
+}
+```
+
+</details>
 
 ## Certificate retrieval and trust
 
@@ -319,8 +307,6 @@ Keep these results distinct in your evidence:
 - **Chain validates:** the leaf builds through the expected intermediate certificates to an approved root.
 - **Attestation succeeds:** a specific relying party accepted that chain and the rest of its policy. This cannot be inferred from the preceding checks alone.
 
----
-
 ## Intel: Z790 vs Z790-era method vs Z890
 
 - Z790 generation: the Flash BIOS Button rewrite method is documented separately in `guides/tpm-spoofing/tpm-spoofing.md`. It was tested on MSI Z790. Treat it as generation-specific: that platform wrote the whole SPI chip including the ME data region.
@@ -333,8 +319,6 @@ Keep these results distinct in your evidence:
 
 > [!WARNING]
 > The lowest-then-highest BIOS flash procedure is **[S]** and untested. Do not risk a firmware downgrade based on that report.
-
----
 
 ## Evidence ledger
 
@@ -366,8 +350,6 @@ Known open questions (nobody has answered these publicly):
 > **Diagnostic limit:** the script can probe one derived URL, but it cannot answer question 2 by itself while the AMD suffix construction remains **[S]**. A useful result also needs a paired EK public key, the returned certificate, a public-key match, and chain validation.
 
 Boundary note: this page records what verifiably changes the identity and how to check it safely. It does not rank paths by anti-cheat acceptance.
-
----
 
 ## Sources
 

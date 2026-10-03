@@ -1,18 +1,15 @@
 # MAC Address Spoofing Guide
 
-This guide provides instructions for spoofing MAC addresses on different network interface controllers (NICs).
-
-### System Requirements
-
-- Windows 10/11
-
 > [!NOTE]
-> Evidence grades used here: **[C]** confirmed first hand by a named user with details, **[A]** verified against a cited primary source, **[CC]** community consensus across multiple independent reports, **[S]** a single unverified claim. Untested steps are marked.
+> **TL;DR:** Changes the MAC address your network presents. A Windows `NetworkAddress` override is software-only and reversible; writing the controller's EEPROM, flash, OTP, or eFuse is permanent.
+> Who reads it: the local network, DHCP servers, any fingerprinting stack that enumerates adapters, and anti-cheats that log NIC identity.
+> **Status:** the ConnectX-3 procedure was tested on real hardware **[C]**. The Intel, Realtek onboard, and ASIX procedures are community-tested or untested **[S]** unless marked.
+> **Risk:** an eFuse or OTP write is one-time. A wrong write can break the adapter.
+> System requirements: Windows 10/11 for the Windows methods; DOS boot for Intel onboard NICs.
 
-> [!CAUTION]
-> A software MAC override and a hardware-programmed MAC are not the same thing. EEPROM and flash may be rewritable. eFuse or OTP storage is one-time programmable. Back up every readable value before writing, but do not assume that a backup can undo an eFuse write.
+A software MAC override and a hardware-programmed MAC are not the same thing. EEPROM and flash may be rewritable. eFuse or OTP storage is one-time programmable. Back up every readable value before writing, but do not assume that a backup can undo an eFuse write.
 
----
+Evidence grades appear inline. See [How to read these guides](../getting-started/getting-started.md#how-to-read-these-guides).
 
 ## Quick Navigation
 
@@ -31,8 +28,6 @@ This guide provides instructions for spoofing MAC addresses on different network
 | **Reference** | [Verification checklist](#verification-checklist) | N/A | Readback in several views | HWIDChecker / PowerShell / `getmac` |
 | **Reference** | [Sources](#sources) | N/A | Primary sources and evidence provenance | Microsoft / IEEE / vendors |
 
----
-
 ## Current MAC, Permanent MAC, and Burned-In Storage
 
 Windows NDIS exposes a **current** MAC address and a **permanent** MAC address as separate adapter attributes. A driver may replace the current address with a software-configured value while the device's non-volatile storage remains unchanged. [A]
@@ -40,6 +35,7 @@ Windows NDIS exposes a **current** MAC address and a **permanent** MAC address a
 - A `NetworkAddress` override changes the address presented by the Windows driver. It does not rewrite the NIC's EEPROM, flash, or eFuse. [A]
 - A vendor programming utility can change the address loaded from device storage. Whether that write is reversible depends on the actual storage fitted or enabled on that board. [A]
 - `Get-NetAdapter`, `getmac`, `ipconfig /all`, and ordinary WMI queries report the active Windows address. They do not prove that the burned-in value changed. [A]
+
 Realtek and ASIX controller families support more than one storage design. A controller name alone does not identify the storage used on a finished adapter. See [Controller Storage: eFuse, EEPROM, or Flash](#controller-storage-efuse-eeprom-or-flash). [A]
 
 ## Windows `NetworkAddress` Override (Software Only)
@@ -50,6 +46,8 @@ This is non-persistent at the **hardware** level, but it is not necessarily sess
 
 > [!WARNING]
 > This operation briefly restarts the adapter and can disconnect remote sessions. A duplicate or invalid MAC can also break network access. Record the adapter name, current address, and advanced-property values first.
+
+**Status:** documented Windows mechanism. **[A]**
 
 1. Open PowerShell as Administrator and identify the target physical adapter:
 
@@ -88,9 +86,9 @@ This is non-persistent at the **hardware** level, but it is not necessarily sess
 > [!NOTE]
 > IEEE addressing defines universal/local and individual/group bits. A locally administered unicast address sets the local bit and clears the group bit. This guide's software example instead preserves a real vendor OUI to follow the project's example-address rule. In either case, the address must be unicast and unique on the local network. [A]
 
----
-
 ## Intel NICs
+
+**Status:** untested as a general procedure. **[S]** Intel release notes confirm EEUPDATE can program MAC data on specific controllers, but they also document controller-specific failures, locked fields, checksum errors, and version-dependent behavior. Do not infer support from the Intel brand alone.
 
 ### Prerequisites
 
@@ -101,9 +99,6 @@ For Intel network cards, you can use the EEUPDATE utility through a DOS bootable
 
 ### Intel Tool Caveats and Backup
 
-> [!WARNING]
-> **[S] Untested procedure:** Intel does not publish the DOS workflow below as a universal end-user procedure. Intel release notes confirm that EEUPDATE can program MAC data on specific controllers, but they also document controller-specific failures, locked fields, checksum errors, and version-dependent behavior. Do not infer support from the Intel brand alone.
-
 - Run `EEUPDATE /LIST_NIC` before using `/NIC=1`. Adapter numbering can change when cards are added, removed, enabled, or disabled. [S]
 - Save the original MAC and the complete output of `EEUPDATE /MAC_DUMP` before any write. Keep that record off the boot USB as well. [S]
 - Intel documents that some multi-port adapters share one EEPROM/flash and that its NVM Update Tool updates only port 0, or the port selected by MAC. Treat port selection and shared-storage behavior as controller- and tool-specific. [A]
@@ -113,14 +108,14 @@ For Intel network cards, you can use the EEUPDATE utility through a DOS bootable
 
 ### Setup Steps
 
-1. Create Bootable DOS USB:
+1. Create a bootable DOS USB:
 
    - Download Rufus (https://rufus.ie)
    - Insert your USB drive
    - Select "MS-DOS" as the boot selection
    - Create the bootable drive
 
-2. Prepare Files:
+2. Prepare files:
    - Copy EEUPDATE.exe to your bootable USB
    - Create changemac.bat with the following content:
 
@@ -142,9 +137,9 @@ pause
 ```
 
 - Example MAC: `AA:BB:CC:DD:EE:11`
-  - Do not use this mac, it will brick your network...
+  - Do not use this MAC, it will brick your network...
 
-3. BIOS Setup:
+3. BIOS setup:
    - Enter BIOS (usually F2 or Delete key during startup)
    - Disable Secure Boot
    - Enable CSM (Compatibility Support Module) mode
@@ -162,36 +157,33 @@ pause
      - Press Enter to run the script
    - Follow the prompts
 
-2. Manual Commands (if script fails):
+2. Manual commands (if the script fails):
 
    ```dos
    EEUPDATE /NIC=1 /mac=AABBCCDDEE11
    EEUPDATE /NIC=1 /MAC_DUMP
    ```
 
-3. After Completion:
+3. After completion:
    - Remove the USB drive
    - Restart the system
    - Boot back into Windows to verify the change
-   - Revert your secure boot and CMS settings.
+   - Revert your Secure Boot and CSM settings.
 
 ### Important Notes
 
 - Replace `AABBCCDDEE11` with your desired MAC address
 - Keep your original MAC address noted down
 - The `/NIC=1` parameter targets the first network adapter
-  - If you have multiple make sure either to change both or disable the one you dont need/use.
-  - `EEUPDATE /LIST_NIC` will list you the NIC's installed.
+  - If you have multiple, make sure either to change both or disable the one you don't need/use.
+  - `EEUPDATE /LIST_NIC` will list the NICs installed.
 - Some systems may require specific versions of EEUPDATE
 - Not all Intel NICs support MAC address modification
 - Incorrect MAC address format can cause network issues
 
----
-
 ## Realtek NICs
 
-> [!WARNING]
-> **[S] Untested procedure:** The utility supports several controller families and storage modes, but a matching family name does not prove that the supplied configuration file fits your exact silicon and board.
+**Status:** untested as a general procedure. **[S]** The utility supports several controller families and storage modes, but a matching family name does not prove that the supplied configuration file fits your exact silicon and board.
 
 The configuration file must match the exact NIC. No cited Realtek document establishes a dry-run selection workflow. Treat `8168FEF.CFG` and the supplied batch file as model-specific unless the utility identifies them as compatible. [S]
 
@@ -201,7 +193,7 @@ The sample utility output reports `EFuse Remain`. Treat that as a one-time-capac
 
 ### Prerequisites
 
-- Download required tools(trial and error):
+- Download required tools (trial and error):
   - [RealTekNicPgW2.7.5.0.zip](realtek/RealTecNicPgW2.7.5.0.zip)
   - [realtek_efuse_prog.zip](realtek/realtek_efuse_prog.zip)
 
@@ -209,16 +201,16 @@ For Realtek network adapters, you can modify the MAC address using the Realtek e
 
 ### Programming Steps
 
-1. Modify MAC Address:
+1. Modify the MAC address:
 
-   - Open `8168FEF.CFG` file
+   - Open the `8168FEF.CFG` file
    - Edit the first line to set your desired MAC address:
      ```
      NODEID = 00 E0 4C 88 00 18
      ;ENDID = 00 E0 4C 68 FF FF
      ```
 
-2. Run the Programming Script:
+2. Run the programming script:
 
    - Execute `WINPG64.BAT`
    - A successful rewrite will show output similar to:
@@ -236,58 +228,54 @@ For Realtek network adapters, you can modify the MAC address using the Realtek e
      EFuse Remain 61 Bytes!!!
      ```
 
-3. Verify MAC Address Change:
+3. Verify the MAC address change:
    - Open PowerShell
    - Run `ipconfig /all`
    - Look for your network adapter's Physical Address
    - It should match your programmed MAC address
 
----
-
 ## USB NICs
 
 ### Realtek USB NICs (Update)
-- Status:
-  - Realtek-based USB NICs (e.g., RTL8153/RTL8156 series) can also be permanently spoofed.
-  - Use the Realtek USB PG Tool package; primary folder to use:
-    - “**LATEST_PUB_WIN_USB_PGTOOL_v2.0.22_V2**”
-- Tool Package:
+
+**Status:** first-hand report by the named contributor Exclusion, on a Belkin USB-C-to-Ethernet adapter built on RTL8153. Not repeated by this guide's maintainer. [C] The bundled steps use PG Tool 2.0.22; the detailed report used 2.0.26.0. **[S]**
+
+- Realtek-based USB NICs (e.g., RTL8153/RTL8156 series) can also be permanently spoofed.
+- Use the Realtek USB PG Tool package; primary folder to use:
+  - "**LATEST_PUB_WIN_USB_PGTOOL_v2.0.22_V2**"
+- Tool package:
   - [RealtekMAC USB.zip](./usb-realtek/RealtekMAC%20USB.zip)
     - Older folders inside are retained only for experimentation; the above folder is the recommended one.
-- Tested Hardware:
-  - Recommended USB NIC: 
+- Tested hardware:
+  - Recommended USB NIC:
     - [USB‑C 2.5GbE (Uniaccessories)](https://uniaccessories.com/products/usb-c-to-ethernet-adapter-2500mbps)
       - [Amazon DE Link](https://www.amazon.de/-/en/dp/B0C2H9HVH3)
-    - Examples that **DONT WORK** at the moment because of missing .CFG settings or custom EFUSE:
+    - Examples that **DON'T WORK** at the moment because of missing .CFG settings or custom EFUSE:
       - [UGREEN Product](https://eu.ugreen.com/de/products/ugreen-usb-c-auf-ethernet-adapter)
       - [Amazon DE](https://www.amazon.de/dp/B0DNSTHRGQ/)
 
-> [!WARNING]
-> **[S] Untested version-specific procedure:** The bundled steps use PG Tool 2.0.22. The detailed first-hand report used PG Tool 2.0.26.0.
+> [!CAUTION]
+> Realtek documents that RTL8153B and RTL8156B controllers can use embedded OTP in place of an external EEPROM. The finished adapter decides which storage is present or enabled. If the tool is in `EFUSE` or `OTP` mode, assume that every write is permanent and consumes finite capacity. A dump is still mandatory, but it is not an undo button. [A]
+> Match USB identifiers, record extra firmware and storage fields, limit retries, and perform device-level persistence checks. These controls were not part of Exclusion's report. [S]
+> No cited vendor source establishes that configuration files or controller tables are interchangeable between PG Tool 2.0.22 and 2.0.26.0. Treat a version that cannot identify the exact controller as unsupported. [S]
 
-- Quick Programming Steps (Windows):
-  - Open the USB PG Tool from “LATEST_PUB_WIN_USB_PGTOOL_v2.0.22_V2”.
+- Quick programming steps (Windows):
+  - Open the USB PG Tool from "LATEST_PUB_WIN_USB_PGTOOL_v2.0.22_V2".
   - Select your device and make sure mode is set to EFUSE.
-  - Click “DUMP” to read current settings and confirm the tool returns “PASS”.
+  - Click "DUMP" to read current settings and confirm the tool returns "PASS".
 ![DUMP/Read section](./images/Realtek%20USB1.png)
-  - Set “CURRENT MAC” to your desired value (preserve vendor OUI if possible).
-  - Click “PROGRAM” to flash; success should show “PASS”.
+  - Set "CURRENT MAC" to your desired value (preserve vendor OUI if possible).
+  - Click "PROGRAM" to flash; success should show "PASS".
 ![DUMP/Read section](./images/Realtek%20USB2.png)
   - Done
-- Serial Number Note:
-  - The tool allows changing the USB “Serial Number”. Avoid changing it in most scenarios:
-    - Many Realtek USB NICs share common serial prefixes (e.g., “4013”), so altering it can make your unit uniquely stand out.
+- Serial number note:
+  - The tool allows changing the USB "Serial Number". Avoid changing it in most scenarios:
+    - Many Realtek USB NICs share common serial prefixes (e.g., "4013"), so altering it can make your unit uniquely stand out.
   - Do not modify other advanced settings unless you know exactly what they do.
 
 #### Realtek USB PG Tool Details
 
-The procedure below was reported first hand by the named contributor Exclusion for a Belkin USB-C-to-Ethernet adapter built on RTL8153. The exact Belkin model and hardware revision were not supplied. It has not been repeated by this guide's maintainer. [C]
-
-> [!CAUTION]
-> Realtek documents that RTL8153B and RTL8156B controllers can use embedded OTP in place of an external EEPROM. The finished adapter decides which storage is present or enabled. If the tool is in `EFUSE` or `OTP` mode, assume that every write is permanent and consumes finite capacity. A dump is still mandatory, but it is not an undo button. [A]
-
-> [!WARNING]
-> **[S] Safety requirements:** Match USB identifiers, record extra firmware and storage fields, limit retries, and perform device-level persistence checks. These controls were not part of Exclusion's report.
+The detailed first-hand workflow:
 
 1. Unplug the Ethernet cable and leave only the target USB NIC connected. [C]
 2. Use `SEARCH` to enumerate supported devices and select the target adapter. [C] Match the controller, USB VID/PID, and current MAC before continuing. [S]
@@ -297,17 +285,14 @@ The procedure below was reported first hand by the named contributor Exclusion f
 6. Select `Program` and save the result. [C] Do not retry a failed eFuse write repeatedly; record any remaining-byte counter. [S]
 7. Reboot or unplug and reconnect the adapter, then verify the active address. [C] Use the [verification checklist](#verification-checklist) before making a device-storage claim. [S]
 
-The bundle already referenced above recommends PG Tool 2.0.22. The external report used 2.0.26.0. [C]
-
-> [!WARNING]
-> **[S] Version compatibility:** No cited vendor source establishes that configuration files or controller tables are interchangeable between those releases. Treat a version that cannot identify the exact controller as unsupported.
-
 ### TP-Link UE300 / RTL8153
+
+**Status:** one successful report, revision and storage mode unconfirmed. **[S]**
 
 TP-Link's UE300 product page and V1, V3, and V4 datasheets identify the controller as Realtek RTL8153. Its support page lists hardware versions from V1 through V5.60. These pages do not identify the active MAC storage for each revision, so confirm the version printed on the unit before using a low-level tool. [A]
 
 > [!WARNING]
-> **[S] Untested procedure:** A successful UE300 programming result was reported, but the available readback detail does not establish which UE300 hardware revision or storage mode was used. The steps below are a cautious application of the Realtek workflow, not a verified UE300 recipe.
+> A successful UE300 programming result was reported, but the available readback detail does not establish which UE300 hardware revision or storage mode was used. The steps below are a cautious application of the Realtek workflow, not a verified UE300 recipe. [S]
 
 1. Record the UE300 model and hardware version from its label.
 2. In Device Manager, record the USB hardware IDs and confirm that Windows identifies a Realtek-based adapter.
@@ -319,9 +304,10 @@ TP-Link's UE300 product page and V1, V3, and V4 datasheets identify the controll
 
 Do not interpret a Windows-only address change as proof that the UE300's device storage changed. Clear any `NetworkAddress` override before testing persistence.
 
----
-
 ### ASIX AX88179(A/B now too!)
+
+**Status:** short workflow from community use; the detailed Captain workflow is a first-hand third-party report. [C] Identify the exact controller and storage before using either. [S]
+
 - Overview:
   - Permanent MAC changes are possible using the ASIX programming utility.
   - Keep the vendor OUI (first 6 hex digits) and change only the last 6.
@@ -329,19 +315,17 @@ Do not interpret a Windows-only address change as proof that the UE300's device 
   - [ASIXFlash-master.zip](./usb-ax88179/ASIXFlash-master.zip)
     - Upstream reference: [ASIXFlash Repository](https://github.com/jglim/ASIXFlash)
   - [Captain Mac Tool.zip](./usb-ax88179/Captain%20Mac%20Tool.zip)
-    - Password Used: `captaindma`
-      - Not added by me, will also open their website...
-> [!WARNING]
-> **[S] Untested procedure:** Identify the exact controller and storage before using the short ASIX/Captain workflow below.
+    - Password used: `captaindma`
+      - Not added by me; it will also open their website...
 
-- Quick Steps:
+- Quick steps:
   1. Extract the tool, run as Administrator.
   2. Backup current config/EEPROM if the tool provides an option.
   3. Program a new MAC that preserves the original OUI.
   4. Unplug/replug the adapter.
   5. Done
 - Notes:
-  - AX88179 “A/B” revisions can only be flashed with the Captain Mac Tool.
+  - AX88179 "A/B" revisions can only be flashed with the Captain Mac Tool.
   - If programming fails or reverts, the unit/firmware may be locked or unsupported.
 
 #### AX88179 Storage and Captain Tool Detail
@@ -351,11 +335,6 @@ ASIX documents different non-volatile storage by revision. The original AX88179 
 ASIX says AX88179A and AX88179B controllers ship with a unique MAC address. For original AX88179-based designs, its FAQ instead directs the manufacturer to assign a unique MAC in EEPROM or eFuse. [A]
 
 The existing statement that A/B revisions "can only be flashed with the Captain Mac Tool" describes the tooling bundled with this guide. It is not a vendor-wide limitation. Prefer the ASIX tool for the exact controller revision when ASIX makes it available to you. [A]
-
-> [!WARNING]
-> **[C] First-hand third-party procedure:** A detailed report provides the tool and driver steps below, but does not identify the exact controller revision, storage type, or vendor-tool readback. Captain Mac Tool is not an ASIX utility, and the package and test driver are unverified.
->
-> **[S] Safety requirements:** Match the INF to the adapter's hardware ID and perform a cold-power persistence check. Do not disable Windows driver-signing protections to force the driver to load.
 
 The external report describes this Captain workflow:
 
@@ -369,13 +348,13 @@ The external report describes this Captain workflow:
 
 > [!CAUTION]
 > eFuse cannot be erased. On an AX88179, AX88179A, or AX88179B board that uses eFuse, a successful backup cannot restore the consumed bits. On an EEPROM- or SPI-flash-based board, restoration still requires a controller-matched image and tool. [A]
-
----
+> Match the INF to the adapter's hardware ID and perform a cold-power persistence check. Do not disable Windows driver-signing protections to force the driver to load. [S]
 
 ## Mellanox ConnectX-3 (CX311A / MCX311A-XCAT)
 
+**Status:** verified working procedure, tested on Windows 10 with a real CX311A single-port SFP+ card. **[C]**
+
 > [!IMPORTANT]
-> **Verified working procedure** - tested on Windows 10 with a real CX311A single-port SFP+ card.
 > The MAC change here is **device-level and persistent** (burned into NIC firmware), not an OS-level override.
 > Unlike Intel X550 which has one-time-lock behavior, **ConnectX-3 supports repeated MAC changes**.
 
@@ -396,23 +375,23 @@ The external report describes this Captain workflow:
   - Any 10GBase-T SFP+ module with Mellanox compatibility should work.
 - Internet and 10 Gbps link were already working before any flashing.
 - Link stayed working at 10 Gbps after the MAC change.
-- **Sourcing**: Search for `Mellanox ConnectX-3 CX311A MCX311A-XCAT PCIe x4 SFP+` on eBay or AliExpress. These cards are widely available used.
+- **Sourcing**: search for `Mellanox ConnectX-3 CX311A MCX311A-XCAT PCIe x4 SFP+` on eBay or AliExpress. These cards are widely available used.
 
 ### Prerequisites
 
 - **OS**: Windows 10 / Windows 11 (the tested procedure below was on Windows 10, but the WinOF 5.50 driver and WinMFT 4.13 package are also known to work on Windows 11)
 - **Driver**: WinOF 5.50.53000 - **not** WinOF-2 (ConnectX-3 is on the older WinOF branch)
-- **Firmware Tools**: WinMFT 4.13.3
+- **Firmware tools**: WinMFT 4.13.3
 
 Download both installers:
 - [MLNX_VPI_WinOF-5_50_53000_All_Win2019_x64.zip](mellanox-connectx/MLNX_VPI_WinOF-5_50_53000_All_Win2019_x64.zip) - WinOF driver package
 - [WinMFT_x64_4_13_3_6.zip](mellanox-connectx/WinMFT_x64_4_13_3_6.zip) - firmware tools (flint, mst, etc.)
 
 > [!NOTE]
-> **Note**: The WinOF installer filename says "Win2019" - this refers to the build target (Windows Server 2019), but the driver installs and works correctly on Windows 10 and Windows 11 desktop as well.
+> The WinOF installer filename says "Win2019" - this refers to the build target (Windows Server 2019), but the driver installs and works correctly on Windows 10 and Windows 11 desktop as well.
 
 > [!IMPORTANT]
-> **Important**: ConnectX-3 / ConnectX-3 EN requires **WinOF** (not WinOF-2). WinOF-2 is for ConnectX-4 and newer. Using the wrong driver package will fail silently or cause detection issues.
+> ConnectX-3 / ConnectX-3 EN requires **WinOF** (not WinOF-2). WinOF-2 is for ConnectX-4 and newer. Using the wrong driver package will fail silently or cause detection issues.
 
 ### Installation
 
@@ -434,7 +413,7 @@ Download both installers:
    - Various DLLs and support files
 
 > [!IMPORTANT]
-> **Important**: `mstflint.exe` does **not** exist as a standalone binary in this Windows install. Use `flint.bat` (which calls `flint_ext.exe`) for all flint commands. If you see guides referencing `mstflint`, substitute `.\flint.bat` instead.
+> `mstflint.exe` does **not** exist as a standalone binary in this Windows install. Use `flint.bat` (which calls `flint_ext.exe`) for all flint commands. If you see guides referencing `mstflint`, substitute `.\flint.bat` instead.
 
 ### Step 1: Discover the Device
 
@@ -520,7 +499,7 @@ Ethernet        Mellanox ConnectX-3 Ethernet Adapter E4-1D-2D-A1-B2-C0 Up     10
 ```
 
 > [!IMPORTANT]
-> Always verify that Windows MAC and flint Port1 MAC match before proceeding.
+> Always verify that the Windows MAC and flint Port1 MAC match before proceeding.
 
 ### Step 4: Back Up Firmware Image
 
@@ -617,7 +596,7 @@ Restoring signature                     - OK
 ```
 
 > [!NOTE]
-> The message “re-burning image with the new GUIDs” is normal - it means GUIDs were already set and are being preserved.
+> The message "re-burning image with the new GUIDs" is normal - it means GUIDs were already set and are being preserved.
 > **Success indicators**: `Burning FS2 FW image without signatures - OK` and `Restoring signature - OK`.
 
 ### Step 7: Reboot
@@ -727,11 +706,11 @@ Replace `0xNEWMAC` with your desired MAC in hex format (e.g., `0x021122334455`).
 
 ### Troubleshooting
 
-1. **`mstflint` is “not recognized”**
+1. **`mstflint` is "not recognized"**
    - On this Windows install, the relevant executables are `mst.exe`, `flint.bat`, and `flint_ext.exe` - **not** `mstflint.exe`. Use `.\flint.bat` for all flint operations.
 
 2. **`mst status -v` shows nothing**
-   - Check that WinOF driver is installed correctly
+   - Check that the WinOF driver is installed correctly
    - Reboot the system
    - Reinstall WinOF, then reinstall WinMFT
    - Make sure you are running PowerShell **as Administrator**
@@ -781,8 +760,6 @@ shutdown /r /t 0
 > [!WARNING]
 > This writes the full original firmware image back to the card. The `b` flag means "burn" - it flashes the entire image from the file to the device. After reboot, the card will have its original MAC and firmware state restored.
 
----
-
 ## Controller Storage: eFuse, EEPROM, or Flash
 
 | Controller or device | Documented storage choices | What that means |
@@ -801,8 +778,7 @@ The words `DUMP`, `READ`, or `BACKUP` do not guarantee reversibility. For OTP/eF
 
 ## Verification Checklist
 
-> [!WARNING]
-> **[S] Generic verification procedure:** Windows commands expose the active driver-visible address. The vendor-tool and cold-power checks below provide stronger device-level evidence, but they were not validated on every controller family and are not a recovery procedure.
+**Status:** the Windows commands are documented interfaces. **[A]** The vendor-tool and cold-power checks provide stronger device-level evidence but are not validated on every controller family. **[S]**
 
 ### 1. Check for a Windows override
 
@@ -831,14 +807,14 @@ Get-CimInstance Win32_NetworkAdapter |
 
 1. Run `HWIDChecker.exe` from the repository root.
 2. Open the `NETWORK ADAPTERS (NIC's)` section.
-3. Match the adapter by product name and PNP device ID, then record the displayed MAC.
+3. Match the adapter by product name and PnP device ID, then record the displayed MAC.
 
 HWIDChecker reads the current `Win32_NetworkAdapter.MACAddress`. It also checks the adapter's `NetworkAddress` registry value. When an override is present, it labels the current value `MAC Address (Overridden)` and reports `Permanent MAC` as `Spoofed (see NetworkAddress registry override)`. That text is a detection warning, not the burned-in address. [A]
 
 ### 4. Read back with the vendor tool
 
 > [!WARNING]
-> **[S] Untested procedure:** This generic readback procedure has not been verified with every controller family. Use only the read-only command documented for the exact utility and revision.
+> This generic readback procedure has not been verified with every controller family. Use only the read-only command documented for the exact utility and revision. [S]
 
 - Reopen the same controller-matched utility.
 - Select the adapter again by hardware identity, not by list position alone.
@@ -848,7 +824,7 @@ HWIDChecker reads the current `Win32_NetworkAdapter.MACAddress`. It also checks 
 ### 5. Cold-power persistence check
 
 > [!WARNING]
-> **[S] Untested procedure:** This general persistence test is not a vendor-specific recovery procedure and does not make a hardware write reversible.
+> This general persistence test is not a vendor-specific recovery procedure and does not make a hardware write reversible. [S]
 
 1. Shut down Windows.
 2. Remove power from the NIC or unplug the USB adapter and confirm that it fully loses power.
@@ -856,8 +832,6 @@ HWIDChecker reads the current `Win32_NetworkAdapter.MACAddress`. It also checks 
 4. Repeat the Windows, HWIDChecker, and vendor-tool checks.
 
 A changed current address after only a driver restart proves a software-visible change. A matching vendor readback after cold power is stronger, but still controller-specific, evidence of a device-storage change. [S]
-
----
 
 ## Sources
 

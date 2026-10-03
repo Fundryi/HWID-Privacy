@@ -1,12 +1,15 @@
 # Router and ARP-Table Isolation Guide
 
 > [!NOTE]
+> **TL;DR:** Places a router you control between your PC and the primary network, so your PC's ARP table shows the isolation router's MAC as gateway instead of your home router's. Also changes the SSID/BSSID your Wi-Fi reports and the DHCP lease you get.
+> Who reads it: the local network, DHCP servers, and any fingerprinting stack that records gateway MAC, SSID, or BSSID.
+> **Status:** procedures follow cited standards and vendor documentation **[A]**. Not tested on every router model or firmware build.
+> **Risk:** low if you stay in Router/WISP mode and keep a configuration backup plus physical reset access. Use only equipment and networks that you own or administer.
+
+> [!NOTE]
 > In this project, "ARP spoofing" means placing a router that you control between your PC and the primary network so your own PC sees a different first-hop gateway MAC address. It does **not** mean ARP poisoning. This guide contains no instructions for forging ARP replies, intercepting traffic, or attacking another network.
 
-> [!WARNING]
-> These procedures rely on the cited standards and vendor documentation, but they are not tested on every router model or firmware build. Back up the router configuration and keep physical reset access before changing a LAN MAC address. Use only equipment and networks that you own or administer.
-
-Evidence grades used here: **[C]** confirmed first-hand by a named user with details, **[A]** verified against a cited primary source, **[CC]** supported by multiple consistent community reports, and **[S]** a single unverified claim. This guide uses [A] evidence for the procedures below.
+Evidence grades appear inline. See [How to read these guides](../getting-started/getting-started.md#how-to-read-these-guides). This guide uses [A] evidence for the procedures below.
 
 ## Table of Contents
 

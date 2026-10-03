@@ -1,0 +1,67 @@
+/* Readable line width for running text; tables keep the full column */
+.vp-doc p,
+.vp-doc li,
+.vp-doc blockquote {
+  max-width: 75ch;
+}
+
+/* Wide tables scroll sideways; long tables scroll inside with a sticky header */
+.vp-doc table {
+  max-height: 70vh;
+  overflow: auto;
+}
+.vp-doc th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background-color: var(--vp-c-bg-alt);
+}
+
+/* Clearer callouts: stronger tint plus a colored edge */
+:root {
+  --vp-custom-block-note-bg: var(--vp-c-default-soft);
+  --vp-custom-block-tip-bg: var(--vp-c-green-soft);
+  --vp-custom-block-important-bg: var(--vp-c-purple-soft);
+  --vp-custom-block-warning-bg: var(--vp-c-yellow-soft);
+  --vp-custom-block-caution-bg: var(--vp-c-red-soft);
+}
+.vp-doc .custom-block { border-left: 4px solid; }
+.vp-doc .custom-block.note { border-left-color: var(--vp-c-gray-1); }
+.vp-doc .custom-block.info { border-left-color: var(--vp-c-indigo-1); }
+.vp-doc .custom-block.tip { border-left-color: var(--vp-c-green-1); }
+.vp-doc .custom-block.important { border-left-color: var(--vp-c-purple-1); }
+.vp-doc .custom-block.warning { border-left-color: var(--vp-c-yellow-1); }
+.vp-doc .custom-block.caution,
+.vp-doc .custom-block.danger { border-left-color: var(--vp-c-red-1); }
+
+/* <details> blocks: outdated info and folded sources */
+.vp-doc details.outdated,
+.vp-doc details.sources {
+  margin: 16px 0;
+  padding: 8px 16px;
+  border-radius: 8px;
+}
+.vp-doc details.outdated {
+  border: 1px solid var(--vp-c-yellow-2);
+  background-color: var(--vp-c-yellow-soft);
+}
+.vp-doc details.outdated > summary::after {
+  content: 'Outdated';
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--vp-c-yellow-1);
+  border: 1px solid currentColor;
+}
+.vp-doc details.sources {
+  border: 1px solid var(--vp-c-divider);
+  background-color: var(--vp-c-bg-soft);
+}
+.vp-doc details > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/* Evidence badges sit inline with text */
+.vp-doc .VPBadge[title] { cursor: help; }

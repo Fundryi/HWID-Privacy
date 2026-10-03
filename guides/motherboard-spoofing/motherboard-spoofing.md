@@ -1,14 +1,16 @@
-# **MOBO SPOOFING GUIDE**
+# MOBO SPOOFING GUIDE
+
+> [!NOTE]
+> **TL;DR:** Changes the SMBIOS serials and UUID that Windows, fingerprinting tools, and anti-cheats read from the board. The board keeps working; the identifiers change.
+> Who reads it: Windows (`Win32_BaseBoard`, `Win32_ComputerSystemProduct`, `Win32_SystemEnclosure`), any SMBIOS-reading tool, and anti-cheats.
+> **Status:** the workflow below was run by the project owner on real hardware **[C]** as a report of the owner's procedure. It has not been independently repeated. Compatibility of the bundled utility and each write command with any other board or firmware remains **[S]**.
+> **Risk:** firmware writes can brick the board. Recovery preparation is mandatory.
 
 > [!CAUTION]
-> This guide changes firmware-provided identity data. A wrong utility, unsupported command, interrupted write, or invalid firmware image can leave the board unable to boot. **[A]** Save BitLocker recovery keys. Record the exact motherboard model and revision. Prepare the manufacturer's documented recovery method before writing anything.
->
-> Evidence grades used below: **[C]** means confirmed first-hand by a named user with details. **[A]** means verified against a cited primary source. **[CC]** means supported by multiple independent community reports. **[S]** means a single or otherwise unverified claim.
->
-> Motherboard writing is untested. The AMIDEWIN/DMIEdit steps and command switches remain **[S]** unless a board vendor documents them for the exact model.
-
-> [!WARNING]
+> This guide changes firmware-provided identity data. A wrong utility, unsupported command, interrupted write, or invalid firmware image can leave the board unable to boot. Save BitLocker recovery keys. Record the exact motherboard model and revision. Prepare the manufacturer's documented recovery method before writing anything. **[A]**
 > The bundled archives are not official vendor downloads. Their provenance, signatures, and compatibility are unverified. **[S]** Do not assume that a utility is safe merely because it starts successfully or can read the current values.
+
+Evidence grades appear inline. See [How to read these guides](../getting-started/getting-started.md#how-to-read-these-guides).
 
 ## Table of contents
 
@@ -22,27 +24,36 @@
 - [Verify with HWIDChecker](#verify-with-hwidchecker)
 - [Troubleshooting](#troubleshooting)
 - [Sources](#sources)
- 
-## **Prerequisites**
- 
+
+## Prerequisites
+
 - Recommended way:
   - DMI EDIT WIN64 FILES:
     - [dmi-edit-win64-ami.zip](./tools/dmi-edit-win64-ami.zip)
 - Optional:
   - [DMIEDIT GUI v5.27.05.0016 (latest).zip](<./tools/DMIEDIT GUI v5.27.05.0016 (latest).zip>)
   - [dmmiedit GUI (not working on new mobos).zip](<./tools/dmmiedit GUI (not working on new mobos).zip>)
-    - This version does not work properly on newer mobos or in general, I'd suggest using the one above!
+    - This version does not work properly on newer mobos or in general; I'd suggest using the one above!
   - **[HWIDChecker.exe](/HWIDChecker.exe)**
-    - (Optional but recommended checking your before/after SSD details)
+    - (Optional but recommended for checking your before/after details)
 
----
+## Hardware that works
 
-> [!WARNING]
-> The following owner-authored workflow is **[C]** as a report of the owner's procedure. It has not been independently repeated. Compatibility of the bundled utility and each write command with any other board or firmware remains **[S]**.
+SMBIOS write support depends on the board vendor and platform. The following results are community-reported for AMI Aptio boards; this project has not verified them. Every row is **[S]** (reported, not verified here).
 
-## **Instructions**
+| Board vendor | Reported result |
+|---|---|
+| Gigabyte | Very good on AM4, poor on AM5 |
+| ASRock | Reliable on AM4 and AM5 |
+| MSI | Works, with issues |
+| ASUS | Very limited support |
+
+The owner's tested workflow uses the AMI DMIEdit utility on an AMI BIOS board; see [Instructions](#instructions).
+
+## Instructions
 
 ### Step 1: Extract Current Serial Numbers
+
 1. Extract the `dmi-edit-win64-ami.zip` contents to a folder
 2. Run `1.GET ALL SERIALS.bat` as Administrator
 3. This will create a timestamped text file with all current serial numbers
@@ -52,6 +63,7 @@
    - Baseboard Name
 
 ### Step 2: Modify Serial Numbers
+
 1. Open `2.CHANGE SERIALS EXAMPLE DONT RUN.bat` in a text editor
 2. Follow these guidelines for modifications:
    - Change only 2-5 digits of your original serial
@@ -59,24 +71,31 @@
    - Example:
      - Original: `08ZU9T1_NAVX2ZXV4F`
      - Changed: `08ZU9T1_NABX12XZ4A`
+     - This serial format is specific to that board model; other boards use other formats.
 3. Update the commands in the batch file with your new values:
    - `/SU` - System UUID (generate a new UUID)
    - `/BS` - Baseboard Serial Number
    - `/BP` - Baseboard Name (optional)
 
-> [!WARNING]
-> The two owner-original values above look realistic, but their provenance is not established. The owner must confirm that both are fabricated before publication.
-
 ### Step 3: Apply Changes
+
 1. Run the modified `2.CHANGE SERIALS.bat` as Administrator
 2. The tool will update the DMI/BIOS information
 
 ### Step 4: Final Steps
+
 1. Reflash your BIOS to make changes permanent
 2. Clear CMOS after flashing
 3. Verify changes using HWIDChecker.exe
 
-## **Important Notes**
+<details><summary>Older info (outdated)</summary>
+
+- Reflash your BIOS to make changes permanent. An official firmware update can also replace or regenerate SMBIOS data, so verify after every BIOS update.
+
+</details>
+
+## Important Notes
+
 - Always backup your original serial numbers
 - Changes may require BIOS reflash to persist
 - Some motherboards may have additional protection - check your manufacturer's documentation
@@ -112,8 +131,8 @@ Before any write:
 > The recovery procedure is untested. A saved firmware dump is evidence, but whether it is a usable restore image for a specific board remains **[S]**.
 
 1. Record the exact motherboard model, board revision, current BIOS version, and current firmware settings.
-2. Export or photograph the BitLocker recovery key. If a firmware or TPM change is planned, suspend BitLocker using Microsoft's documented procedure and resume it after the machine boots normally. **[A]**
-3. Save the complete output from `HWIDChecker.exe`. Also keep the timestamped serial export created by the existing Step 1.
+2. Export or photograph the BitLocker recovery key. If a firmware or TPM change is planned, suspend BitLocker using Microsoft's documented procedure and resume it after the machine boots normally. **[A]** See the [safety checklist](../getting-started/getting-started.md#safety-checklist).
+3. Save the complete output from `HWIDChecker.exe`. Also keep the timestamped serial export created by Step 1.
 4. Download a stock recovery BIOS only from the motherboard vendor. Match the exact model and follow any revision-specific instructions from that vendor. **[A]**
 5. Read the model-specific recovery instructions before starting. A saved ROM dump is useful evidence, but it is not automatically a usable recovery image. **[S]**
 6. Use stable power. During an official update, do not disconnect power or interrupt the process. **[A]**
@@ -137,9 +156,6 @@ Microsoft documents the UUID as an SMBIOS Type 1 value, the baseboard serial thr
 
 AMI confirms that AFU sends update requests that the system firmware processes. **[A]** The linked AMI pages do not document the exact AMIDEWIN/DMIEdit command set used by the bundled archives. Exact compatibility therefore remains **[S]**.
 
-> [!WARNING]
-> The following tool-specific guidance is untested. Treat every AMIDEWIN switch and every write as **[S]**. Stop if the utility reports an unsupported function, driver error, write protection, secure-flash rejection, or a mismatch between the current board and the selected tool build.
-
 Use the narrowest possible workflow:
 
 1. Run the read-only serial collection first.
@@ -158,7 +174,7 @@ Keep using the local read-only collection batch. Review the change batch line by
 ASUS USB BIOS FlashBack is a board-specific recovery/update feature. ASUS requires the BIOS file for the exact board model, the correct filename, the dedicated USB port, and uninterrupted power until the FlashBack light goes out. **[A]** The official instructions describe vendor firmware. They do not validate a modified ROM image.
 
 > [!WARNING]
-> **[S] Untested procedure:** Dump the ROM with `AFUWINx64.exe DUMP.rom /O` and edit only a copy. The proposed method replaces the 16 UUID bytes without changing file size, flashes the modified image, and uses AMIDEWIN for other SMBIOS fields. Do not treat successful dumping or editing as proof that the image is safe to flash.
+> **Untested procedure [S]:** Dump the ROM with `AFUWINx64.exe DUMP.rom /O` and edit only a copy. The proposed method replaces the 16 UUID bytes without changing file size, flashes the modified image, and uses AMIDEWIN for other SMBIOS fields. Do not treat successful dumping or editing as proof that the image is safe to flash.
 
 If you research that path on an ASUS board:
 
@@ -173,7 +189,7 @@ Do not force-downgrade ASUS firmware as a general SMBIOS-writing procedure. No c
 
 ## Verify with HWIDChecker
 
-Run `HWIDChecker.exe` before the change, immediately after the first reboot, and again after a full shutdown and cold boot.
+Run `HWIDChecker.exe` before the change, immediately after the first reboot, and again after a full shutdown and cold boot. How to run and export: [Take before and after snapshots](../getting-started/getting-started.md#take-before-and-after-snapshots).
 
 Compare these sections:
 
@@ -188,8 +204,7 @@ HWIDChecker reads raw SMBIOS data and uses WMI where needed. **[A]** Compare its
 
 ## Troubleshooting
 
-> [!WARNING]
-> The cases marked **[S]** below are diagnostic possibilities. They are not tested recovery procedures.
+The cases marked **[S]** below are diagnostic possibilities. They are not tested recovery procedures.
 
 ### A value changes and then returns after reboot
 

@@ -1,10 +1,14 @@
 # TPM Spoofing Guide
 
+> [!NOTE]
+> **TL;DR:** The TPM carries its own endorsement identity (EK, EK certificate) that survives Windows reinstalls and TPM clears. This guide explains what that identity is, what changes it, and what does not.
+> Who reads it: Windows, BitLocker, and any attestation-based check that validates the EK certificate chain.
+> **Status:** identity model verified against TCG and Microsoft sources **[A]**. The fTPM flash-button method was tested on one MSI Z790 board **[C]**.
 > **Warning**: dTPM is flagged by some strict telemetry stacks (e.g., 🍊).
-> **Current Recommendation**: Use **fTPM** for 🍊/🍒.
+> **Current recommendation**: use **fTPM** for 🍊/🍒.
 > Since 2025-04-04, 🍒 enforces **fTPM** if you're flagged; dTPM no longer works there.
 
----
+Evidence grades appear inline. See [How to read these guides](../getting-started/getting-started.md#how-to-read-these-guides). **[A]** means verified against the linked specification, Microsoft documentation, vendor documentation, or this repository's source.
 
 ## Table of Contents
 
@@ -17,11 +21,6 @@
 - [fTPM Spoofing](#-ftpm-spoofing)
 - [dTPM (Not Recommended)](#️-dtpm-not-recommended)
 - [Sources](#sources)
-
----
-
-> [!NOTE]
-> **[A]** means verified against the linked specification, Microsoft documentation, vendor documentation, or this repository's source.
 
 ## TPM identity and terminology
 
@@ -84,15 +83,17 @@ Open `tpm.msc` to confirm that Windows considers the TPM ready and to access the
 
 ## Verify with HWIDChecker.exe
 
-Run the repository-root `HWIDChecker.exe` before and after any approved change. In **TPM MODULES**, record the enabled state, manufacturer, TPM version, specification version, SHA-256 hash, and any certificate serial, thumbprint, or issuer that appears. The application obtains the detailed fields through `Get-TpmEndorsementKeyInfo`, then reduces the formatted output to one value per field. It can overwrite values when more than one certificate is present. **[A]** [HWIDChecker TPM provider source](https://github.com/Fundryi/HWID-Privacy/blob/main/app/src/Hardware/TpmInfo.cs)
+Run the repository-root `HWIDChecker.exe` before and after any approved change. How to run and export: [Take before and after snapshots](../getting-started/getting-started.md#take-before-and-after-snapshots). In **TPM MODULES**, record the enabled state, manufacturer, TPM version, specification version, SHA-256 hash, and any certificate serial, thumbprint, or issuer that appears. The application obtains the detailed fields through `Get-TpmEndorsementKeyInfo`, then reduces the formatted output to one value per field. It can overwrite values when more than one certificate is present. **[A]** [HWIDChecker TPM provider source](https://github.com/Fundryi/HWID-Privacy/blob/main/app/src/Hardware/TpmInfo.cs)
 
 Save the complete before-and-after output, but use the PowerShell certificate collections for the authoritative comparison. A changed SHA-256 hash with a missing or unchanged certificate is not enough to claim a trusted identity transition. Compare every certificate's serial, thumbprint, issuer, and chain separately, then follow the certificate checks in the [fTPM Identity Reset Guide](../resets/ftpm-reset-tutorial.md#check-your-certificate-after-any-rotation).
 
 ## ✅ fTPM Spoofing
 
+**Status:** tested on MSI Z790 **[C]**. The claims that it should work on all Intel boards and that it regenerates the fTPM seed remain **[S]**.
+
 - **Concept** (more complicated, and may be more relevant on AMD):
   - [fTPM Spoof PoC by cycript](https://github.com/cycript/FTPM_POC)
-- **Simpler Working Method**:
+- **Simpler working method**:
   - **Requirements**:
     - Intel platform
     - Motherboard with:
@@ -115,12 +116,10 @@ Save the complete before-and-after output, but use the PowerShell certificate co
   - Press the Flash Button and let it rewrite motherboard sectors.
   - This regenerates the fTPM seed
   - Results in a *new, unique fTPM serial* signed by EK
-- **Note: Doesn't work on AMD boards**
+- **Note**: doesn't work on AMD boards
 
 > [!WARNING]
-> The MSI Z790 result is **[C]** for that board only. The claims that the method should work on all Intel boards and that it regenerates the fTPM seed remain **[S]**. Intel documents an on-die certificate-authority design for CSME 15 and later, not an "offline EK." Do not use this procedure on another board without board-specific evidence. See [Firmware updates and EK continuity](#firmware-updates-and-ek-continuity) and the [generation-specific Intel findings](../resets/ftpm-reset-tutorial.md#intel-z790-vs-z790-era-method-vs-z890).
-
----
+> The MSI Z790 result is **[C]** for that board only. Intel documents an on-die certificate-authority design for CSME 15 and later, not an "offline EK." Do not use this procedure on another board without board-specific evidence. See [Firmware updates and EK continuity](#firmware-updates-and-ek-continuity) and the [generation-specific Intel findings](../resets/ftpm-reset-tutorial.md#intel-z790-vs-z790-era-method-vs-z890).
 
 ## ⚠️ dTPM (Not Recommended)
 
@@ -129,8 +128,6 @@ Save the complete before-and-after output, but use the PowerShell certificate co
 - In BIOS:
   - Disable fTPM
   - Enable dTPM
-
----
 
 ## Sources
 

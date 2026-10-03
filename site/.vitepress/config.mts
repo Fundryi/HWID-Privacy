@@ -3,6 +3,15 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repo = 'https://github.com/Fundryi/HWID-Privacy'
+const gettingStarted = '/guides/getting-started/getting-started'
+
+// [C] [A] [CC] [S] evidence grades used across the guides
+const grades: Record<string, [type: string, title: string]> = {
+  C: ['tip', 'Confirmed: tested first hand'],
+  A: ['info', 'Authoritative: documented by vendor or spec'],
+  CC: ['warning', 'Community consensus'],
+  S: ['danger', 'Single report, untested'],
+}
 
 // Guides stay in the repo root so they still read fine on GitHub.
 // The site reads them from there; nothing is copied.
@@ -11,8 +20,13 @@ export default defineConfig({
   description: 'Hardware identifier privacy guides',
   base: '/', // served from the custom domain set in Settings > Pages
   srcDir: '..',
-  srcExclude: ['app/**', 'site/**', 'docs/**', 'TMP/**', 'AGENTS.md', 'AI_TOOLS.md', 'CLAUDE*.md'],
-  rewrites: { 'README.md': 'index.md' },
+  srcExclude: [
+    'app/**', 'docs/**', 'TMP/**', 'AGENTS.md', 'AI_TOOLS.md', 'CLAUDE*.md',
+    'site/node_modules/**', 'site/.vitepress/**', 'site/package*.json',
+  ],
+  // site/home.md is the site-only landing page; the GitHub README becomes the overview
+  rewrites: { 'site/home.md': 'index.md', 'README.md': 'overview.md' },
+  appearance: 'dark', // matches the app
   lastUpdated: true,
   // Pages live above site/, so point their imports at site/node_modules
   vite: { resolve: { alias: { vue: fileURLToPath(new URL('../node_modules/vue', import.meta.url)) } } },
@@ -27,8 +41,8 @@ export default defineConfig({
       const render = md.renderer.rules.link_open ?? ((t, i, o, _e, self) => self.renderToken(t, i, o))
       md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
         const href = tokens[idx].attrGet('href')
-        // README.md is the site's home page (see rewrites)
-        if (href && /(^|\/)README\.md(#|$)/.test(href)) tokens[idx].attrSet('href', href.replace('README.md', 'index.md'))
+        // README.md is the site's overview page (see rewrites)
+        if (href && /(^|\/)README\.md(#|$)/.test(href)) tokens[idx].attrSet('href', href.replace('README.md', 'overview.md'))
         if (href && !/^[a-z]+:|^#/i.test(href)) {
           const file = path.posix.resolve('/', path.posix.dirname(env.relativePath), decodeURI(href.split('#')[0])).slice(1)
           const kind = /\.(zip|exe|bat)$/i.test(file) ? 'raw' : file.startsWith('app/') ? 'blob' : null
@@ -36,26 +50,98 @@ export default defineConfig({
         }
         return render(tokens, idx, options, env, self)
       }
+
+      md.core.ruler.push('hwid_site', (state) => {
+        const tokens = state.tokens
+
+        for (const t of tokens) {
+          // Evidence grades become colored badges, also inside bold text and table cells
+          if (t.type === 'inline' && t.children) {
+            t.children = t.children.flatMap((c) => {
+              if (c.type !== 'text' || !/\[(CC|C|A|S)\]/.test(c.content)) return [c]
+              return c.content.split(/\[(CC|C|A|S)\]/).flatMap((part, i) => {
+                const tok = new state.Token(i % 2 ? 'html_inline' : 'text', '', 0)
+                if (i % 2) {
+                  const [type, title] = grades[part]
+                  tok.content = `<Badge type="${type}" text="${part}" title="${title}" />`
+                } else tok.content = part
+                return part ? [tok] : []
+              })
+            })
+          }
+          // Mark "outdated" <details> blocks so CSS can color them
+          if (t.type === 'html_block' && /<summary>[^<]*outdated/i.test(t.content))
+            t.content = t.content.replace(/<details>/, '<details class="outdated">')
+        }
+
+        // Fold everything under "## Sources" into a closed <details>
+        const start = tokens.findIndex((t, i) => t.type === 'heading_open' && t.tag === 'h2' && tokens[i + 1]?.content.trim() === 'Sources')
+        if (start < 0) return
+        const from = start + 3 // after heading_open, inline, heading_close
+        let end = tokens.findIndex((t, i) => i >= from && t.type === 'heading_open' && (t.tag === 'h1' || t.tag === 'h2'))
+        if (end < 0) end = tokens.length
+        const items = tokens.slice(from, end).filter((t) => t.type === 'list_item_open')
+        const top = Math.min(...items.map((t) => t.level))
+        const n = items.filter((t) => t.level === top).length
+        const open = new state.Token('html_block', '', 0)
+        open.content = `<details class="sources"><summary>Sources (${n})</summary>\n`
+        const close = new state.Token('html_block', '', 0)
+        close.content = '</details>\n'
+        tokens.splice(end, 0, close)
+        tokens.splice(from, 0, open)
+      })
     },
   },
 
   themeConfig: {
-    search: { provider: 'local' },
+    search: { provider: 'local', options: { detailedView: true } },
+    nav: [
+      { text: 'Get started', link: gettingStarted },
+      { text: 'Overview', link: '/overview' },
+      { text: 'Download', link: `${repo}/raw/main/HWIDChecker.exe` },
+    ],
+    // Work order. Previous / next buttons follow this list.
     sidebar: [
-      { text: 'Overview', link: '/' },
-      { text: 'Getting Started', link: '/guides/getting-started/getting-started' },
       {
-        text: 'Guides',
+        text: 'Start',
+        items: [
+          { text: 'Overview', link: '/overview' },
+          { text: 'Getting Started', link: gettingStarted },
+        ],
+      },
+      {
+        text: 'Firmware',
         items: [
           { text: 'Motherboard (SMBIOS)', link: '/guides/motherboard-spoofing/motherboard-spoofing' },
           { text: 'NVRAM (EFI variables)', link: '/guides/nvram-spoofing/nvram-spoofing' },
-          { text: 'Storage (SSD)', link: '/guides/ssd-spoofing/ssd-spoofing' },
-          { text: 'MAC Address', link: '/guides/mac-spoofing/mac-spoofing' },
-          { text: 'RAM (SPD)', link: '/guides/ram-spoofing/ram-spoofing' },
-          { text: 'Monitor (EDID)', link: '/guides/monitor-spoofing/monitor-spoofing' },
-          { text: 'Router (ARP)', link: '/guides/arp-spoofing/arp-spoofing' },
           { text: 'TPM', link: '/guides/tpm-spoofing/tpm-spoofing' },
           { text: 'fTPM Reset (AM5)', link: '/guides/resets/ftpm-reset-tutorial' },
+        ],
+      },
+      {
+        text: 'Storage',
+        items: [{ text: 'SSD', link: '/guides/ssd-spoofing/ssd-spoofing' }],
+      },
+      {
+        text: 'Network',
+        items: [
+          { text: 'MAC Address', link: '/guides/mac-spoofing/mac-spoofing' },
+          { text: 'Router (ARP)', link: '/guides/arp-spoofing/arp-spoofing' },
+        ],
+      },
+      {
+        text: 'Peripherals',
+        items: [
+          { text: 'RAM (SPD)', link: '/guides/ram-spoofing/ram-spoofing' },
+          { text: 'Monitor (EDID)', link: '/guides/monitor-spoofing/monitor-spoofing' },
+        ],
+      },
+      {
+        // In-site anchors, so prev / next never points at a download
+        text: 'Tools',
+        items: [
+          { text: 'HWIDChecker', link: `${gettingStarted}#hwidcheckerexe` },
+          { text: 'Batch scripts', link: `${gettingStarted}#batch-script-fallback` },
         ],
       },
     ],

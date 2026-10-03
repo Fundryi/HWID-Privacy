@@ -1,9 +1,12 @@
 # Monitor and EDID Privacy Guide
 
-> [!WARNING]
-> A bad EDID can remove the picture, hide valid resolutions, disable audio, HDR, VRR, or HDCP, and leave you without a usable recovery screen. Keep an untouched backup and a second display or direct-cable recovery path before changing anything.
+> [!NOTE]
+> **TL;DR:** Changes the EDID identity (manufacturer, model, serial) a monitor reports to the system, through a software override or an inline emulator. Direct EEPROM rewrite changes the display hardware itself.
+> Who reads it: Windows (`WmiMonitorID`, registry EDID), the GPU driver, and any fingerprinting stack that reads display identity.
+> **Status:** the EEPROM rewrite report is first-hand from 2013 Blur Busters / Toni Wilen **[C]**. The override and emulator methods are documented against vendor and Microsoft sources **[A]**.
+> **Risk:** a bad EDID can remove the picture, hide valid resolutions, disable audio, HDR, VRR, or HDCP, and leave you without a usable recovery screen. Keep an untouched backup and a second display or direct-cable recovery path before changing anything.
 
-Evidence grades used here: **[C]** confirmed first-hand by a named user with details, **[A]** verified against a cited primary source, **[CC]** community consensus from multiple reports, and **[S]** a single unverified claim. Untested procedures are marked with a warning. This guide uses the same evidence model as the [fTPM identity reset guide](../resets/ftpm-reset-tutorial.md).
+Evidence grades appear inline. See [How to read these guides](../getting-started/getting-started.md#how-to-read-these-guides). This guide uses the same evidence model as the [fTPM identity reset guide](../resets/ftpm-reset-tutorial.md).
 
 ## Table of Contents
 
@@ -192,6 +195,8 @@ This is the lowest-risk way to test a changed identity on one Windows installati
 
 CRU requires Windows Vista or later and a supported graphics driver. Its author states that the Microsoft Basic Display Adapter does not support EDID overrides. **[A]**
 
+**Status:** documented override mechanism. **[A]**
+
 1. Open CRU and select the active monitor. Confirm its current identity and native mode match your baseline.
 2. Import the complete edited EDID. Use **Import complete EDID** when the intent is to import identity fields rather than only resolutions.
 3. Click **OK** to save the override.
@@ -267,6 +272,8 @@ If you independently obtain authoritative instructions for your exact revision, 
 
 ## Option 4: Direct monitor EEPROM modification
 
+**Status:** first-hand 2013 report for the ASUS VG248QE, credited to Toni Wilen. **[C]** Untested by this project.
+
 A 2013 Blur Busters report for the ASUS VG248QE, credited to Toni Wilen, identified a separate eight-pin `AT24C02C` behind the DVI connector, isolated its write-protect pin from the board, and then rewrote the DVI EDID through the display connection. It also reported a separate EEPROM for HDMI. This layout and result are specific to that monitor and board revision. They do not establish the layout of another monitor or its DisplayPort path. **[C]**
 
 > [!WARNING]
@@ -288,7 +295,7 @@ Until all of those are available, use a software override or a programmable inli
 
 ## Verify with HWIDChecker
 
-Verification is not just “the picture came back.” Use the same connection path before and after.
+Verification is not just "the picture came back." Use the same connection path before and after. How to run and export: [Take before and after snapshots](../getting-started/getting-started.md#take-before-and-after-snapshots).
 
 1. Run `HWIDChecker.exe` from the repository root.
 2. Open the **MONITOR INFORMATION** section.

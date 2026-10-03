@@ -1,43 +1,15 @@
-> **:warning: WARRANTY VOID DISCLAIMER**  
-> Changing the serial number and clearing SMART info will void your warranty!
-
 # SSD Storage Privacy
 
-## Index
-
-- [Evidence grades and safety boundary](#evidence-grades-and-safety-boundary)
-- [What a storage device can expose](#what-a-storage-device-can-expose)
-- [Which controller do I have?](#which-controller-do-i-have)
-- SPOOF GUIDE:
-  - [M.2 SSD Spoofing](#m2-ssd-spoofing)
-    - [Prerequisites](#prerequisites)
-    - [Instructions](#instructions)
-  - [Silicon Motion SM2263XT notes](#silicon-motion-sm2263xt-notes)
-  - [USB NVMe enclosures and bridge serials](#usb-nvme-enclosures-and-bridge-serials)
-  - [NORMAL 2.5' SSD Spoofing](#normal-25-ssd-spoofing)
-    - [Prerequisites](#prerequisites-1)
-    - [Steps to Follow](#steps-to-follow)
-- [RAID, disk identity, and volume identity](#raid-disk-identity-and-volume-identity)
-- [Verify the result](#verify-the-result)
-  - [Windows verification commands](#windows-verification-commands)
-- [Sources](#sources)
-
-> **The spoofer guid includes info on what SSD's chips work and where you can buy them!**
-
----
-
-## Evidence grades and safety boundary
-
-Evidence grades used here: **[C]** confirmed first-hand by the project owner or another named user with details, **[A]** verified against a cited primary source, **[CC]** community consensus, and **[S]** a single unverified claim. Untested procedures are marked.
-
-> [!CAUTION]
-> A controller mass-production (MP) tool is not a normal settings utility. It can erase namespaces and partitions, reset health data, load incompatible firmware, or leave the drive unable to initialize. Back up every file on the target drive and verify the backup from another device before continuing. Keep recovery media and encryption recovery keys available. Disconnect other writable drives so that you cannot select the wrong one. **[CC]**
-
-This page separates facts verified from public specifications from controller-specific procedures that have not been reproduced by this project. A matching retail model name is not enough. Vendors can change the controller or NAND between production batches. **[CC]**
+> [!NOTE]
+> **TL;DR:** Rewrites the controller-reported model, serial, and firmware of a supported SSD. The physical drive keeps working; the identifiers Windows, fingerprinting tools, and anti-cheats read change.
+> Who reads it: Windows (`Win32_DiskDrive`, storage IOCTLs), any fingerprinting stack that enumerates disks, and anti-cheats that log drive identity.
+> **Status:** the MAP1202 and YANSEN / KingSpec procedures were tested by the project owner on real hardware **[C]**. The SM2263XT and USB-bridge procedures are untested **[S]**.
+> **Risk:** a mass-production tool can brick the drive or wipe it. Back up first.
+> Changing serials and clearing SMART data voids the warranty on these drives.
 
 ## What a storage device can expose
 
-Changing one value does not automatically change every identifier at the layers below it. **[A]**
+Changing one value does not change every identifier below it. **[A]**
 
 | Layer | Examples | What it identifies | Evidence |
 |---|---|---|---|
@@ -65,73 +37,67 @@ The Windows volume serial is assigned when a volume is formatted. Formatting, re
 > [!WARNING]
 > Do not test an MP package just because the drive model appears in a forum post. Record the controller marking, NAND marking or verified flash-ID result, board revision, current firmware, and capacity first. A wrong NAND profile can make the drive unusable. **[CC]**
 
----
+## Hardware that works
 
-## **M.2 SSD SPOOFING**
+| Controller / drive | Tool | Storage | Status | Where to buy |
+|---|---|---|---|---|
+| Maxio MAP1202 (M.2 NVMe) | MXMPTool MAP1202 USB | Controller flash | Tested by the owner **[C]** | [Priventive 512GB](https://priventive.de/products/priventive-m2-nvme-512-gb), [Priventive 1TB](https://priventive.de/products/kopie-von-priventive-m-2-nvme-2280-m-key-1-tb-nulled-serials-no-hwid), [Priventive 2TB](https://priventive.de/products/priventive-m-2-nvme-2280-m-key-2-tb-nulled-serials-no-hwid). **10% coupon** for priventive.de: `HWIDZERO`. This coupon is not an affiliate coupon, you get the max out of it. |
+| Maxio MAP1202, other retail SSDs | MXMPTool MAP1202 USB | Controller flash | Not tested by the owner | [Fanxiang S500 NVMe (manufacturer link)](https://www.fanxiangssd.com/products/internal-solid-state-drive-fanxiang-s500-nvme-ssd-pcle?variant=45220228399421), [ssd-tester.de list of SSDs](https://ssd-tester.de/top_ssd.php) (Ctrl+F `MAP1202`, then choose) |
+| YANSEN / KingSpec (2.5-inch SATA) | SSDToolKits.exe over an ASMT 2115 SATA-to-USB bridge | Controller flash | Tested by the owner **[C]** | [Priventive 1TB](https://priventive.de/products/priventive-1-tb-nulled-serials-no-hwid-changeable-serials), [Priventive 2TB](https://priventive.de/products/priventive-2-tb-nulled-serials-no-hwid-changeable-serials), [Priventive 4TB](https://priventive.de/products/priventive-4-tb-nulled-serials-no-hwid). **10% coupon**: `HWIDZERO`. KingSpec alternative: [Amazon SSD link](https://www.hagglezon.com/en/s/https%3A%2F%2Fwww.amazon.de%2F-%2Fen%2FKingSpec-Internal-Compatible-Desktop-Laptop%2Fdp%2FB0B2K3ZCHH%3Fth%3D1) |
+| Silicon Motion SM2263XT (M.2 NVMe) | SM2263XT MP packages | Controller flash | Untested **[S]** | No bundled link; match controller and NAND first |
 
-## **Prerequisites**
+> [!NOTE]
+> The spoofer guide includes info on what SSD chips work and where you can buy them.
+> A matching retail model name is not enough. Vendors can change the controller or NAND between production batches. **[CC]**
+> The external KingSpec note names `SSDToolKits.exe` and an ASMT 2115 SATA-to-USB bridge, but does not identify the SSD controller or NAND. The owner's **[C]** result applies to the YANSEN / KingSpec hardware and bridge they used. Compatibility of the linked KingSpec listing, replacement stock, and other production batches is unverified. **[S]**
 
-- Compatible SSD(needs a `Maxio MAP1202 Controller`):
-  - ✅ **Tested SSD:**
-    - [Priventive 512GB](https://priventive.de/products/priventive-m2-nvme-512-gb)
-    - [Priventive 1TB](https://priventive.de/products/kopie-von-priventive-m-2-nvme-2280-m-key-1-tb-nulled-serials-no-hwid)
-    - [Priventive 2TB](https://priventive.de/products/priventive-m-2-nvme-2280-m-key-2-tb-nulled-serials-no-hwid)
-      - **10% COUPON** for priventive.de `HWIDZERO`
-        - This coupon is not an affiliat coupon, you get the max out of it.
-  - ❓ **Other SSDs (not personally tested):**
-    - [Manufacturer Link](https://www.fanxiangssd.com/products/internal-solid-state-drive-fanxiang-s500-nvme-ssd-pcle?variant=45220228399421)
-    - [List Of SSD's](https://ssd-tester.de/top_ssd.php)
-      - CTRL + F + `MAP1202` then choose.
+## M.2 SSD SPOOFING
+
+**Status:** tested by the project owner on real hardware (MAP1202). **[C]** No public controller manual exists for it, so follow the steps exactly.
+
+> [!CAUTION]
+> The project owner confirmed this procedure on real hardware, but it has not been independently repeated. Assume it destroys all data on the SSD. Back up and verify the backup first. Do not continue if the tool reports a different controller, capacity, or NAND configuration than expected.
+
+### Prerequisites
+
+- A compatible SSD (needs a `Maxio MAP1202 Controller`). See [Hardware that works](#hardware-that-works) for tested drives and where to buy them.
 - Required:
-
   - **[M2_SERIAL_CHANGE_TOOL.zip](./m2-nvme/M2_SERIAL_CHANGE_TOOL.zip)**
   - **[USB-to-M.2 Adapter](https://priventive.de/products/m2-usb-adapter)**
     - <details>
-       <summary>A USB-to-M.2 Adapter(Exapnd me to see picture)</summary>
+       <summary>A USB-to-M.2 Adapter (expand to see picture)</summary>
       Try to look for a "JMicron JMS583" chipset.
 
       ![Step 1](./m2-nvme/Images/image_0.png)
 
        </details>
-
-
 - Optional:
-  - **[HWIDChecker.exe](/HWIDChecker.exe)**
-    - (Optional but recommended to check your before/after SSD details)
-  - **A Secondary PC** (with **no anti-cheat** installed)
-    - This is optinal, you can use it on your main pc, just no Anti-Cheat open/installed! :)
+  - **[HWIDChecker.exe](/HWIDChecker.exe)** (recommended for the before/after comparison)
+  - **A secondary PC** with no anti-cheat installed
+    - This is optional; you can use it on your main PC, just no anti-cheat open/installed.
 
----
+### Instructions
 
-## **Instructions**
-
-Follow these steps carefully to spoof your M.2 SSD.
-
-The MAP1202 procedure below was tested by the project owner on real hardware. **[C]** No public controller manual exists for it, so follow the steps exactly.
-
-> [!WARNING]
-> The project owner confirmed this procedure on real hardware, but it has not been independently repeated. Assume it destroys all data on the SSD. Back up and verify the backup first. Do not continue if the tool reports a different controller, capacity, or NAND configuration than expected.
-
-1. **Plug the M.2 into a USB adapter.**  
+1. **Plug the M.2 into a USB adapter.**
    ![Step 1](./m2-nvme/Images/image_1.png)
 
-2. **Connect the USB adapter to your SECOND PC** (make sure **NO ANTICHEAT** is installed).  
+2. **Connect the USB adapter to your SECOND PC** (make sure **no anti-cheat** is installed).
    ![Step 2](./m2-nvme/Images/image_2.png)
 
 3. **Open the MXMPTool_MAP1202_USB_V0_01_009d.exe** (previously downloaded from the link in Prerequisites).
 
-4. **Go to "Test items".**  
-   ![Step 6](./m2-nvme/Images/image_3.png)  
+4. **Go to "Test items".**
+   ![Step 6](./m2-nvme/Images/image_3.png)
    Configure it as shown in the image above.
 
-5. **Next, go to "Device Setting".**  
+5. **Next, go to "Device Setting".**
    ![Step 8](./m2-nvme/Images/image_4.png)
 
 6. **Enter the following details** (follow the recommended format):
 
-   - **Firmware Version**: Use **only numbers**.
-   - **Model Number**: Use **only letters & numbers**, up to a maximum of **20 characters**.
-   - **Preferred Serial Number**: Must match **TARGET SN LENGTH** (default is **13**).
+   - **Firmware Version**: use **only numbers**.
+   - **Model Number**: use **only letters and numbers**, up to a maximum of **20 characters**.
+   - **Preferred Serial Number**: must match **TARGET SN LENGTH** (default is **13**).
 
 7. **Return to the "Main Page"** of the tool.
 
@@ -139,7 +105,7 @@ The MAP1202 procedure below was tested by the project owner on real hardware. **
 
 9. **Check the first port** in the tool.
 
-   - When it turns **green**, the process has **completed successfully**.  
+   - When it turns **green**, the process has **completed successfully**.
      ![Step 14](./m2-nvme/Images/image_5.png)
 
 10. **Unplug the USB adapter** from the PC.
@@ -156,25 +122,27 @@ The MAP1202 procedure below was tested by the project owner on real hardware. **
 
 16. **Verify** that your **Model Name**, **Firmware Version**, and **Serial Number** have been updated.
 
----
-
 ## Silicon Motion SM2263XT notes
+
+**Status:** untested by this project. **[S]**
 
 Silicon Motion documents the SM2263XT hardware as a DRAM-less PCIe Gen3 x4, NVMe 1.3 controller with four NAND channels and Host Memory Buffer support. **[A]** The controller-specific programming workflow below comes from one external community guide and has not been reproduced by this project. **[S]**
 
-> [!WARNING]
+> [!CAUTION]
 > Every step in this subsection is untested and graded **[S]**. The available SM2263XT MP packages are unofficial factory tools. They may contain unsigned drivers, wipe the drive, or permanently damage it. Use an isolated test system, scan downloads, keep the target drive empty, and never install an unknown storage driver on a production machine.
 
-1. **[S]** Boot Windows from a different physical drive. The target NVMe must not be the active system disk while its firmware is being serviced.
-2. **[S]** Confirm the controller marking and determine the exact NAND generation. A controller-specific flash-identification utility and driver may be required, but their binaries are unvalidated and are not redistributed here.
-3. **[S]** Select an MP package that explicitly matches both `SM2263XT` and the detected NAND family. The external report describes packages grouped by NAND type, but a package from one SSD maker may still be incompatible with another board design.
-4. **[S]** Enter ROM mode only with pads documented for the exact PCB revision. Power the system off before making any connection. Never short random pads. The wrong pads can electrically damage the SSD or host.
-5. **[S]** In the MP utility, compare its NAND auto-detection with the independent result from step 2 before writing anything. Stop on any mismatch.
-6. **[S]** If the matched utility exposes them, configure the model, serial range or mask, firmware string, IEEE OUI, and extension identifier. Do not use blank or all-zero identifiers. In the reported SM2263XT case, the OUI plus extension identifier produced the namespace EUI-64, but that mapping is not proven for every firmware build.
-7. **[S]** Save the configuration, reopen it, and verify every value before starting the write. Do not interrupt power during programming.
-8. **[S]** After the utility reports success, shut down fully, remove power, reinstall the drive normally, recreate partitions if required, and compare every identifier listed in [Verify the result](#verify-the-result).
+1. Boot Windows from a different physical drive. The target NVMe must not be the active system disk while its firmware is being serviced.
+2. Confirm the controller marking and determine the exact NAND generation. A controller-specific flash-identification utility and driver may be required, but their binaries are unvalidated and are not redistributed here.
+3. Select an MP package that explicitly matches both `SM2263XT` and the detected NAND family. The external report describes packages grouped by NAND type, but a package from one SSD maker may still be incompatible with another board design.
+4. Enter ROM mode only with pads documented for the exact PCB revision. Power the system off before making any connection. Never short random pads. The wrong pads can electrically damage the SSD or host.
+5. In the MP utility, compare its NAND auto-detection with the independent result from step 2 before writing anything. Stop on any mismatch.
+6. If the matched utility exposes them, configure the model, serial range or mask, firmware string, IEEE OUI, and extension identifier. Do not use blank or all-zero identifiers. In the reported SM2263XT case, the OUI plus extension identifier produced the namespace EUI-64, but that mapping is not proven for every firmware build.
+7. Save the configuration, reopen it, and verify every value before starting the write. Do not interrupt power during programming.
+8. After the utility reports success, shut down fully, remove power, reinstall the drive normally, recreate partitions if required, and compare every identifier listed in [Verify the result](#verify-the-result).
 
 ## USB NVMe enclosures and bridge serials
+
+**Status:** untested by this project. **[S]**
 
 The Sabrent EC-SNVE is a USB enclosure for M.2 NVMe and SATA drives. Sabrent's FAQ spells its bridge `RTL92108B`. Realtek's official catalog documents an `RTL9210B-CG` dual-protocol bridge. Because those names do not exactly match, confirm the chip or firmware dump instead of inferring the exact revision from the product page. **[A]**
 
@@ -182,76 +150,59 @@ One community repository contains RTL9210 configuration examples with separate `
 
 Programming a USB bridge is different from programming the SSD. A bridge configuration change does not prove that the SSD's native NVMe SN, EUI-64, NGUID, firmware, or SMART / Health data changed. Verify the drive once through the enclosure and again in a native M.2 slot. **[A]**
 
-> [!WARNING]
+> [!CAUTION]
 > The bridge-flashing procedure below is untested by this project and graded **[S]**. Flashing the wrong RTL9210A/RTL9210B firmware or another enclosure's configuration can disable USB access. Preserve a full factory dump before changing anything.
 
-1. **[S]** Confirm the exact EC-SNVE hardware revision and record the controller name and firmware from its current dump. Similar names and USB IDs do not prove identical boards.
-2. **[S]** Save the complete factory firmware and configuration dump in two locations.
-3. **[S]** Start from the configuration dumped from that enclosure. Change only the intended bridge identity field. Do not copy PHY, power, LED, PCIe, or SATA settings from an unrelated enclosure.
-4. **[S]** Use a firmware tool and package intended for that exact RTL9210B enclosure revision. Keep power stable until the write and verification finish.
-5. **[S]** Reconnect the enclosure and compare its USB/SCSI identity in HWIDChecker. Then install the SSD directly in an M.2 slot and compare the native NVMe identity. If only the USB result changed, you changed the bridge, not the SSD.
+1. Confirm the exact EC-SNVE hardware revision and record the controller name and firmware from its current dump. Similar names and USB IDs do not prove identical boards.
+2. Save the complete factory firmware and configuration dump in two locations.
+3. Start from the configuration dumped from that enclosure. Change only the intended bridge identity field. Do not copy PHY, power, LED, PCIe, or SATA settings from an unrelated enclosure.
+4. Use a firmware tool and package intended for that exact RTL9210B enclosure revision. Keep power stable until the write and verification finish.
+5. Reconnect the enclosure and compare its USB/SCSI identity in HWIDChecker. Then install the SSD directly in an M.2 slot and compare the native NVMe identity. If only the USB result changed, you changed the bridge, not the SSD.
 
----
+## NORMAL 2.5' SSD SPOOFING
 
-## **NORMAL 2.5' SSD SPOOFING**
+**Status:** tested by the project owner on real hardware (YANSEN / KingSpec). **[C]** No public controller manual exists for it, so follow the steps exactly.
 
-## **Prerequisites**
-
-- Compatible SSD(Manufacture `YANSEN`):
-  - ✅ **Tested SSD:**
-    - **Priventive SSD**
-      - [Priventive 1TB](https://priventive.de/products/priventive-1-tb-nulled-serials-no-hwid-changeable-serials)
-      - [Priventive 2TB](https://priventive.de/products/priventive-2-tb-nulled-serials-no-hwid-changeable-serials)
-      - [Priventive 4TB](https://priventive.de/products/priventive-4-tb-nulled-serials-no-hwid)
-      - **10% COUPON** for priventive.de `HWIDZERO`
-  - ❓ **Other SSDs:**
-    - **KingSpec SSD**
-      - [Amazon SSD Link](https://www.hagglezon.com/en/s/https%3A%2F%2Fwww.amazon.de%2F-%2Fen%2FKingSpec-Internal-Compatible-Desktop-Laptop%2Fdp%2FB0B2K3ZCHH%3Fth%3D1)
-- Required:
-  - **[SSD_SERIAL_CHANGE_TOOL.zip](./sata-25/SSD_SERIAL_CHANGE_TOOL.zip)**
-  - **A SATA-to-USB with ASMT 2115 Chipset**
-- Optional:
-  - **[HWIDChecker.exe](/HWIDChecker.exe)**
-    - (Optional but recommended to check your before/after SSD details)
-  - **A Secondary PC** (with **no anti-cheat** installed)
-    - This is optinal, you can use it on your main pc, just no Anti-Cheat open/installed! :)
-
-> [!WARNING]
-> The external KingSpec note names `SSDToolKits.exe` and an ASMT 2115 SATA-to-USB bridge, but it does not identify the SSD controller or NAND. The owner's **[C]** result applies to the YANSEN / KingSpec hardware and bridge they used. Compatibility of the linked KingSpec listing, replacement stock, and other production batches is unverified. A brand or retail model is not controller proof. **[S]**
-
----
-
-## Steps to Follow:
-
-The YANSEN / KingSpec procedure below was tested by the project owner on real hardware. **[C]** No public controller manual exists for it, so follow the steps exactly.
-
-> [!WARNING]
+> [!CAUTION]
 > The project owner confirmed this procedure on real hardware, but it has not been independently repeated. Assume that pressing **Update** can erase the SSD or make it inaccessible. Back up and verify the backup first. Confirm both the SSD controller and the ASMT 2115 bridge before continuing.
 
-1. Plug the SSD into a USB adapter.  
+### Prerequisites
+
+- A compatible SSD (manufacture `YANSEN`). See [Hardware that works](#hardware-that-works) for tested drives and where to buy them.
+- Required:
+  - **[SSD_SERIAL_CHANGE_TOOL.zip](./sata-25/SSD_SERIAL_CHANGE_TOOL.zip)**
+  - **A SATA-to-USB with ASMT 2115 chipset**
+- Optional:
+  - **[HWIDChecker.exe](/HWIDChecker.exe)** (recommended for the before/after comparison)
+  - **A secondary PC** with no anti-cheat installed
+    - This is optional; you can use it on your main PC, just no anti-cheat open/installed.
+
+### Steps to Follow
+
+1. Plug the SSD into a USB adapter.
    ![Step 1](./sata-25/Images/image_1.png)
 
-2. Plug the USB adapter into your SECOND PC (**NO ANTICHEAT SHOULD BE INSTALLED**).  
+2. Plug the USB adapter into your SECOND PC (**no anti-cheat should be installed**).
    ![Step 2](./sata-25/Images/image_2.png)
 
 3. **Open the SSDToolKits.exe** (previously downloaded from the link in Prerequisites).
 
-4. Check the **top dropdown** to see if your SSD is detected. If not, redo all previous steps.  
+4. Check the **top dropdown** to see if your SSD is detected. If not, redo all previous steps.
    ![Step 6](./sata-25/Images/image_3.png)
 
 5. Set your preferred information as follows:
 
-   - **Firmware Version**: Use only numbers (FW Version).
-   - **Model Name**: Use only letters and numbers, max 20 characters.
-   - **Serial Number**: Maximum length is **TARGET SN LENGTH** (default: 13).
-   - **WWN**: Not needed, but you can edit.
+   - **Firmware Version**: use only numbers (FW Version).
+   - **Model Name**: use only letters and numbers, max 20 characters.
+   - **Serial Number**: maximum length is **TARGET SN LENGTH** (default: 13).
+   - **WWN**: not needed, but you can edit.
 
 6. Click **"Save"**.
 
-7. Press **"Update"**.  
+7. Press **"Update"**.
    ![Step 9](./sata-25/Images/image_4.png)
 
-8. When the program shows **PASS** in the top right corner, everything succeeded.  
+8. When the program shows **PASS** in the top right corner, everything succeeded.
    ![Step 10](./sata-25/Images/image_5.png)
 
 9. You should now see your updated **Model Name, Firmware Version, and Serial Number**.
@@ -270,8 +221,6 @@ The YANSEN / KingSpec procedure below was tested by the project owner on real ha
 
 16. **Verify** that your **Model Name**, **Firmware Version**, and **Serial Number** have been updated.
 
----
-
 ## RAID, disk identity, and volume identity
 
 A RAID controller or Windows virtual-disk layer can present a logical or virtual disk with its own identity. Microsoft documents physical disks and virtual disks as separate storage objects. **[A]**
@@ -279,6 +228,11 @@ A RAID controller or Windows virtual-disk layer can present a logical or virtual
 A hardware RAID subsystem exposes storage as logical units. Whether Windows can enumerate each member drive or its serial depends on the controller and storage provider. The controller's management interface may expose details that the normal Windows disk view does not. **[A]** for the logical-unit model; **[CC]** for controller-specific pass-through behavior.
 
 Creating a Windows Storage Spaces virtual disk, changing the partition layout, or formatting a volume creates or changes identities at those layers. It does not by itself document a firmware change to member SSDs. Record and compare both the physical and virtual objects. **[A]**
+
+A reported anti-cheat issue dated 2026-08-16 involved RAID 0; see the [Reported anti-cheat status](../getting-started/getting-started.md#reported-anti-cheat-status).
+
+> [!NOTE]
+> Software/BIOS-based RAID0 is generally virtual and unsafe for HWID evasion.
 
 ## Verify the result
 
