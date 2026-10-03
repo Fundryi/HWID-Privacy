@@ -10,10 +10,9 @@ use crate::{
 use std::{
     collections::HashMap,
     fs,
-    panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
         mpsc,
     },
@@ -22,8 +21,59 @@ use std::{
 };
 
 type Status = Arc<dyn Fn(&str) + Send + Sync>;
+
+// Keep restore failures until the summary consumes them. Cancellation can happen after a
+// worker returns its failure, or even in a later batch, so the worker's token is not enough.
+struct RestoreFailures {
+    pending: Mutex<Option<Vec<(String, String)>>>,
+    emit: Status,
+}
+
+impl RestoreFailures {
+    fn new(emit: Status) -> Self {
+        Self {
+            pending: Mutex::new(Some(Vec::new())),
+            emit,
+        }
+    }
+
+    fn report(&self, name: &str, error: Error) {
+        let message = error.to_string();
+        win::record(error);
+        let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(lines) = pending.as_mut() {
+            lines.push((name.to_owned(), message));
+        } else {
+            // The bounded drain expired; late failures still reach the diagnostic sink.
+            drop(pending);
+            (self.emit)(&format!("Failed: {name} - {message}"));
+        }
+    }
+
+    fn finish(&self, summary: Option<&mut Vec<(String, String)>>) {
+        let lines = self
+            .pending
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        if let Some(summary) = summary {
+            // Explicit restore failures are already in Counts; unwinding guards may add others.
+            for failure in lines.into_iter().flatten() {
+                if !summary.contains(&failure) {
+                    summary.push(failure);
+                }
+            }
+        } else {
+            for (name, message) in lines.into_iter().flatten() {
+                (self.emit)(&format!("Failed: {name} - {message}"));
+            }
+        }
+    }
+}
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL: Duration = Duration::from_millis(50);
+// Reserve one second for the UI to receive completion within its ten-second close budget.
+const CANCEL_WAIT: Duration = Duration::from_secs(9);
 // Ten 15-second process attempts plus local config/clear/restore calls get a bounded budget.
 const CLEAR_TIMEOUT: Duration = Duration::from_secs(180);
 const FAILED_CLEAR: &str = "Failed to clear log after trying all available methods";
@@ -156,15 +206,18 @@ pub fn clean(cancel: Cancel, status: &(dyn Fn(&str) + Sync)) -> CleanOutcome {
     let emit: Status = Arc::new(move |text| {
         if lines.send(Message::Line(text.to_owned())).is_err() {
             // A timed-out/closed consumer cannot receive late restoration diagnostics.
-            eprintln!("{text}");
+            win::record(Error::msg("Event Log Cleaning", text));
         }
     });
     let worker_cancel = cancel.clone();
     let spawn = thread::Builder::new()
         .name("event-log-cleaner".into())
         .spawn(move || {
-            let result = catch_unwind(AssertUnwindSafe(|| clean_inner(&worker_cancel, &emit)))
-                .unwrap_or_else(|panic| Err(panic_error(panic)));
+            let restores = Arc::new(RestoreFailures::new(emit.clone()));
+            let result = win::catch_panic(|| clean_inner(&worker_cancel, &emit, &restores))
+                .unwrap_or_else(|panic| Err(Error::msg("Event Log Cleaning", panic)));
+            // A cancelled/failed run never reaches the normal failed-summary list.
+            restores.finish(None);
             let outcome = if worker_cancel.is_cancelled() {
                 emit("");
                 emit("Log cleaning canceled by user.");
@@ -180,7 +233,7 @@ pub fn clean(cancel: Cancel, status: &(dyn Fn(&str) + Sync)) -> CleanOutcome {
             };
             // The receiver may have closed after its deadline; no shared resources depend on delivery.
             if tx.send(Message::Done(outcome)).is_err() {
-                eprintln!("Event log cleaner consumer closed");
+                win::record(Error::msg("Event Log Cleaning", "cleaner consumer closed"));
             }
         });
     if let Err(error) = spawn {
@@ -211,11 +264,11 @@ pub fn clean(cancel: Cancel, status: &(dyn Fn(&str) + Sync)) -> CleanOutcome {
 /// Returns standard and additional log names without changing any channel.
 pub fn planned_logs() -> (Vec<String>, Vec<String>) {
     let standard = unique(STANDARD.lines()).0;
-    let emit: Status = Arc::new(|line| eprintln!("{line}"));
+    let emit: Status = Arc::new(|line| win::record(Error::msg("Event Log Cleaning", line)));
     match discover(standard.clone(), &Cancel::new(), &emit) {
         Ok(additional) => (standard, additional),
         Err(error) => {
-            eprintln!("Skipped additional log discovery: {error}");
+            win::record(error);
             (standard, Vec::new())
         }
     }
@@ -256,8 +309,41 @@ fn panic_error(panic: Box<dyn std::any::Any + Send>) -> Error {
     Error::msg("Event Log Cleaning", text)
 }
 
-// Threads own all OS state. A deadline cancels the batch and starts no replacement workers;
-// an in-flight native call is left to finish and run its restoration guard, like provider deadlines.
+// Threads own all OS state. Cancellation stops new work and drains running restore guards.
+// A hung native call cannot be interrupted; the shared drain deadline prevents an unbounded wait.
+fn stop_workers(local: &Cancel, workers: &mut Vec<thread::JoinHandle<()>>) {
+    local.cancel();
+    let deadline = Instant::now() + CANCEL_WAIT;
+    while !workers.is_empty() {
+        let mut index = 0;
+        while index < workers.len() {
+            if workers[index].is_finished() {
+                if let Err(panic) = workers.swap_remove(index).join() {
+                    win::record(panic_error(panic));
+                }
+            } else {
+                index += 1;
+            }
+        }
+        if workers.is_empty() {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            win::record(Error {
+                op: "Event Log Cleaning",
+                code: 1460,
+                detail: format!(
+                    "stop wait timed out after 9000ms; {} operations still running",
+                    workers.len()
+                ),
+            });
+            break;
+        }
+        thread::sleep(POLL.min(remaining));
+    }
+}
+
 fn parallel<T: Send + 'static>(
     names: Vec<String>,
     limit: usize,
@@ -269,12 +355,14 @@ fn parallel<T: Send + 'static>(
         Started(usize, Instant),
         Done(usize, Result<T>),
     }
+    checkpoint(cancel)?;
     let names = Arc::new(names);
     let job = Arc::new(job);
     let cursor = Arc::new(AtomicUsize::new(0));
     let (tx, rx) = mpsc::channel();
     let local = Cancel::new();
     let mut active = HashMap::new();
+    let mut workers = Vec::new();
     let mut results: Vec<Option<Result<T>>> = (0..names.len()).map(|_| None).collect();
     for _ in 0..limit.min(names.len()) {
         let names = names.clone();
@@ -282,10 +370,11 @@ fn parallel<T: Send + 'static>(
         let job = job.clone();
         let tx = tx.clone();
         let token = local.clone();
-        if let Err(error) = thread::Builder::new()
+        let parent_cancel = cancel.clone();
+        match thread::Builder::new()
             .name("event-log-operation".into())
             .spawn(move || {
-                while !token.is_cancelled() {
+                while !token.is_cancelled() && !parent_cancel.is_cancelled() {
                     let index = cursor.fetch_add(1, Ordering::Relaxed);
                     let Some(name) = names.get(index) else {
                         break;
@@ -294,27 +383,33 @@ fn parallel<T: Send + 'static>(
                         // A canceled/timed-out batch intentionally closes the receiver.
                         break;
                     }
-                    let result = catch_unwind(AssertUnwindSafe(|| {
+                    let result = win::catch_panic(|| {
                         checkpoint(&token)?;
+                        checkpoint(&parent_cancel)?;
                         job(name, &token)
-                    }))
-                    .unwrap_or_else(|panic| Err(panic_error(panic)));
+                    })
+                    .unwrap_or_else(|panic| Err(Error::msg("Event Log Cleaning", panic)));
                     if tx.send(Message::Done(index, result)).is_err() {
-                        eprintln!("Event log operation finished after its batch closed");
+                        win::record(Error::msg(
+                            "Event Log Cleaning",
+                            "operation finished after its batch closed",
+                        ));
                         break;
                     }
                 }
-            })
-        {
-            local.cancel();
-            return Err(Error::msg("Event Log Cleaning", error.to_string()));
+            }) {
+            Ok(worker) => workers.push(worker),
+            Err(error) => {
+                stop_workers(&local, &mut workers);
+                return Err(Error::msg("Event Log Cleaning", error.to_string()));
+            }
         }
     }
     drop(tx);
     let mut completed = 0;
     while completed < names.len() {
         if cancel.is_cancelled() {
-            local.cancel();
+            stop_workers(&local, &mut workers);
             return checkpoint(cancel).map(|_| Vec::new());
         }
         match rx.recv_timeout(POLL) {
@@ -332,7 +427,7 @@ fn parallel<T: Send + 'static>(
             }
         }
         if active.values().any(|start| start.elapsed() >= timeout) {
-            local.cancel();
+            stop_workers(&local, &mut workers);
             for result in &mut results {
                 if result.is_none() {
                     *result = Some(Err(Error {
@@ -408,7 +503,7 @@ fn discover(known: Vec<String>, cancel: &Cancel, emit: &Status) -> Result<Vec<St
             let enabled = match evt::is_channel_enabled(name) {
                 Ok(value) => Some(value),
                 Err(error) => {
-                    eprintln!("{name}: {error}");
+                    win::record(error);
                     None
                 }
             };
@@ -451,7 +546,7 @@ enum Attempt {
     RestoreFailed { cleared: bool, message: String },
 }
 
-fn clean_inner(cancel: &Cancel, emit: &Status) -> Result<()> {
+fn clean_inner(cancel: &Cancel, emit: &Status, restores: &Arc<RestoreFailures>) -> Result<()> {
     checkpoint(cancel)?;
     for privilege in ["SeSecurityPrivilege", "SeBackupPrivilege"] {
         if win::security::enable_privilege(privilege) {
@@ -476,13 +571,14 @@ fn clean_inner(cancel: &Cancel, emit: &Status) -> Result<()> {
     thread::Builder::new()
         .name("event-log-discovery".into())
         .spawn(move || {
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                discover(known, &discovery_cancel, &discovery_emit)
-            }))
-            .unwrap_or_else(|panic| Err(panic_error(panic)));
+            let result = win::catch_panic(|| discover(known, &discovery_cancel, &discovery_emit))
+                .unwrap_or_else(|panic| Err(Error::msg("Event Log Cleaning", panic)));
             // The cleaner can close on cancellation before discovery completes.
             if tx.send(result).is_err() {
-                eprintln!("Event log discovery consumer closed");
+                win::record(Error::msg(
+                    "Event Log Cleaning",
+                    "discovery consumer closed",
+                ));
             }
         })
         .map_err(|error| Error::msg("Event Log Cleaning", error.to_string()))?;
@@ -494,6 +590,7 @@ fn clean_inner(cancel: &Cancel, emit: &Status) -> Result<()> {
         true,
         cancel,
         emit,
+        restores,
         &mut processed,
         &mut counts,
     )?;
@@ -519,10 +616,12 @@ fn clean_inner(cancel: &Cancel, emit: &Status) -> Result<()> {
             false,
             cancel,
             emit,
+            restores,
             &mut processed,
             &mut counts,
         )?;
     }
+    restores.finish(Some(&mut counts.failed));
     summary(standard.len(), additional.len(), &counts, emit);
     Ok(())
 }
@@ -532,6 +631,7 @@ fn batch(
     standard: bool,
     cancel: &Cancel,
     emit: &Status,
+    restores: &Arc<RestoreFailures>,
     processed: &mut Vec<String>,
     counts: &mut Counts,
 ) -> Result<()> {
@@ -556,6 +656,7 @@ fn batch(
     let attempted = Arc::new(AtomicUsize::new(0));
     let attempts = attempted.clone();
     let progress = emit.clone();
+    let restores = restores.clone();
     let results = parallel(
         filtered.clone(),
         10,
@@ -576,7 +677,7 @@ fn batch(
             checkpoint(token)?;
             let current = attempts.fetch_add(1, Ordering::Relaxed) + 1;
             progress(&format!("Clearing log {current}/{total}: {name}"));
-            match clear_advanced(name, token, &progress) {
+            match clear_advanced(name, token, &progress, &restores) {
                 Ok(attempt) => Ok(attempt),
                 Err(error) => {
                     checkpoint(token)?;
@@ -669,6 +770,7 @@ struct RestoreChannel {
     original: bool,
     armed: bool,
     emit: Status,
+    failures: Arc<RestoreFailures>,
 }
 impl RestoreChannel {
     fn restore(&mut self) -> Result<()> {
@@ -691,17 +793,22 @@ impl RestoreChannel {
 impl Drop for RestoreChannel {
     fn drop(&mut self) {
         if let Err(error) = self.restore() {
-            (self.emit)(&format!("Failed: {} - {error}", self.name));
+            self.failures.report(&self.name, error);
         }
     }
 }
 
-fn clear_advanced(name: &str, cancel: &Cancel, emit: &Status) -> Result<Attempt> {
+fn clear_advanced(
+    name: &str,
+    cancel: &Cancel,
+    emit: &Status,
+    restores: &Arc<RestoreFailures>,
+) -> Result<Attempt> {
     checkpoint(cancel)?;
     let kind = match evt::channel_type(name) {
         Ok(kind) => Some(kind),
         Err(error) => {
-            eprintln!("{name}: {error}");
+            win::record(error);
             None
         }
     };
@@ -709,7 +816,7 @@ fn clear_advanced(name: &str, cancel: &Cancel, emit: &Status) -> Result<Attempt>
         let original = match evt::is_channel_enabled(name) {
             Ok(enabled) => Some(enabled),
             Err(error) => {
-                eprintln!("{name}: {error}");
+                win::record(error);
                 None
             }
         };
@@ -718,6 +825,7 @@ fn clear_advanced(name: &str, cancel: &Cancel, emit: &Status) -> Result<Attempt>
             original: original.unwrap_or(false),
             armed: false,
             emit: emit.clone(),
+            failures: restores.clone(),
         };
         // AD-33: unknown state is never toggled; an already-disabled channel stays disabled.
         if original == Some(true) {
@@ -734,9 +842,10 @@ fn clear_advanced(name: &str, cancel: &Cancel, emit: &Status) -> Result<Attempt>
         }
         let result = native_then_process(name, cancel, emit);
         if let Err(error) = restore.restore() {
+            restores.report(name, error.clone());
             let cleared = matches!(result, Ok(Attempt::Cleared));
             if let Err(clear_error) = result {
-                eprintln!("{name}: {clear_error}");
+                win::record(clear_error);
             }
             if cleared {
                 emit(&format!("Cleared: {name}"));
@@ -767,7 +876,7 @@ fn clear_advanced(name: &str, cancel: &Cancel, emit: &Status) -> Result<Attempt>
         if let Some(output) = output
             && !output.stderr.is_empty()
         {
-            eprintln!("{}", output.stderr);
+            win::record(Error::msg("Event log process", output.stderr));
         }
         let user = evt::user_name()?;
         for grant in [
@@ -785,7 +894,7 @@ fn clear_advanced(name: &str, cancel: &Cancel, emit: &Status) -> Result<Attempt>
             if let Some(output) = output
                 && !output.stderr.is_empty()
             {
-                eprintln!("{}", output.stderr);
+                win::record(Error::msg("Event log process", output.stderr));
             }
         }
         if process_clear(name, cancel, emit)? {
@@ -808,7 +917,7 @@ fn clear_advanced(name: &str, cancel: &Cancel, emit: &Status) -> Result<Attempt>
         if let Some(output) = output
             && !output.stderr.is_empty()
         {
-            eprintln!("{}", output.stderr);
+            win::record(Error::msg("Event log process", output.stderr));
         }
         if process_clear(name, cancel, emit)? {
             return finish_clear(name, Attempt::Cleared, emit);
@@ -837,7 +946,7 @@ fn native_then_process(name: &str, cancel: &Cancel, emit: &Status) -> Result<Att
     }) {
         Ok(Some(())) => return Ok(Attempt::Cleared),
         Ok(None) => return Ok(Attempt::DryRun),
-        Err(error) => eprintln!("{name}: {error}"),
+        Err(error) => win::record(error),
     }
     if process_clear(name, cancel, emit)? {
         Ok(Attempt::Cleared)
@@ -857,7 +966,10 @@ fn process_clear(name: &str, cancel: &Cancel, emit: &Status) -> Result<bool> {
         Some(output) => {
             let success = output.stderr.is_empty();
             if !success {
-                eprintln!("{name}: {}", output.stderr);
+                win::record(Error::msg(
+                    "Event log process",
+                    format!("{name}: {}", output.stderr),
+                ));
             }
             Ok(success)
         }
@@ -882,7 +994,7 @@ fn file_exists(path: &PathBuf) -> bool {
         Ok(info) => info.is_file(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Err(error) => {
-            eprintln!("{}", io_error("Read log file metadata", error));
+            win::record(io_error("Read log file metadata", error));
             false
         }
     }
@@ -909,7 +1021,7 @@ impl Drop for TempExport {
             &self.emit,
             || remove_file(&self.path),
         ) {
-            eprintln!("Error in Temporary log export: {error}");
+            win::record(error);
         }
     }
 }
@@ -918,6 +1030,100 @@ impl Drop for TempExport {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn cancel_waits_for_running_restore_and_starts_no_replacements() {
+        struct Restore(Arc<AtomicUsize>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let cancel = Cancel::new();
+        let token = cancel.clone();
+        let restored = Arc::new(AtomicUsize::new(0));
+        let completed = restored.clone();
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let output = lines.clone();
+        let restores = Arc::new(RestoreFailures::new(Arc::new(move |line| {
+            output.lock().expect("output").push(line.to_owned());
+        })));
+        let failures = restores.clone();
+        let (started, ready) = mpsc::channel();
+        let canceller = thread::spawn(move || {
+            for _ in 0..3 {
+                ready
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("running job");
+            }
+            token.cancel();
+        });
+        let result = parallel(
+            (0..12).map(|n| n.to_string()).collect(),
+            3,
+            Duration::from_secs(2),
+            &cancel,
+            move |name, token| {
+                let _restore = Restore(completed.clone());
+                assert!(win::is_guarded(), "panic hook must not block restoration");
+                if name == "0" {
+                    failures.report(
+                        name,
+                        Error::msg("Restore channel enabled state", "before cancel"),
+                    );
+                }
+                started.send(()).expect("start notification");
+                while !token.is_cancelled() {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                thread::sleep(Duration::from_millis(150));
+                if name != "0" {
+                    failures.report(
+                        name,
+                        Error::msg("Restore channel enabled state", "during drain"),
+                    );
+                }
+                checkpoint(token)
+            },
+        );
+        canceller.join().expect("canceller");
+        assert!(result.is_err());
+        assert_eq!(
+            restored.load(Ordering::SeqCst),
+            3,
+            "all restore guards must run before returning"
+        );
+        assert!(
+            lines.lock().expect("output").is_empty(),
+            "normal failures wait for summary"
+        );
+        restores.finish(None);
+        restores.finish(None);
+        let output = lines.lock().expect("output");
+        assert_eq!(
+            output.len(),
+            3,
+            "cancel preserves each restore failure exactly once"
+        );
+        assert!(output.iter().any(|line| line.ends_with("before cancel")));
+        assert_eq!(
+            output
+                .iter()
+                .filter(|line| line.ends_with("during drain"))
+                .count(),
+            2
+        );
+        drop(output);
+        restores.report(
+            "late",
+            Error::msg("Restore channel enabled state", "after deadline"),
+        );
+        assert_eq!(
+            lines.lock().expect("output").len(),
+            4,
+            "late restoration failure is still reported"
+        );
+    }
 
     #[test]
     fn overview_matches_csharp_text_and_padding() {
