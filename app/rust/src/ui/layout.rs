@@ -295,6 +295,9 @@ pub struct Node {
     pub col_span: usize,
     /// `BackColor`; `None` = inherit from the parent (WinForms ambient color).
     pub back: Option<Color>,
+    /// Card look for a container: a 1 px `BORDER` outline with rounded corners of this
+    /// logical radius over the parent's color (`DESIGN.md` 5); `None` = plain fill.
+    pub card_radius: Option<i32>,
     /// `Visible`.
     pub visible: bool,
     /// `AutoScroll` (vertical only).
@@ -343,6 +346,7 @@ impl Node {
             row: 0,
             col_span: 1,
             back: None,
+            card_radius: None,
             visible: true,
             scroll: false,
             bounds: Rect::default(),
@@ -482,6 +486,12 @@ impl Node {
     /// Sets `BackColor`.
     pub fn back(mut self, color: Color) -> Self {
         self.back = Some(color);
+        self
+    }
+
+    /// Paints the container as a card: `BORDER` outline, rounded by `radius` (logical px).
+    pub fn card(mut self, radius: i32) -> Self {
+        self.card_radius = Some(radius);
         self
     }
 

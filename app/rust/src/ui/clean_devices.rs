@@ -565,11 +565,11 @@ mod tests {
         };
         use windows::Win32::UI::WindowsAndMessaging::{
             EnumChildWindows, EnumWindows, GUITHREADINFO, GetClassNameW, GetClientRect,
-            GetDlgCtrlID, GetDlgItem, GetGUIThreadInfo, GetParent, GetWindowRect,
-            GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, HWND_NOTOPMOST,
-            HWND_TOPMOST, IDNO, IDOK, IDYES, IsWindow, IsWindowVisible, LB_GETCOUNT,
-            MESSAGEBOX_RESULT, PostMessageW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SendMessageW, SetWindowPos, WM_CLOSE, WM_COMMAND, WM_DPICHANGED, WM_KEYDOWN,
+            GetDlgCtrlID, GetGUIThreadInfo, GetParent, GetWindowRect, GetWindowTextLengthW,
+            GetWindowTextW, GetWindowThreadProcessId, HWND_NOTOPMOST, HWND_TOPMOST, IDNO, IDOK,
+            IDYES, IsWindow, IsWindowVisible, LB_GETCOUNT, MESSAGEBOX_RESULT, PostMessageW,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos,
+            WM_CLOSE, WM_COMMAND, WM_DPICHANGED, WM_KEYDOWN,
         };
         use windows::core::BOOL;
 
@@ -693,11 +693,11 @@ mod tests {
                 .collect()
         }
 
-        /// A visible top-level window; `dialog` = a native message box (`#32770`).
+        /// A visible top-level window; `dialog` = a themed message box.
         fn top(title: &str, dialog: bool) -> Option<HWND> {
             windows_of(None)
                 .into_iter()
-                .find(|h| text_of(*h) == title && (class_of(*h) == "#32770") == dialog)
+                .find(|h| text_of(*h) == title && msgbox::testing::is_box(*h) == dialog)
         }
 
         fn child(parent: HWND, text: &str) -> HWND {
@@ -742,18 +742,25 @@ mod tests {
             post(form, WM_KEYDOWN, usize::from(vk), 0x0001_0001);
         }
 
+        /// Presses a box button by HWND (never through the keyboard focus).
         fn answer(dialog: HWND, id: MESSAGEBOX_RESULT) {
-            if id == IDOK {
-                // An OK-only box ends with IDOK on close (the same as Esc).
-                post(dialog, WM_CLOSE, 0, 0);
-            } else {
-                post(dialog, WM_COMMAND, id.0 as usize, 0);
-            }
+            msgbox::testing::press(dialog, id);
         }
 
         fn box_text(dialog: HWND) -> String {
-            // SAFETY: 0xFFFF is the MessageBox text control.
-            text_of(unsafe { GetDlgItem(Some(dialog), 0xFFFF) }.unwrap())
+            msgbox::testing::text(dialog)
+        }
+
+        /// Whether the confirm dialog is the active window of the UI thread (keyboard checks
+        /// need it; another app in front makes them meaningless, not wrong).
+        fn active(ui_thread: u32, h: HWND) -> bool {
+            let mut info = GUITHREADINFO {
+                cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+                ..Default::default()
+            };
+            // SAFETY: Writable, sized GUITHREADINFO.
+            let ok = unsafe { GetGUIThreadInfo(ui_thread, &mut info) }.is_ok();
+            ok && info.hwndActive == h
         }
 
         fn wait<T>(what: &str, secs: u64, f: impl Fn() -> Option<T>) -> T {
@@ -766,7 +773,7 @@ mod tests {
                     let open: Vec<_> = windows_of(None)
                         .into_iter()
                         .map(|h| {
-                            let body = if class_of(h) == "#32770" {
+                            let body = if msgbox::testing::is_box(h) {
                                 box_text(h)
                             } else {
                                 String::new()
@@ -992,7 +999,7 @@ mod tests {
                 ));
             } else {
                 if let Some(confirm) = top("Confirm Device Removal", false) {
-                    key(confirm, VK_ESCAPE.0);
+                    click(confirm, "No");
                     wait_output(form, DONE, 1);
                 }
                 post(form, WM_CLOSE, 0, 0);
@@ -1028,7 +1035,13 @@ mod tests {
                 buttons(confirm, &["Yes (Autoclose)", "Yes", "No"])
             ));
             shot(confirm, &format!("confirm-{dpi}dpi"));
-            key(confirm, VK_ESCAPE.0);
+            // Esc = No when the dialog is active; otherwise the No button by HWND, so the
+            // test never waits on a box the owner sees.
+            if active(ui_thread, confirm) {
+                key(confirm, VK_ESCAPE.0);
+            } else {
+                click(confirm, "No");
+            }
             let text = wait_output(form, DONE, 1);
             save("fake-no.txt", &text);
             assert!(text.contains("\r\nOperation cancelled. No devices were removed.\r\n"));
@@ -1041,53 +1054,61 @@ mod tests {
             shot(form, &format!("clean-done-{dpi}dpi"));
 
             // Enter must activate the focused confirmation choice after Tab, rather than
-            // always accepting Yes (Autoclose).
+            // always accepting Yes (Autoclose). Needs the keyboard focus, so it runs only while
+            // the dialog is the active window (the owner may be using the PC).
             click(form, "Reclean");
             let confirm = wait("confirm keyboard Yes", 10, || {
                 top("Confirm Device Removal", false)
             });
-            wait("initial confirm focus", 5, || {
-                (focus_text(ui_thread) == "Yes (Autoclose)").then_some(())
-            });
-            key(child(confirm, "Yes (Autoclose)"), VK_TAB.0);
-            wait("Yes focus", 5, || {
-                (focus_text(ui_thread) == "Yes").then_some(())
-            });
-            key(child(confirm, "Yes"), VK_RETURN.0);
-            wait_output(form, DONE, 1);
-            std::thread::sleep(Duration::from_millis(1100));
-            assert!(alive(form), "Enter on focused Yes chose Autoclose");
-            wait_enabled(form, "Reclean");
-            click(form, "Reclean");
-            let confirm = wait("confirm keyboard No", 10, || {
-                top("Confirm Device Removal", false)
-            });
-            wait("initial confirm focus", 5, || {
-                (focus_text(ui_thread) == "Yes (Autoclose)").then_some(())
-            });
-            key(child(confirm, "Yes (Autoclose)"), VK_TAB.0);
-            wait("Yes focus", 5, || {
-                (focus_text(ui_thread) == "Yes").then_some(())
-            });
-            key(child(confirm, "Yes"), VK_TAB.0);
-            wait("No focus", 5, || {
-                (focus_text(ui_thread) == "No").then_some(())
-            });
-            key(child(confirm, "No"), VK_RETURN.0);
-            let text = wait_output(form, DONE, 1);
-            assert!(text.contains("Operation cancelled. No devices were removed."));
-            assert!(!text.contains("[DRY RUN] SetupDiRemoveDevice"));
-            wait_enabled(form, "Reclean");
-            log.push(
-                "Tab + Enter: focused Yes stays open; focused No cancels without removal"
-                    .to_owned(),
-            );
+            std::thread::sleep(Duration::from_millis(300));
+            if active(ui_thread, confirm) && focus_text(ui_thread) == "Yes (Autoclose)" {
+                key(child(confirm, "Yes (Autoclose)"), VK_TAB.0);
+                wait("Yes focus", 5, || {
+                    (focus_text(ui_thread) == "Yes").then_some(())
+                });
+                key(child(confirm, "Yes"), VK_RETURN.0);
+                wait_output(form, DONE, 1);
+                std::thread::sleep(Duration::from_millis(1100));
+                assert!(alive(form), "Enter on focused Yes chose Autoclose");
+                wait_enabled(form, "Reclean");
+                click(form, "Reclean");
+                let confirm = wait("confirm keyboard No", 10, || {
+                    top("Confirm Device Removal", false)
+                });
+                wait("initial confirm focus", 5, || {
+                    (focus_text(ui_thread) == "Yes (Autoclose)").then_some(())
+                });
+                key(child(confirm, "Yes (Autoclose)"), VK_TAB.0);
+                wait("Yes focus", 5, || {
+                    (focus_text(ui_thread) == "Yes").then_some(())
+                });
+                key(child(confirm, "Yes"), VK_TAB.0);
+                wait("No focus", 5, || {
+                    (focus_text(ui_thread) == "No").then_some(())
+                });
+                key(child(confirm, "No"), VK_RETURN.0);
+                let text = wait_output(form, DONE, 1);
+                assert!(text.contains("Operation cancelled. No devices were removed."));
+                assert!(!text.contains("[DRY RUN] SetupDiRemoveDevice"));
+                wait_enabled(form, "Reclean");
+                log.push(
+                    "Tab + Enter: focused Yes stays open; focused No cancels without removal"
+                        .to_owned(),
+                );
+            } else {
+                click(confirm, "No");
+                wait_output(form, DONE, 1);
+                wait_enabled(form, "Reclean");
+                log.push(
+                    "Tab + Enter check skipped: the dialog was not the active window".to_owned(),
+                );
+            }
 
-            // -- 2. Enter = Yes (Autoclose); Reclean inside the 1000 ms keeps the window (AD-29)
+            // -- 2. Yes (Autoclose) by HWND; Reclean inside the 1000 ms keeps the window (AD-29)
             click(form, "Reclean");
             let confirm = wait("confirm 2", 10, || top("Confirm Device Removal", false));
             std::thread::sleep(Duration::from_millis(200));
-            key(confirm, VK_RETURN.0);
+            click(confirm, "Yes (Autoclose)");
             let text = wait_output(form, DONE, 1);
             save("fake-yes-autoclose.txt", &text);
             assert!(text.contains("[DRY RUN] SetupDiRemoveDevice: USB Input Device\r\n"));
@@ -1155,7 +1176,11 @@ mod tests {
                 valid,
                 "file changed"
             );
-            key(wl, VK_ESCAPE.0);
+            if active(ui_thread, wl) {
+                key(wl, VK_ESCAPE.0);
+            } else {
+                click(wl, "Cancel");
+            }
             gone("whitelist", wl);
             assert!(!output(form).contains("Device whitelist has been updated."));
             log.push("Esc = Cancel closes the whitelist; no 'updated' line".to_owned());
@@ -1172,7 +1197,7 @@ mod tests {
             let confirm = wait("confirm after No", 10, || {
                 top("Confirm Device Removal", false)
             });
-            key(confirm, VK_ESCAPE.0);
+            click(confirm, "No");
             wait_output(form, DONE, 1);
             log.push("Confirm Exit No: window stays, queued scan result shown after it".to_owned());
 
@@ -1204,7 +1229,7 @@ mod tests {
                     buttons(confirm, &["Yes (Autoclose)", "Yes", "No"])
                 ));
                 shot(confirm, &format!("confirm-{d}dpi"));
-                key(confirm, VK_ESCAPE.0);
+                click(confirm, "No");
                 wait_output(form, DONE, 1);
                 wait_enabled(form, "Manage Whitelist");
                 click(form, "Manage Whitelist");
@@ -1219,7 +1244,7 @@ mod tests {
                     buttons(wl, &["Reset Whitelist", "Save Whitelist", "Cancel"])
                 ));
                 shot(wl, &format!("whitelist-{d}dpi"));
-                key(wl, VK_ESCAPE.0);
+                click(wl, "Cancel");
                 gone("whitelist (dpi)", wl);
                 for to in [192, d] {
                     synthetic_dpi(form, if to == d { 192 } else { d }, to);

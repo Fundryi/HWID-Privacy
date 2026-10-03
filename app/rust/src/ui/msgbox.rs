@@ -1,19 +1,42 @@
-//! Owned by WP-10a: `MessageBox.Show` with the C# button and icon sets.
+//! Owned by WP-10a (themed by WP-19): `MessageBox.Show` with the C# button and icon sets.
+//!
+//! The box is a kit form (`DESIGN.md` section 15): the status glyph in its status color, the
+//! wrapped text, and the buttons of the C# set. It keeps the native rules: Enter presses the
+//! default button, Esc presses OK (a Yes/No box has no Esc and a grayed X), Ctrl+C copies the
+//! text, the box is modal to its owner. Tests find it by `window::MESSAGE_BOX_CLASS` and its
+//! title, read the text from the control `TEXT_ID`, and press a button by posting
+//! `WM_COMMAND(IDOK | IDYES | IDNO, 0)`. If the kit form cannot be created, the native
+//! `MessageBoxW` shows instead, so a message is never lost.
 
-use crate::win::wide::to_wide;
+use super::controls::{Align, ButtonSpec, Ctl, EditSpec, LabelSpec};
+use super::layout::{Anchor, FlowDir, Node, Size, Track};
+use super::theme::{self, glyph};
+use super::window::{self, Event, FormSpec, FormStyle, StartPosition, WindowSize};
+use super::{controls, dpi};
+use crate::win::{self, wide::to_wide};
+use std::cell::Cell;
+use std::rc::Rc;
 use windows::{
     Win32::{
         Foundation::HWND,
         UI::{
             Input::KeyboardAndMouse::GetActiveWindow,
             WindowsAndMessaging::{
-                IDNO, IDOK, IDYES, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION,
-                MB_ICONWARNING, MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MessageBoxW,
+                EnableMenuItem, GetSystemMenu, IDNO, IDOK, IDYES, MB_ICONERROR, MB_ICONINFORMATION,
+                MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MF_BYCOMMAND,
+                MF_GRAYED, MessageBoxW, SC_CLOSE,
             },
         },
     },
     core::PCWSTR,
 };
+
+/// Control id of the message text (a label; tests read its window text).
+pub const TEXT_ID: u16 = 0x0100;
+/// Control id of the status glyph.
+const ICON_ID: u16 = 0x0101;
+/// Control id of the hidden edit that serves Ctrl+C.
+const COPY_ID: u16 = 0x0102;
 
 /// The owner for a box raised after async work (DESIGN.md 8.5): C# `MessageBox.Show` without an
 /// owner uses the UI thread's active window, including a modal child. Never pass a form that a
@@ -60,6 +83,240 @@ pub enum Answer {
 
 /// Shows a modal message box owned by `owner` (pass the form window, like C# does implicitly).
 pub fn show(owner: HWND, text: &str, title: &str, buttons: Buttons, icon: Icon) -> Answer {
+    match themed(owner, text, title, buttons, icon) {
+        Ok(answer) => answer,
+        Err(error) => {
+            win::record(error);
+            native(owner, text, title, buttons, icon)
+        }
+    }
+}
+
+/// The glyph and status color of an icon (DESIGN.md 3: color by meaning).
+fn icon_of(icon: Icon) -> Option<(char, theme::Color)> {
+    match icon {
+        Icon::None => None,
+        Icon::Information => Some((glyph::STATUS_INFO, theme::INFO)),
+        Icon::Warning => Some((glyph::STATUS_WARNING, theme::WARNING)),
+        Icon::Error => Some((glyph::STATUS_ERROR, theme::DANGER)),
+        Icon::Question => Some((glyph::STATUS_QUESTION, theme::SECONDARY)),
+    }
+}
+
+/// `(id, text, primary)` of the buttons, left to right.
+fn buttons_of(buttons: Buttons) -> Vec<(u16, &'static str, bool)> {
+    match buttons {
+        Buttons::Ok => vec![(IDOK.0 as u16, "OK", true)],
+        Buttons::YesNo => vec![(IDYES.0 as u16, "Yes", true), (IDNO.0 as u16, "No", false)],
+    }
+}
+
+/// The logical client size: the wrapped text (at most `MSGBOX_TEXT_MAX_WIDTH` wide) next to
+/// the icon, the button row below, the padding around. Measured at `dpi` (the monitor the box
+/// opens on) so the wrap the layout produces there is the one that was measured.
+fn client_size(text: &str, has_icon: bool, button_count: i32, dpi: u32) -> win::Result<Size> {
+    let font = dpi::Font::new(theme::MSGBOX_FONT, dpi)?;
+    let label = Ctl::Label(LabelSpec::new(text, theme::MSGBOX_FONT, theme::TEXT));
+    let measured = controls::measure(
+        &label,
+        font.handle(),
+        theme::NO_PAD,
+        Size::default(),
+        Size {
+            w: dpi::scale(theme::MSGBOX_TEXT_MAX_WIDTH, dpi),
+            h: 0,
+        },
+        dpi,
+    );
+    let text_w = dpi::unscale(measured.w, dpi).min(theme::MSGBOX_TEXT_MAX_WIDTH);
+    let text_h = dpi::unscale(measured.h, dpi);
+    let icon_w = if has_icon {
+        theme::MSGBOX_ICON_PX + theme::MSGBOX_ICON_MARGIN.horizontal()
+    } else {
+        0
+    };
+    let pad = theme::MSGBOX_PADDING;
+    let buttons_w =
+        button_count * (theme::MSGBOX_BUTTON_MIN_WIDTH + theme::MSGBOX_BUTTON_MARGIN.horizontal());
+    // Slack of a few pixels: the unscaled width must not round below the measured wrap.
+    let w = (pad.horizontal() + icon_w + text_w + 6)
+        .max(theme::MSGBOX_MIN_WIDTH)
+        .max(pad.horizontal() + buttons_w);
+    let body_h = text_h.max(if has_icon { theme::MSGBOX_ICON_PX } else { 0 }) + 4;
+    let h = pad.vertical()
+        + body_h
+        + theme::MSGBOX_BUTTON_ROW_MARGIN.t
+        + theme::MSGBOX_BUTTON_HEIGHT
+        + theme::MSGBOX_BUTTON_MARGIN.vertical();
+    Ok(Size { w, h })
+}
+
+/// The DPI the box will open at: the owner's, or the system DPI without an owner (no shcore
+/// import; such boxes are rare and sized with slack).
+fn target_dpi(owner: HWND) -> u32 {
+    use windows::Win32::UI::HiDpi::GetDpiForSystem;
+    if !owner.is_invalid() {
+        return dpi::window_dpi(owner);
+    }
+    // SAFETY: Plain value query.
+    let system = unsafe { GetDpiForSystem() };
+    if system == 0 { dpi::BASE_DPI } else { system }
+}
+
+fn tree(text: &str, icon: Icon, buttons: Buttons) -> Vec<Node> {
+    let mut body = Vec::new();
+    if let Some((g, color)) = icon_of(icon) {
+        // The symbol glyph sits on the ring glyph (the Fluent status set is layered).
+        let layers: String = [glyph::STATUS_RING, g].iter().collect();
+        body.push(
+            Node::leaf(
+                ICON_ID,
+                Ctl::Label(
+                    LabelSpec::new(&layers, theme::icon_font(theme::MSGBOX_ICON_PX), color)
+                        .align(Align::MiddleCenter)
+                        .stacked(),
+                ),
+            )
+            .size(Size {
+                w: theme::MSGBOX_ICON_PX,
+                h: theme::MSGBOX_ICON_PX,
+            })
+            .anchor(Anchor::TOP)
+            .margin(theme::MSGBOX_ICON_MARGIN)
+            .cell(0, 0),
+        );
+    }
+    body.push(
+        Node::leaf(
+            TEXT_ID,
+            Ctl::Label(LabelSpec::new(text, theme::MSGBOX_FONT, theme::TEXT)),
+        )
+        .auto_size()
+        .anchor(Anchor(Anchor::TOP.0 | Anchor::LEFT.0 | Anchor::RIGHT.0))
+        .margin(theme::NO_PAD)
+        .cell(1, 0),
+    );
+    let button_nodes = buttons_of(buttons)
+        .into_iter()
+        .rev()
+        .map(|(id, caption, primary)| {
+            let spec = if primary {
+                ButtonSpec::primary(caption)
+            } else {
+                ButtonSpec::outline(caption)
+            };
+            Node::leaf(id, Ctl::Button(spec))
+                .auto_size()
+                .min(Size {
+                    w: theme::MSGBOX_BUTTON_MIN_WIDTH,
+                    h: theme::MSGBOX_BUTTON_HEIGHT,
+                })
+                .padding(theme::SHARED_BUTTON_PADDING)
+                .margin(theme::MSGBOX_BUTTON_MARGIN)
+        })
+        .collect();
+    // Hidden, read-only copy of the text: Ctrl+C copies it (`FormSpec::copy_on_ctrl_c`).
+    let copy = Node::leaf(
+        COPY_ID,
+        Ctl::Edit(EditSpec::new(theme::MSGBOX_FONT, theme::TEXT, theme::BG)),
+    )
+    .visible(false);
+    vec![
+        Node::table(
+            vec![Track::Percent(100.0)],
+            vec![Track::Percent(100.0), Track::AutoSize],
+            vec![
+                Node::table(
+                    vec![Track::AutoSize, Track::Percent(100.0)],
+                    vec![Track::AutoSize],
+                    body,
+                )
+                .fill()
+                .margin(theme::NO_PAD)
+                .cell(0, 0),
+                // Right to left: the default button is the rightmost one, like the native box.
+                Node::flow(FlowDir::RightToLeft, false, button_nodes)
+                    .auto_size()
+                    .anchor(Anchor::RIGHT)
+                    .margin(theme::MSGBOX_BUTTON_ROW_MARGIN)
+                    .cell(0, 1),
+            ],
+        )
+        .fill()
+        .padding(theme::MSGBOX_PADDING),
+        copy,
+    ]
+}
+
+fn themed(
+    owner: HWND,
+    text: &str,
+    title: &str,
+    buttons: Buttons,
+    icon: Icon,
+) -> win::Result<Answer> {
+    let has_icon = icon_of(icon).is_some();
+    let count = buttons_of(buttons).len() as i32;
+    let size = client_size(text, has_icon, count, target_dpi(owner))?;
+    let mut spec = FormSpec::new(title, WindowSize::Client(size));
+    spec.style = FormStyle::FixedDialog;
+    spec.start = if owner.is_invalid() {
+        StartPosition::CenterScreen
+    } else {
+        StartPosition::CenterParent
+    };
+    spec.taskbar = owner.is_invalid();
+    spec.message_box = true;
+    spec.copy_on_ctrl_c = Some(COPY_ID);
+    let (default, cancel) = match buttons {
+        Buttons::Ok => (IDOK.0 as u16, Some(IDOK.0 as u16)),
+        Buttons::YesNo => (IDYES.0 as u16, None),
+    };
+    spec.accept = Some(default);
+    spec.cancel = cancel;
+    let answer = Rc::new(Cell::new(match buttons {
+        Buttons::Ok => Answer::Ok,
+        Buttons::YesNo => Answer::No,
+    }));
+    let result = Rc::clone(&answer);
+    let text = text.to_owned();
+    window::run_modal(
+        owner,
+        spec,
+        tree(&text, icon, buttons),
+        move |form, event| {
+            match event {
+                Event::Created => {
+                    form.edit_set_text(COPY_ID, &text);
+                    if buttons == Buttons::YesNo {
+                        // Like the native Yes/No box: no X, no Esc.
+                        // SAFETY: Menu handle of our own window; the item id is a system command.
+                        unsafe {
+                            let menu = GetSystemMenu(form.hwnd(), false);
+                            let _ = EnableMenuItem(menu, SC_CLOSE, MF_BYCOMMAND | MF_GRAYED);
+                        }
+                    }
+                }
+                Event::Click(id) => {
+                    result.set(match id {
+                        i if i == IDYES.0 as u16 => Answer::Yes,
+                        i if i == IDNO.0 as u16 => Answer::No,
+                        _ => Answer::Ok,
+                    });
+                    form.destroy();
+                }
+                // An OK box closes as OK; a Yes/No box cannot be closed without an answer.
+                Event::CloseRequest => return buttons == Buttons::Ok,
+                _ => {}
+            }
+            true
+        },
+    )?;
+    Ok(answer.get())
+}
+
+/// The native box, used only when the themed one cannot be created.
+fn native(owner: HWND, text: &str, title: &str, buttons: Buttons, icon: Icon) -> Answer {
     let mut style = match buttons {
         Buttons::Ok => MB_OK,
         Buttons::YesNo => MB_YESNO,
@@ -85,5 +342,324 @@ pub fn show(owner: HWND, text: &str, title: &str, buttons: Buttons, icon: Icon) 
         IDOK => Answer::Ok,
         IDNO => Answer::No,
         _ => Answer::No,
+    }
+}
+
+/// Helpers for the UI tests: find a themed box, read its text, press a button by HWND.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumChildWindows, FindWindowW, GetDlgCtrlID, GetWindowTextLengthW, GetWindowTextW,
+        IsWindow, MESSAGEBOX_RESULT, PostMessageW, WM_COMMAND,
+    };
+    use windows::core::BOOL;
+
+    /// The open themed box with `title` (any thread of this process).
+    pub fn find(title: &str) -> Option<HWND> {
+        let class = to_wide(window::MESSAGE_BOX_CLASS);
+        let title = to_wide(title);
+        // SAFETY: NUL-terminated buffers valid for the call.
+        unsafe { FindWindowW(PCWSTR(class.as_ptr()), PCWSTR(title.as_ptr())) }
+            .ok()
+            .filter(|h| !h.is_invalid())
+    }
+
+    /// Whether `h` is a themed message box.
+    pub fn is_box(h: HWND) -> bool {
+        let mut buf = [0u16; 64];
+        // SAFETY: Writable buffer of the given length.
+        let n = unsafe { windows::Win32::UI::WindowsAndMessaging::GetClassNameW(h, &mut buf) };
+        String::from_utf16_lossy(&buf[..n.max(0) as usize]) == window::MESSAGE_BOX_CLASS
+    }
+
+    fn window_text(h: HWND) -> String {
+        // SAFETY: Length query and a read into a buffer sized for the text plus NUL.
+        unsafe {
+            let len = GetWindowTextLengthW(h).max(0) as usize;
+            let mut buf = vec![0u16; len + 1];
+            let n = GetWindowTextW(h, &mut buf).max(0) as usize;
+            String::from_utf16_lossy(&buf[..n])
+        }
+    }
+
+    /// The message text of a themed box (empty while it is still being built).
+    pub fn text(dialog: HWND) -> String {
+        unsafe extern "system" fn visit(h: HWND, data: LPARAM) -> BOOL {
+            // SAFETY: `data` is the Option passed below, alive for the enumeration.
+            let found = unsafe { &mut *(data.0 as *mut Option<HWND>) };
+            // SAFETY: Read-only id query of a child window.
+            if unsafe { GetDlgCtrlID(h) } == i32::from(TEXT_ID) {
+                *found = Some(h);
+                return BOOL(0);
+            }
+            BOOL(1)
+        }
+        let mut found: Option<HWND> = None;
+        // SAFETY: Synchronous enumeration whose callback only writes `found`.
+        unsafe {
+            let _ = EnumChildWindows(
+                Some(dialog),
+                Some(visit),
+                LPARAM(&mut found as *mut Option<HWND> as isize),
+            );
+        }
+        found.map(window_text).unwrap_or_default()
+    }
+
+    /// Presses the button `id` (`IDOK`, `IDYES`, `IDNO`) by posting its command to the box.
+    pub fn press(dialog: HWND, id: MESSAGEBOX_RESULT) {
+        // SAFETY: Read-only validity check; posting a value-only message to a live window.
+        unsafe {
+            if IsWindow(Some(dialog)).as_bool() {
+                let _ = PostMessageW(Some(dialog), WM_COMMAND, WPARAM(id.0 as usize), LPARAM(0));
+            }
+        }
+    }
+
+    /// Presses `id` on `dialog` when dropped, so a test helper can never skip the click.
+    pub struct PressOnDrop {
+        /// The box.
+        pub dialog: HWND,
+        /// The button command.
+        pub id: MESSAGEBOX_RESULT,
+    }
+
+    impl Drop for PressOnDrop {
+        fn drop(&mut self) {
+            press(self.dialog, self.id);
+        }
+    }
+
+    /// Captures a window with `PrintWindow` (works while other apps cover it, so the owner
+    /// can keep using the PC) and saves it as a PNG at `path` (best effort, 15 s budget).
+    pub fn capture(h: HWND, path: &std::path::Path) -> Result<String, String> {
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::Graphics::Gdi::{
+            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap, CreateCompatibleDC,
+            DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SelectObject,
+        };
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn PrintWindow(
+                hwnd: *mut core::ffi::c_void,
+                hdc: *mut core::ffi::c_void,
+                flags: u32,
+            ) -> i32;
+        }
+        let mut r = RECT::default();
+        // SAFETY: Writable RECT of a live window.
+        unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut r) }
+            .map_err(|e| e.to_string())?;
+        let (w, hgt) = (r.right - r.left, r.bottom - r.top);
+        if w <= 0 || hgt <= 0 {
+            return Err("empty window".to_owned());
+        }
+        let mut bits = vec![0u8; (w * hgt * 4) as usize];
+        // SAFETY: DC and bitmap are created, used, and released here; the buffer fits a
+        // 32-bit top-down DIB of the window size.
+        unsafe {
+            let screen = GetDC(None);
+            let mem = CreateCompatibleDC(Some(screen));
+            let bmp = CreateCompatibleBitmap(screen, w, hgt);
+            let old = SelectObject(mem, bmp.into());
+            PrintWindow(h.0, mem.0, 2);
+            SelectObject(mem, old);
+            let mut bi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: w,
+                    biHeight: -hgt,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            GetDIBits(
+                mem,
+                bmp,
+                0,
+                hgt as u32,
+                Some(bits.as_mut_ptr().cast()),
+                &mut bi,
+                DIB_RGB_COLORS,
+            );
+            let _ = DeleteObject(bmp.into());
+            let _ = DeleteDC(mem);
+            ReleaseDC(None, screen);
+        }
+        let mut out = Vec::with_capacity(54 + bits.len());
+        out.extend_from_slice(b"BM");
+        out.extend_from_slice(&(54 + bits.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&54u32.to_le_bytes());
+        out.extend_from_slice(&40u32.to_le_bytes());
+        out.extend_from_slice(&w.to_le_bytes());
+        out.extend_from_slice(&(-hgt).to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&32u16.to_le_bytes());
+        out.extend_from_slice(&[0u8; 24]);
+        out.extend_from_slice(&bits);
+        let bmp_path = path.with_extension("bmp");
+        std::fs::write(&bmp_path, out).map_err(|e| e.to_string())?;
+        let script = format!(
+            "Add-Type -AssemblyName System.Drawing; \
+             $i = [System.Drawing.Image]::FromFile('{b}'); \
+             $i.Save('{p}', [System.Drawing.Imaging.ImageFormat]::Png); $i.Dispose(); \
+             Remove-Item '{b}'",
+            b = bmp_path.display(),
+            p = path.display()
+        );
+        let out = crate::win::process::run(
+            &crate::win::process::powershell(),
+            &["-NoProfile", "-NonInteractive", "-Command", &script],
+            std::time::Duration::from_secs(15),
+            &crate::win::process::Cancel::new(),
+        )
+        .map_err(|e| e.to_string())?;
+        if out.code == 0 {
+            Ok(format!("{} outer {w}x{hgt}", path.display()))
+        } else {
+            Err(out.stderr)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! `cargo test --locked --lib -- --ignored ui::msgbox::tests::wp19_boxes --nocapture`
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+    use windows::Win32::Foundation::{LPARAM, RECT, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{IDNO, IDOK, IDYES, SendMessageW, WM_DPICHANGED};
+
+    const GOLDEN: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\wp-19";
+
+    /// Opens every icon kind, captures each at the real DPI and a synthetic 144 DPI, presses
+    /// a button by HWND, and checks the answers (Enter, Esc and X rules included).
+    #[test]
+    #[ignore = "opens real windows"]
+    fn wp19_boxes() {
+        std::fs::create_dir_all(GOLDEN).unwrap();
+        assert!(dpi::set_per_monitor_v2_for_tests(), "PerMonitorV2");
+        let cases: Vec<(&str, &str, Buttons, Icon, MESSAGEBOX_RESULT, Answer)> = vec![
+            (
+                "Update Check Failed",
+                "Error checking for updates: Failed to get GitHub file SHA256 for HWIDChecker.exe: HTTP GET failed: 0x00000000 HTTP status 404",
+                Buttons::Ok,
+                Icon::Warning,
+                IDOK,
+                Answer::Ok,
+            ),
+            (
+                "Update Available",
+                "A new version is available. Do you want to update now?\n\nThe application will restart after the update.",
+                Buttons::YesNo,
+                Icon::Question,
+                IDYES,
+                Answer::Yes,
+            ),
+            (
+                "Confirm Exit",
+                "Operation in progress. Are you sure you want to close?",
+                Buttons::YesNo,
+                Icon::Warning,
+                IDNO,
+                Answer::No,
+            ),
+            (
+                "Error",
+                "Error during cleaning process: SetupDiGetClassDevsW failed: 0x00000005 Access is denied.",
+                Buttons::Ok,
+                Icon::Error,
+                IDOK,
+                Answer::Ok,
+            ),
+            (
+                "Refresh",
+                "Hardware data refreshed successfully!",
+                Buttons::Ok,
+                Icon::Information,
+                IDOK,
+                Answer::Ok,
+            ),
+        ];
+        use windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_RESULT;
+        for (i, (title, text, buttons, icon, reply, expected)) in cases.into_iter().enumerate() {
+            let title_owned = title.to_owned();
+            let helper = std::thread::spawn(move || {
+                let start = Instant::now();
+                let h = loop {
+                    if let Some(h) = testing::find(&title_owned) {
+                        break h;
+                    }
+                    assert!(
+                        start.elapsed() < Duration::from_secs(10),
+                        "no box {title_owned}"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                };
+                let press = testing::PressOnDrop {
+                    dialog: h,
+                    id: reply,
+                };
+                std::thread::sleep(Duration::from_millis(250));
+                let shown = testing::text(h);
+                let mut notes = vec![format!("{title_owned}: {shown:?}")];
+                let real = dpi::window_dpi(h);
+                notes.push(
+                    testing::capture(
+                        h,
+                        &Path::new(GOLDEN).join(format!("msgbox-{i}-{real}dpi.png")),
+                    )
+                    .unwrap_or_else(|e| e),
+                );
+                let other = if real == 96 { 144 } else { 96 };
+                let mut r = RECT::default();
+                // SAFETY: Writable RECT of a live window.
+                unsafe {
+                    let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut r);
+                }
+                let f = |v: i32| v * other as i32 / real as i32;
+                let s = RECT {
+                    left: r.left,
+                    top: r.top,
+                    right: r.left + f(r.right - r.left),
+                    bottom: r.top + f(r.bottom - r.top),
+                };
+                // SAFETY: Synchronous message with a pointer to a live RECT; the UI thread pumps.
+                unsafe {
+                    SendMessageW(
+                        h,
+                        WM_DPICHANGED,
+                        Some(WPARAM((other | (other << 16)) as usize)),
+                        Some(LPARAM(&s as *const RECT as isize)),
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(300));
+                notes.push(
+                    testing::capture(
+                        h,
+                        &Path::new(GOLDEN).join(format!("msgbox-{i}-synthetic-{other}.png")),
+                    )
+                    .unwrap_or_else(|e| e),
+                );
+                drop(press);
+                (shown, notes)
+            });
+            let answer = show(HWND::default(), text, title, buttons, icon);
+            let (shown, notes) = helper.join().unwrap();
+            for n in notes {
+                println!("RESULT {n}");
+            }
+            assert_eq!(shown, text);
+            assert_eq!(answer, expected, "{title}");
+        }
     }
 }

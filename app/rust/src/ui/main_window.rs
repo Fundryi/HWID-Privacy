@@ -5,8 +5,9 @@
 //! (OPT-4). Each load has an id, so only the newest load's result is applied (F26, AD-41).
 
 use super::controls::{ButtonSpec, Ctl, EditBorder, EditSpec, LabelSpec};
-use super::layout::{Anchor, FlowDir, Kind, Node, Point, Size, Track};
+use super::layout::{Anchor, FlowDir, Kind, Node, Size, Track};
 use super::msgbox::{self, Buttons, Icon};
+use super::theme::glyph;
 use super::window::{self, Event, Form, FormSpec, StartPosition, WindowSize};
 use super::{clean_devices, clean_logs, dpi, raw_view, theme, update_progress};
 use crate::report::{self, Section};
@@ -26,7 +27,15 @@ const SECTION_TITLE: u16 = 5;
 const SECTION_META: u16 = 6;
 const CONTENT: u16 = 7;
 const FOOTER: u16 = 8;
+/// The loading state (fills the content pane while a load runs).
 const LOADING: u16 = 9;
+const SPINNER: u16 = 10;
+const LOADING_TITLE: u16 = 11;
+const LOADING_PROGRESS: u16 = 12;
+/// The header card and text well (hidden while a load runs).
+const CONTENT_TABLE: u16 = 13;
+const COPY: u16 = 14;
+const LOADING_BOX: u16 = 15;
 const REFRESH: u16 = 20;
 const EXPORT: u16 = 21;
 const CLEAN_DEVICES: u16 = 22;
@@ -34,17 +43,21 @@ const CLEAN_LOGS: u16 = 23;
 const UPDATES: u16 = 24;
 const OLD_VIEW: u16 = 25;
 const FIRST_SECTION: u16 = 100;
+/// Repaints the loading indicator (DESIGN.md 8.9); killed while minimized by the kit.
+const SPIN_TIMER: usize = 1;
 
-const OLD_VIEW_TEXT: &str = "📜 Old View";
-const OLD_VIEW_LOADING: &str = "📜 Loading...";
-// C# parity: SectionedViewForm.cs:251-271, left to right.
-const FOOTER_BUTTONS: [(u16, &str); 6] = [
-    (REFRESH, "↻ Refresh"),
-    (EXPORT, "💾 Export"),
-    (CLEAN_DEVICES, "🧹 Clean Devices"),
-    (CLEAN_LOGS, "📝 Clean Logs"),
-    (UPDATES, "⟳ Updates"),
-    (OLD_VIEW, OLD_VIEW_TEXT),
+const OLD_VIEW_TEXT: &str = "Old View";
+const OLD_VIEW_LOADING: &str = "Loading...";
+const LOADING_TEXT: &str = "Loading hardware information...";
+// C# parity: SectionedViewForm.cs:251-271, left to right. The C# emoji prefixes are icon-font
+// glyphs here (DESIGN.md 14).
+const FOOTER_BUTTONS: [(u16, &str, char); 6] = [
+    (REFRESH, "Refresh", glyph::REFRESH),
+    (EXPORT, "Export", glyph::SAVE),
+    (CLEAN_DEVICES, "Clean Devices", glyph::BROOM),
+    (CLEAN_LOGS, "Clean Logs", glyph::DELETE),
+    (UPDATES, update_progress::UPDATES_TEXT, glyph::SYNC),
+    (OLD_VIEW, OLD_VIEW_TEXT, glyph::HISTORY),
 ];
 
 /// Runs the main window until it closes.
@@ -64,12 +77,19 @@ struct State {
     active: Cell<usize>,
     /// Id of the newest load; older results are dropped (F26).
     load: Cell<u64>,
+    /// Sections collected so far by the newest load (the loading counter).
+    collected: Cell<usize>,
+    /// DPI of the last layout the footer bounds belong to (0 = none yet).
+    layout_dpi: Cell<u32>,
 }
 
 enum Msg {
     /// Posted from `Created` with the first load id, so the first paint happens before any
     /// collection starts (A7).
     Startup(u64),
+    /// One provider of load `load` finished (`hw::collect_all`'s `on_done`); only the counter
+    /// and the sidebar item move, the sections still fill at the end (OPT-4).
+    Progress { load: u64, index: usize },
     Loaded {
         load: u64,
         refresh: bool,
@@ -96,12 +116,12 @@ fn parts() -> (FormSpec, Vec<Node>, Handler) {
 
 fn handle(form: &Form, state: &State, event: Event) {
     match event {
-        Event::Resize { client, .. } => responsive(form, client),
+        Event::Resize { client, .. } => responsive(form, state, client),
         Event::Created => {
             // C# parity: SectionedViewForm.cs:53-55 starts the load in the constructor, so the
-            // first paint already shows the overlay and the `Loading...` bodies.
+            // first paint already shows the loading state and the `Loading...` bodies.
             let load = begin_load(form, state);
-            responsive(form, form.client_size());
+            responsive(form, state, form.client_size());
             form.relayout();
             post(form, Msg::Startup(load));
         }
@@ -110,6 +130,7 @@ fn handle(form: &Form, state: &State, event: Event) {
                 on_msg(form, state, *msg);
             }
         }
+        Event::Timer(SPIN_TIMER) => form.spin(SPINNER),
         Event::Click(id) => on_click(form, state, id),
         _ => {}
     }
@@ -127,6 +148,13 @@ fn on_msg(form: &Form, state: &State, msg: Msg) {
         Msg::Startup(load) => {
             spawn_load(form, state, load, false);
             show_pending_update_error();
+        }
+        Msg::Progress { load, index } => {
+            if load == state.load.get() {
+                state.collected.set(state.collected.get() + 1);
+                form.set_text(LOADING_PROGRESS, &progress_text(state.collected.get()));
+                form.set_pending(section_id(index), false);
+            }
         }
         Msg::Loaded {
             load,
@@ -149,6 +177,7 @@ fn on_click(form: &Form, state: &State, id: u16) {
             spawn_load(form, state, load, true);
         }
         EXPORT => export(form, state),
+        COPY => form.edit_copy_all(CONTENT),
         // The frozen dialogs report their own errors; a panic in one reaches the kit's handler
         // boundary (AD-42) instead of C#'s `Error opening ...` boxes.
         CLEAN_DEVICES => clean_devices::show(form.hwnd()),
@@ -192,6 +221,7 @@ fn set_button_text(form: &Form, id: u16, enabled: bool, text: &str) {
 fn begin_load(form: &Form, state: &State) -> u64 {
     let load = state.load.get() + 1;
     state.load.set(load);
+    state.collected.set(0);
     // C# parity: SectionedViewForm.cs:506-527 (placeholders from GetAvailableSections, sidebar
     // rebuilt, first section shown and highlighted).
     *state.sections.borrow_mut() = hw::PROVIDERS
@@ -202,10 +232,16 @@ fn begin_load(form: &Form, state: &State) -> u64 {
             ..Section::default()
         })
         .collect();
+    form.set_text(LOADING_PROGRESS, &progress_text(0));
     set_loading(form, true);
     show_section(form, state, 0);
     highlight(form, state, 0);
     load
+}
+
+/// `Collected {n} of {total} sections`.
+fn progress_text(collected: usize) -> String {
+    format!("Collected {collected} of {} sections", hw::PROVIDERS.len())
 }
 
 fn spawn_load(form: &Form, state: &State, load: u64, refresh: bool) {
@@ -215,7 +251,13 @@ fn spawn_load(form: &Form, state: &State, load: u64, refresh: bool) {
     let spawned = std::thread::Builder::new()
         .name("main load".to_owned())
         .spawn(move || {
-            let result = win::catch_panic(|| hw::collect_all(None, &|_, _| {}));
+            let progress = poster.clone();
+            let result = win::catch_panic(|| {
+                hw::collect_all(None, &|index, _| {
+                    // `false` only when the window is already gone.
+                    let _ = progress.post(Msg::Progress { load, index });
+                })
+            });
             // `false` only when the window is already gone; nobody waits for the result then.
             let _ = poster.post(Msg::Loaded {
                 load,
@@ -293,28 +335,37 @@ fn active_window() -> HWND {
     msgbox::active_window()
 }
 
+/// Shows the loading state in place of the header and text well (DESIGN.md 13): the
+/// indicator turns on the form's timer, every sidebar item is faint until collected.
 fn set_loading(form: &Form, show: bool) {
-    // C# parity: SectionedViewForm.cs:606-617.
+    // C# parity: SectionedViewForm.cs:606-617 (the overlay); the flow is the same.
+    form.set_visible(CONTENT_TABLE, !show);
     form.set_visible(LOADING, show);
-    if show {
-        place_loading(form);
-        form.relayout();
-        form.bring_to_front(LOADING);
+    for i in 0..hw::PROVIDERS.len() {
+        form.set_pending(section_id(i), show);
+    }
+    if show && form.spinner_animates(SPINNER) {
+        form.set_timer(SPIN_TIMER, theme::SPINNER_STEP_MS);
+    } else {
+        form.kill_timer(SPIN_TIMER);
     }
 }
 
-/// Centers the overlay on the client area from its last measured size (C#
-/// `UpdateLoadingLabelPosition`).
-fn place_loading(form: &Form) {
-    let client = form.client_size();
-    form.with_tree(|t| {
-        if let Some(n) = t.find_mut(LOADING) {
-            n.pos = Point {
-                x: ((client.w - n.bounds.w) / 2).max(0),
-                y: ((client.h - n.bounds.h) / 2).max(0),
-            };
-        }
-    });
+/// The status color of the section meta line (DESIGN.md 3 status map applied to the body).
+fn meta_color(body: &str) -> theme::Color {
+    if body == "Loading..." {
+        theme::INFO
+    } else if body.lines().any(|l| l.starts_with("Error retrieving")) {
+        theme::DANGER
+    } else if body == "No data available"
+        || body.lines().any(|l| {
+            l.contains("Unavailable (") || l.starts_with("Error:") || l.starts_with("Error in")
+        })
+    {
+        theme::WARNING
+    } else {
+        theme::MUTED_TEXT
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -335,6 +386,7 @@ fn show_section(form: &Form, state: &State, index: usize) {
         )
     };
     form.set_text(SECTION_TITLE, title);
+    form.set_label_color(SECTION_META, meta_color(&content));
     form.set_text(SECTION_META, &format!("Section {} of {count}", index + 1));
     form.edit_set_text(CONTENT, &content);
     form.edit_scroll_to_top(CONTENT);
@@ -394,36 +446,41 @@ fn write_export(text: &str) -> win::Result<PathBuf> {
 // Layout
 // ---------------------------------------------------------------------------------------------
 
-/// `GetSectionIcon`: lower-case `Contains`, first match wins (`SectionedViewForm.cs:443-459`).
-fn section_icon(title: &str) -> &'static str {
+/// `GetSectionIcon`: lower-case `Contains`, first match wins (`SectionedViewForm.cs:443-459`);
+/// the C# emoji are icon-font glyphs (DESIGN.md 14).
+fn section_icon(title: &str) -> char {
     let t = title.to_lowercase();
     let any = |words: &[&str]| words.iter().any(|w| t.contains(w));
     if any(&["cpu", "processor"]) {
-        "🖥️"
+        glyph::CPU
     } else if any(&["gpu", "graphics"]) {
-        "🎮"
+        glyph::GAME
     } else if any(&["ram", "memory"]) {
-        "💾"
+        glyph::RAM
     } else if any(&["motherboard", "board"]) {
-        "🔌"
+        glyph::COMPONENT
     } else if any(&["disk", "drive", "storage"]) {
-        "💿"
+        glyph::HARD_DRIVE
     } else if any(&["network", "ethernet"]) {
-        "🌐"
+        glyph::ETHERNET
+    } else if any(&["chassis"]) {
+        glyph::PC
     } else if any(&["system", "computer"]) {
-        "💻"
+        glyph::INFO
     } else if any(&["bios", "firmware"]) {
-        "⚙️"
+        glyph::COMMAND_PROMPT
     } else if any(&["tpm", "security"]) {
-        "🔒"
+        glyph::LOCK
+    } else if any(&["bluetooth"]) {
+        glyph::BLUETOOTH
     } else if any(&["usb", "device"]) {
-        "🔌"
+        glyph::USB
     } else if any(&["monitor", "display"]) {
-        "🖥️"
+        glyph::MONITOR
     } else if any(&["arp", "address"]) {
-        "📡"
+        glyph::NETWORK
     } else {
-        "📋"
+        glyph::LIST
     }
 }
 
@@ -435,41 +492,103 @@ fn sidebar_width(form: &Form, client_w: i32) -> i32 {
     )
 }
 
-/// C# `UpdateResponsiveLayout`; runs on every resize and DPI change (tree values reset there).
-fn responsive(form: &Form, client: Size) {
+/// The sidebar content height of a tier in device pixels (what the flow layout will measure).
+fn tier_height(tier: &theme::SidebarTier, padding: i32, dpi: u32) -> i32 {
+    let s = |v: i32| dpi::scale(v, dpi);
+    let title = s(tier.title) + s(tier.title_gap);
+    let subtitle = if tier.subtitle {
+        s(theme::SIDEBAR_SUBTITLE_HEIGHT) + s(theme::SIDEBAR_SUBTITLE_MARGIN.b)
+    } else {
+        0
+    };
+    padding + title + subtitle + hw::PROVIDERS.len() as i32 * (s(tier.item) + s(tier.gap))
+}
+
+/// C# `UpdateResponsiveLayout`, extended by the sidebar tiers (DESIGN.md 11): runs on every
+/// resize and DPI change (tree values reset there) and edits the tree only, so the kit's one
+/// layout pass per event stays one (8.8). Heights come from the last layout's footer.
+fn responsive(form: &Form, state: &State, client: Size) {
+    let dpi = form.dpi();
+    let s = |v: i32| dpi::scale(v, dpi);
     let sidebar = sidebar_width(form, client.w);
+    let bar_w = dpi::metric(SM_CXVSCROLL, dpi);
+    // The last layout's bounds are device pixels of that layout's DPI.
+    let last_dpi = state.layout_dpi.replace(dpi);
+    let rescale = |v: i32| {
+        if last_dpi == 0 || last_dpi == dpi {
+            v
+        } else {
+            (i64::from(v) * i64::from(dpi) / i64::from(last_dpi)) as i32
+        }
+    };
     form.with_tree(|t| {
         if let Some(Kind::Table { cols, .. }) = t.find_mut(MAIN_TABLE).map(|n| &mut n.kind) {
             cols[0] = Track::Absolute(sidebar);
         }
-    });
-    // C# parity: SectionedViewForm.cs:626-632 lays out the changed table before reading the
-    // sidebar's current scrollbar. Using the preceding layout leaves every item 2 bars too
-    // narrow or too wide after crossing the scrolling threshold.
-    form.relayout();
-    let bar = if form.vscroll_visible(SIDEBAR) {
-        dpi::metric(SM_CXVSCROLL, form.dpi())
-    } else {
-        0
-    };
-    form.with_tree(|t| {
+        // Footer: one row on every listed work area; a bottom margin separates wrapped rows
+        // (the flow layout has no row gap of its own).
+        let footer_h = t.find_mut(FOOTER).map_or(0, |footer| {
+            let row_w: i32 = footer
+                .children()
+                .iter()
+                .map(|b| rescale(b.bounds.w) + b.margin.horizontal())
+                .sum::<i32>()
+                + footer.padding.horizontal();
+            let button_h = footer
+                .children()
+                .iter()
+                .map(|b| rescale(b.bounds.h))
+                .max()
+                .unwrap_or(0)
+                .max(s(theme::FOOTER_BUTTON_MIN.h) + 4);
+            let wraps = row_w > client.w && footer.bounds.w > 0;
+            let gap = if wraps { s(theme::FOOTER_ROW_GAP) } else { 0 };
+            for b in footer.children_mut() {
+                b.margin.b = gap;
+            }
+            if wraps && footer.bounds.h > 0 {
+                rescale(footer.bounds.h)
+            } else {
+                footer.padding.vertical() + button_h
+            }
+        });
         let Some(side) = t.find_mut(SIDEBAR) else {
             return;
         };
-        // C# parity: SectionedViewForm.cs:650-651 subtracts the scroll bar from a client width
-        // that already excludes it; the inset 24 and minimum 160 are not DPI scaled.
-        let client_w = sidebar - side.margin.horizontal() - bar;
-        let item = (client_w - side.padding.horizontal() - bar - theme::SIDEBAR_ITEM_INSET)
-            .max(theme::SIDEBAR_ITEM_MIN_WIDTH);
+        let inner = client.h - footer_h - side.margin.vertical();
+        let padding = side.padding.vertical();
+        let (tier, scroll) = theme::SIDEBAR_TIERS
+            .iter()
+            .find(|tier| tier_height(tier, padding, dpi) <= inner)
+            .map_or((&theme::SIDEBAR_TIERS[3], true), |tier| (tier, false));
+        // Width: margins, padding, the scroll bar once, and the scaled inset (audit F7).
+        let bar = if scroll { bar_w } else { 0 };
+        let item_w = (sidebar
+            - side.margin.horizontal()
+            - side.padding.horizontal()
+            - bar
+            - s(theme::SIDEBAR_ITEM_INSET))
+        .max(s(theme::SIDEBAR_ITEM_MIN_WIDTH));
         for c in side.children_mut() {
-            c.size.w = item;
+            c.size.w = item_w;
+            match c.id {
+                SIDEBAR_TITLE => {
+                    c.size.h = s(tier.title);
+                    c.margin.b = s(tier.title_gap);
+                }
+                SIDEBAR_SUBTITLE => c.visible = tier.subtitle,
+                _ => {
+                    c.size.h = s(tier.item);
+                    c.margin.b = s(tier.gap);
+                }
+            }
         }
     });
-    if form.with_tree(|t| t.find(LOADING).is_some_and(|n| n.visible)) == Some(true) {
-        // The overlay's size follows its font after a DPI change: measure, then center.
-        form.relayout();
+    // The subtitle's native window follows its node (set_visible would relayout).
+    let subtitle_visible = form.with_tree(|t| t.find(SIDEBAR_SUBTITLE).is_some_and(|n| n.visible));
+    if let Some(visible) = subtitle_visible {
+        form.show_control(SIDEBAR_SUBTITLE, visible);
     }
-    place_loading(form);
 }
 
 fn label(id: u16, text: &str, font: theme::FontSpec, fore: theme::Color) -> Node {
@@ -477,7 +596,7 @@ fn label(id: u16, text: &str, font: theme::FontSpec, fore: theme::Color) -> Node
 }
 
 fn sidebar() -> Node {
-    // C# parity: SectionedViewForm.cs:366-441; widths start at the C# fallback 240 - 24.
+    // C# parity: SectionedViewForm.cs:366-441; widths start at the C# fallback 240 - inset.
     let item_w = theme::SIDEBAR_MIN_WIDTH - theme::SIDEBAR_ITEM_INSET;
     let mut items = vec![
         label(
@@ -504,7 +623,7 @@ fn sidebar() -> Node {
         .margin(theme::SIDEBAR_SUBTITLE_MARGIN),
     ];
     items.extend(hw::PROVIDERS.iter().enumerate().map(|(i, p)| {
-        let spec = ButtonSpec::sidebar(&format!("{} {}", section_icon(p.title), p.title));
+        let spec = ButtonSpec::sidebar(p.title).icon(section_icon(p.title));
         Node::leaf(section_id(i), Ctl::Button(spec))
             .size(Size {
                 w: item_w,
@@ -523,8 +642,9 @@ fn sidebar() -> Node {
 }
 
 fn content() -> Node {
-    // C# parity: SectionedViewForm.cs:140-220.
-    let header = Node::panel(vec![
+    // C# parity: SectionedViewForm.cs:140-220. The header is a card (DESIGN.md 13) with the
+    // `Copy` button at its right edge; the text well follows after a gap.
+    let titles = Node::panel(vec![
         Node::leaf(
             SECTION_TITLE,
             Ctl::Label(
@@ -547,9 +667,28 @@ fn content() -> Node {
     ])
     .fill()
     .auto_size()
+    .margin(theme::NO_PAD)
+    .cell(0, 0);
+    let copy = Node::leaf(
+        COPY,
+        Ctl::Button(ButtonSpec::outline("Copy").icon(glyph::COPY)),
+    )
+    .auto_size()
+    .min(theme::COPY_BUTTON_SIZE)
+    .anchor(Anchor::NONE)
+    .margin(theme::NO_PAD)
+    .cell(1, 0);
+    let header = Node::table(
+        vec![Track::Percent(100.0), Track::AutoSize],
+        vec![Track::AutoSize],
+        vec![titles, copy],
+    )
+    .fill()
+    .auto_size()
+    .card(theme::HEADER_RADIUS)
     .back(theme::CONTENT_BACKGROUND)
     .padding(theme::HEADER_PADDING)
-    .margin(theme::NO_PAD)
+    .margin(theme::HEADER_MARGIN)
     .cell(0, 0);
     let edit = EditSpec::new(
         theme::CONTENT_FONT,
@@ -557,31 +696,70 @@ fn content() -> Node {
         theme::TEXT_BOX_BACKGROUND,
     )
     .border(EditBorder::FixedSingle);
-    Node::panel(vec![
-        Node::table(
-            vec![Track::Percent(100.0)],
-            vec![
-                Track::AutoSize,
-                Track::Absolute(theme::DIVIDER_HEIGHT),
-                Track::Percent(100.0),
-            ],
-            vec![
-                header,
-                Node::panel(vec![])
-                    .fill()
-                    .back(theme::BORDER_SUBTLE)
-                    .margin(theme::NO_PAD)
-                    .cell(0, 1),
-                Node::leaf(CONTENT, Ctl::Edit(edit)).fill().cell(0, 2),
-            ],
-        )
-        .fill()
-        .back(theme::SURFACE_BACKGROUND),
-    ])
+    let loaded = Node::table(
+        vec![Track::Percent(100.0)],
+        vec![Track::AutoSize, Track::Percent(100.0)],
+        vec![
+            header,
+            Node::leaf(CONTENT, Ctl::Edit(edit))
+                .fill()
+                .margin(theme::NO_PAD)
+                .cell(0, 1),
+        ],
+    )
+    .id(CONTENT_TABLE)
     .fill()
-    .padding(theme::CONTENT_PADDING)
+    .margin(theme::NO_PAD)
+    .back(theme::SURFACE_BACKGROUND);
+    // The loading state (DESIGN.md 13): indicator, title and counter centered in the pane.
+    let loading = Node::table(
+        vec![Track::Percent(100.0)],
+        vec![Track::Percent(100.0)],
+        vec![
+            Node::flow(
+                FlowDir::TopDown,
+                false,
+                vec![
+                    Node::leaf(SPINNER, Ctl::Spinner)
+                        .anchor(Anchor::NONE)
+                        .margin(theme::SPINNER_MARGIN),
+                    label(
+                        LOADING_TITLE,
+                        LOADING_TEXT,
+                        theme::LOADING_TITLE_FONT,
+                        theme::TEXT,
+                    )
+                    .auto_size()
+                    .anchor(Anchor::NONE)
+                    .margin(theme::LOADING_TITLE_MARGIN),
+                    label(
+                        LOADING_PROGRESS,
+                        &progress_text(0),
+                        theme::LOADING_PROGRESS_FONT,
+                        theme::MUTED_TEXT,
+                    )
+                    .auto_size()
+                    .anchor(Anchor::NONE)
+                    .margin(theme::NO_PAD),
+                ],
+            )
+            .id(LOADING_BOX)
+            .auto_size()
+            .anchor(Anchor::NONE)
+            .margin(theme::NO_PAD)
+            .cell(0, 0),
+        ],
+    )
+    .id(LOADING)
+    .fill()
+    .margin(theme::NO_PAD)
     .back(theme::SURFACE_BACKGROUND)
-    .cell(1, 0)
+    .visible(false);
+    Node::panel(vec![loaded, loading])
+        .fill()
+        .padding(theme::CONTENT_PADDING)
+        .back(theme::SURFACE_BACKGROUND)
+        .cell(1, 0)
 }
 
 fn footer() -> Node {
@@ -589,12 +767,13 @@ fn footer() -> Node {
     // DESIGN.md 6: Refresh is the window's one primary button (the main action).
     let buttons = FOOTER_BUTTONS
         .iter()
-        .map(|&(id, text)| {
+        .map(|&(id, text, icon)| {
             let spec = if id == REFRESH {
                 ButtonSpec::primary(text)
             } else {
                 ButtonSpec::outline(text)
-            };
+            }
+            .icon(icon);
             Node::leaf(id, Ctl::Button(spec))
                 .auto_size()
                 .min(theme::FOOTER_BUTTON_MIN)
@@ -626,15 +805,6 @@ fn tree() -> Vec<Node> {
         .id(MAIN_TABLE)
         .fill()
         .back(theme::MAIN_BACKGROUND),
-        label(
-            LOADING,
-            "Loading hardware information...",
-            theme::LOADING_FONT,
-            theme::LOADING_LABEL_TEXT,
-        )
-        .auto_size()
-        .anchor(Anchor::NONE)
-        .visible(false),
     ]
 }
 
@@ -660,12 +830,11 @@ mod live {
     use windows::Win32::UI::Controls::EM_GETSEL;
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetActiveWindow, GetFocus, IsWindowEnabled};
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, FindWindowExW, GetClassNameW, GetClientRect, GetDlgItem, GetWindowRect,
-        GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow, PostMessageW,
-        SWP_NOMOVE, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowPos, WM_CLOSE,
-        WM_DPICHANGED, WM_KEYDOWN,
+        EnumWindows, GetClassNameW, GetClientRect, GetWindowRect, GetWindowTextLengthW,
+        GetWindowTextW, GetWindowThreadProcessId, IsWindow, PostMessageW, SWP_NOMOVE, SWP_NOZORDER,
+        SendMessageW, SetForegroundWindow, SetWindowPos, WM_CLOSE, WM_DPICHANGED, WM_KEYDOWN,
     };
-    use windows::core::{BOOL, PCWSTR, w};
+    use windows::core::BOOL;
 
     const GOLDEN: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\wp-10b";
     const TICK: usize = 0x7E57;
@@ -761,6 +930,26 @@ mod live {
         r
     }
 
+    /// The first descendant window (any depth) of `parent` with window class `class`.
+    fn descendant_of_class(parent: HWND, class: &str) -> Option<HWND> {
+        unsafe extern "system" fn collect(h: HWND, data: LPARAM) -> BOOL {
+            // SAFETY: `data` is the Vec passed below, alive for the enumeration.
+            unsafe { (*(data.0 as *mut Vec<HWND>)).push(h) };
+            BOOL(1)
+        }
+        let mut all: Vec<HWND> = Vec::new();
+        // SAFETY: Synchronous enumeration whose callback only pushes into `all`.
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::EnumChildWindows(
+                Some(parent),
+                Some(collect),
+                LPARAM(&mut all as *mut Vec<HWND> as isize),
+            );
+        }
+        all.into_iter()
+            .find(|h| class_of(*h).eq_ignore_ascii_case(class))
+    }
+
     /// Top-level windows of this process.
     fn own_windows() -> Vec<HWND> {
         unsafe extern "system" fn collect(h: HWND, data: LPARAM) -> BOOL {
@@ -785,6 +974,10 @@ mod live {
 
     /// PrintWindow capture (works while other apps cover the window) saved as a BMP.
     fn shot(h: HWND, name: &str) {
+        shot_dir(h, GOLDEN, name);
+    }
+
+    fn shot_dir(h: HWND, dir: &str, name: &str) {
         let r = rect_of(h, false);
         let (w, hgt) = (r.right - r.left, r.bottom - r.top);
         let mut bits = vec![0u8; (w * hgt * 4) as usize];
@@ -834,13 +1027,17 @@ mod live {
         out.extend_from_slice(&32u16.to_le_bytes());
         out.extend_from_slice(&[0u8; 24]);
         out.extend_from_slice(&bits);
-        std::fs::write(Path::new(GOLDEN).join(format!("{name}.bmp")), out).unwrap();
+        std::fs::write(Path::new(dir).join(format!("{name}.bmp")), out).unwrap();
     }
 
     fn bmps_to_png() {
+        bmps_to_png_in(GOLDEN);
+    }
+
+    fn bmps_to_png_in(dir: &str) {
         let script = format!(
             "Add-Type -AssemblyName System.Drawing; \
-             Get-ChildItem '{GOLDEN}' -Filter *.bmp | ForEach-Object {{ \
+             Get-ChildItem '{dir}' -Filter *.bmp | ForEach-Object {{ \
                $i = [System.Drawing.Image]::FromFile($_.FullName); \
                $i.Save(($_.FullName -replace '\\.bmp$', '.png'), [System.Drawing.Imaging.ImageFormat]::Png); \
                $i.Dispose(); Remove-Item $_.FullName }}"
@@ -875,8 +1072,9 @@ mod live {
             .unwrap_or_default()
     }
 
+    /// The loading box (indicator, title, counter) is centered in the content pane.
     fn centered(form: &Form) -> bool {
-        let (lr, c) = (bounds(form, LOADING), form.client_size());
+        let (lr, c) = (bounds(form, LOADING_BOX), bounds(form, LOADING));
         (lr.x - (c.w - lr.w) / 2).abs() <= 1 && (lr.y - (c.h - lr.h) / 2).abs() <= 1
     }
 
@@ -913,11 +1111,8 @@ mod live {
                 if handled.contains(&(h.0 as isize)) {
                     continue;
                 }
-                if class == "#32770" {
-                    // SAFETY: Child lookup in a message box (static text id 0xFFFF).
-                    let body = unsafe { GetDlgItem(Some(h), 0xFFFF) }
-                        .map(text_of)
-                        .unwrap_or_default();
+                if msgbox::testing::is_box(h) {
+                    let body = msgbox::testing::text(h);
                     if body.is_empty() {
                         continue; // Still being created.
                     }
@@ -925,19 +1120,15 @@ mod live {
                     log.lock()
                         .unwrap()
                         .push(format!("box {} | {}", text_of(h), body));
-                    // SAFETY: Value-only message; OK-only boxes treat WM_CLOSE as OK.
-                    unsafe {
-                        let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
-                    }
-                } else if class == "HWIDChecker.Form" && text_of(h) == raw_view::TITLE {
+                    // Pressed by HWND: every box of this test is an OK box.
+                    msgbox::testing::press(h, windows::Win32::UI::WindowsAndMessaging::IDOK);
+                } else if class == window::FORM_CLASS && text_of(h) == raw_view::TITLE {
                     handled.insert(h.0 as isize);
                     std::thread::sleep(Duration::from_millis(700));
                     let button = hwnd(old_view_button);
                     // SAFETY: Read-only state query of the main window's button.
                     let enabled = unsafe { IsWindowEnabled(button) }.as_bool();
-                    // SAFETY: Child lookup in our Old View window.
-                    let edit = unsafe { FindWindowExW(Some(h), None, w!("Edit"), PCWSTR::null()) }
-                        .unwrap_or_default();
+                    let edit = descendant_of_class(h, "Edit").unwrap_or_default();
                     let (mut s, mut e) = (0u32, 0u32);
                     // SAFETY: Cross-thread EM_GETSEL into live locals; the UI thread pumps.
                     unsafe {
@@ -997,6 +1188,284 @@ mod live {
 
     fn take(log: &Mutex<Vec<String>>) -> Vec<String> {
         std::mem::take(&mut *log.lock().unwrap())
+    }
+
+    /// The per-setup fit table of DESIGN.md 11: every listed screen setup as a forced work area
+    /// plus a synthetic DPI change; the restored (clamped) window and, where the default does
+    /// not fit, the maximized client. Screenshots and `fit-matrix.md` go to `golden/wp-19`.
+    /// `cargo test --locked --lib -- --ignored --exact ui::main_window::live::fit_matrix --nocapture`
+    #[test]
+    #[ignore = "opens a real window and collects real hardware data"]
+    fn fit_matrix() {
+        const OUT: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\wp-19\fit";
+        std::fs::create_dir_all(OUT).unwrap();
+        assert!(dpi::set_per_monitor_v2_for_tests(), "PerMonitorV2");
+        assert!(activate_comctl6(), "comctl v6 activation context");
+        let (spec, nodes, handler) = parts();
+        let (style, ex) = window::styles(&spec);
+        let form = Form::create(HWND::default(), spec, nodes, handler).unwrap();
+        form.show();
+        form.set_timer(TICK, 20);
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let button = form.control(OLD_VIEW).unwrap().0 as isize;
+        let closer_thread = {
+            let (stop, log) = (Arc::clone(&stop), Arc::clone(&log));
+            std::thread::spawn(move || closer(stop, log, button))
+        };
+        pump_while(Duration::from_secs(150), || loading(&form));
+        pump_for(300);
+        let real = dpi::window_dpi(form.hwnd());
+        // (name, width, height, dpi)
+        let setups: [(&str, i32, i32, u32); 10] = [
+            ("1920x1080 @100", 1920, 1080, 96),
+            ("1920x1080 @125", 1920, 1080, 120),
+            ("1920x1080 @150", 1920, 1080, 144),
+            ("2560x1440 @100", 2560, 1440, 96),
+            ("2560x1440 @125", 2560, 1440, 120),
+            ("3840x2160 @150", 3840, 2160, 144),
+            ("3840x2160 @175", 3840, 2160, 168),
+            ("3840x2160 @200", 3840, 2160, 192),
+            ("1366x768 @125", 1366, 768, 120),
+            ("1920x1080 custom 137 DPI", 1920, 1080, 137),
+        ];
+        let mut rows = vec![
+            "| Setup | Work area (px) | Default outer | Start | Restored outer | Client | Tier | 14 visible | Scrollbar | Elided | Footer rows |".to_owned(),
+            "|---|---|---|---|---|---|---|---|---|---|---|".to_owned(),
+        ];
+        let measure_state = |form: &Form, dpi: u32| -> (String, bool, bool, usize, usize) {
+            form.with_tree(|t| {
+                let side = t.find(SIDEBAR).unwrap();
+                let first = t.find(FIRST_SECTION).unwrap();
+                let last = t.find(section_id(hw::PROVIDERS.len() - 1)).unwrap();
+                let tier = ["A", "B", "C", "D"]
+                    .iter()
+                    .zip(theme::SIDEBAR_TIERS.iter())
+                    .find(|(_, tier)| dpi::scale(tier.item, dpi) == first.bounds.h)
+                    .map_or("?", |(n, _)| n)
+                    .to_owned();
+                let visible = !side.vscroll && last.bounds.bottom() <= side.bounds.h;
+                let footer = t.find(FOOTER).unwrap();
+                let mut ys: Vec<i32> = footer.children().iter().map(|b| b.bounds.y).collect();
+                ys.sort_unstable();
+                ys.dedup();
+                (tier, visible, side.vscroll, 0, ys.len())
+            })
+            .unwrap()
+        };
+        let elided = |form: &Form| -> usize {
+            // Captions whose single-line width exceeds the item's text field get an ellipsis.
+            let dpi = form.dpi();
+            let font = dpi::Font::new(theme::SECTION_BUTTON_FONT, dpi).unwrap();
+            (0..hw::PROVIDERS.len())
+                .filter(|&i| {
+                    let (w, spec) = form
+                        .with_tree(|t| {
+                            let n = t.find(section_id(i)).unwrap();
+                            let Kind::Leaf(Ctl::Button(b)) = &n.kind else {
+                                unreachable!()
+                            };
+                            (n.bounds.w, (b.clone(), n.padding))
+                        })
+                        .unwrap();
+                    let need = crate::ui::controls::measure(
+                        &Ctl::Button(spec.0),
+                        font.handle(),
+                        spec.1,
+                        Size::default(),
+                        Size::default(),
+                        dpi,
+                    );
+                    need.w > w
+                })
+                .count()
+        };
+        for (name, w, h, dpi) in setups {
+            let taskbar = dpi::scale(48, dpi);
+            let work = RECT {
+                left: 0,
+                top: 0,
+                right: w,
+                bottom: h - taskbar,
+            };
+            window::force_work_area(Some(work));
+            let client = dpi::scale_size(theme::MAIN_CLIENT_SIZE, dpi);
+            let outer = dpi::outer_for_client(client, style, ex, dpi).unwrap();
+            let fits = outer.w <= w && outer.h <= h - taskbar;
+            let suggested = RECT {
+                left: 0,
+                top: 0,
+                right: outer.w,
+                bottom: outer.h,
+            };
+            // SAFETY: Synchronous message to our own window with a pointer to a live RECT.
+            unsafe {
+                SendMessageW(
+                    form.hwnd(),
+                    WM_DPICHANGED,
+                    Some(WPARAM((dpi | (dpi << 16)) as usize)),
+                    Some(LPARAM(&suggested as *const RECT as isize)),
+                );
+            }
+            pump_for(300);
+            let r = form.window_rect();
+            let c = form.client_size();
+            let (tier, visible, scroll, _, rows_n) = measure_state(&form, dpi);
+            let el = elided(&form);
+            let tag = name.replace(' ', "-").replace('@', "at");
+            shot_dir(form.hwnd(), OUT, &format!("{tag}-restored"));
+            rows.push(format!(
+                "| {name} | {}x{} | {}x{} | {} | {}x{} | {}x{} | {tier} | {visible} | {scroll} | {el} | {rows_n} |",
+                w,
+                h - taskbar,
+                outer.w,
+                outer.h,
+                if fits { "normal" } else { "maximized (AD-38)" },
+                r.right - r.left,
+                r.bottom - r.top,
+                c.w,
+                c.h,
+            ));
+            if !fits {
+                // The maximized client: the work area minus the caption (borders hang off
+                // screen), per the audit's frame arithmetic.
+                let frame = dpi::outer_for_client(Size { w: 0, h: 0 }, style, ex, dpi).unwrap();
+                let max_client = Size {
+                    w,
+                    h: h - taskbar - (frame.h - frame.w),
+                };
+                // SAFETY: Resizes our own window to the maximized client's outer size.
+                unsafe {
+                    let _ = SetWindowPos(
+                        form.hwnd(),
+                        None,
+                        0,
+                        0,
+                        max_client.w + frame.w,
+                        max_client.h + frame.h,
+                        SWP_NOMOVE | SWP_NOZORDER,
+                    );
+                }
+                pump_for(300);
+                let c = form.client_size();
+                let (tier, visible, scroll, _, rows_n) = measure_state(&form, dpi);
+                let el = elided(&form);
+                shot_dir(form.hwnd(), OUT, &format!("{tag}-maximized"));
+                rows.push(format!(
+                    "| {name} (maximized) | {}x{} | - | maximized | - | {}x{} | {tier} | {visible} | {scroll} | {el} | {rows_n} |",
+                    w,
+                    h - taskbar,
+                    c.w,
+                    c.h,
+                ));
+            }
+        }
+        // The minimum size at 96 DPI on a large work area (the shrink-to-minimum case).
+        window::force_work_area(Some(RECT {
+            left: 0,
+            top: 0,
+            right: 2560,
+            bottom: 1392,
+        }));
+        let suggested = RECT {
+            left: 0,
+            top: 0,
+            right: 1056,
+            bottom: 839,
+        };
+        // SAFETY: Synchronous message to our own window with a pointer to a live RECT.
+        unsafe {
+            SendMessageW(
+                form.hwnd(),
+                WM_DPICHANGED,
+                Some(WPARAM((96 | (96 << 16)) as usize)),
+                Some(LPARAM(&suggested as *const RECT as isize)),
+            );
+            let _ = SetWindowPos(form.hwnd(), None, 0, 0, 100, 100, SWP_NOMOVE | SWP_NOZORDER);
+        }
+        pump_for(300);
+        let r = form.window_rect();
+        let c = form.client_size();
+        let (tier, visible, scroll, _, rows_n) = measure_state(&form, 96);
+        let el = elided(&form);
+        shot_dir(form.hwnd(), OUT, "minimum-96");
+        rows.push(format!(
+            "| minimum @100 (2560x1392) | 2560x1392 | 900x750 | normal | {}x{} | {}x{} | {tier} | {visible} | {scroll} | {el} | {rows_n} |",
+            r.right - r.left,
+            r.bottom - r.top,
+            c.w,
+            c.h
+        ));
+        // F5 evidence on the real main window: one layout pass per resize and per DPI change.
+        let before = form.layout_count();
+        // SAFETY: Resizes our own window.
+        unsafe {
+            let _ = SetWindowPos(
+                form.hwnd(),
+                None,
+                0,
+                0,
+                1000,
+                820,
+                SWP_NOMOVE | SWP_NOZORDER,
+            );
+        }
+        pump_for(200);
+        let resize_passes = form.layout_count() - before;
+        let before = form.layout_count();
+        let r = form.window_rect();
+        let suggested = RECT {
+            left: r.left,
+            top: r.top,
+            right: r.left + (r.right - r.left) * 3 / 2,
+            bottom: r.top + (r.bottom - r.top) * 3 / 2,
+        };
+        // SAFETY: Synchronous message to our own window with a pointer to a live RECT.
+        unsafe {
+            SendMessageW(
+                form.hwnd(),
+                WM_DPICHANGED,
+                Some(WPARAM((144 | (144 << 16)) as usize)),
+                Some(LPARAM(&suggested as *const RECT as isize)),
+            );
+        }
+        pump_for(300);
+        let dpi_passes = form.layout_count() - before;
+        rows.push(format!(
+            "
+Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} per DPI change (DESIGN.md 8.8 wants 1 and 1)."
+        ));
+        // Back to the real monitor.
+        window::force_work_area(None);
+        let r = form.window_rect();
+        let suggested = RECT {
+            left: r.left,
+            top: r.top,
+            right: r.left + (r.right - r.left) * real as i32 / 96,
+            bottom: r.top + (r.bottom - r.top) * real as i32 / 96,
+        };
+        // SAFETY: Synchronous message to our own window with a pointer to a live RECT.
+        unsafe {
+            SendMessageW(
+                form.hwnd(),
+                WM_DPICHANGED,
+                Some(WPARAM((real | (real << 16)) as usize)),
+                Some(LPARAM(&suggested as *const RECT as isize)),
+            );
+        }
+        pump_for(200);
+        for row in &rows {
+            println!("RESULT {row}");
+        }
+        std::fs::write(
+            Path::new(OUT).join("fit-matrix.md"),
+            rows.iter().map(|r| format!("{r}\n")).collect::<String>(),
+        )
+        .unwrap();
+        form.destroy();
+        stop.store(true, Ordering::SeqCst);
+        closer_thread.join().unwrap();
+        bmps_to_png_in(OUT);
     }
 
     #[test]
@@ -1066,7 +1535,7 @@ mod live {
             bounds(&form, CONTENT),
             bounds(&form, FIRST_SECTION)
         ));
-        for (id, _) in FOOTER_BUTTONS {
+        for (id, _, _) in FOOTER_BUTTONS {
             record(format!("footer button {id} {:?}", bounds(&form, id)));
         }
 
@@ -1078,10 +1547,7 @@ mod live {
             pump_for(30);
             assert_eq!(form.text(SECTION_TITLE), p.title);
             assert_eq!(form.text(SECTION_META), format!("Section {} of 14", i + 1));
-            assert_eq!(
-                form.text(section_id(i)),
-                format!("{} {}", section_icon(p.title), p.title)
-            );
+            assert_eq!(form.text(section_id(i)), p.title);
             let body = form.text(CONTENT);
             private.push_str(&format!("===== {} =====\r\n{body}\r\n\r\n", p.title));
             let errors = body
@@ -1331,7 +1797,7 @@ mod live {
             pump_for(200);
             let before = bounds(&form, FIRST_SECTION);
             let scroll = form.vscroll_visible(SIDEBAR);
-            responsive(&form, form.client_size());
+            responsive(&form, &State::default(), form.client_size());
             form.relayout();
             let after = bounds(&form, FIRST_SECTION);
             record(format!(

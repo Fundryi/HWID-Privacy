@@ -10,10 +10,7 @@ use std::cell::RefCell;
 use std::sync::mpsc::{self, TryRecvError};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Controls::EM_SETSEL;
-use windows::Win32::UI::WindowsAndMessaging::{
-    IsWindow, PostThreadMessageW, SendMessageW, WM_NULL,
-};
+use windows::Win32::UI::WindowsAndMessaging::{IsWindow, PostThreadMessageW, WM_NULL};
 
 /// Window title of the Old View form.
 pub const TITLE: &str = "Old View - Raw Hardware Data";
@@ -101,8 +98,11 @@ fn show_report(owner: HWND, report: String) -> win::Result<()> {
         },
     );
     spec.back = theme::OLD_VIEW_BACKGROUND;
+    // DESIGN.md 11.5: a minimum (C# has none) and the work-area clamp of every form.
+    spec.min = Some(theme::OLD_VIEW_MIN_SIZE);
     // C# parity: WordWrap is left at its default (true), so there is no horizontal scroll bar;
-    // BorderStyle stays the Fixed3D default.
+    // BorderStyle stays the Fixed3D default. The well sits inside the window padding and
+    // opens with nothing selected (DESIGN.md 4; C# selected the whole report).
     let edit = Ctl::Edit(
         EditSpec::new(
             theme::OLD_VIEW_FONT,
@@ -114,18 +114,15 @@ fn show_report(owner: HWND, report: String) -> win::Result<()> {
     window::run_modal(
         owner,
         spec,
-        vec![Node::leaf(TEXT, edit).fill()],
+        vec![
+            Node::panel(vec![Node::leaf(TEXT, edit).fill()])
+                .fill()
+                .padding(theme::OUTPUT_PANEL_PADDING),
+        ],
         move |form, event| {
             if let Event::Created = event {
                 form.edit_set_text(TEXT, &report);
-                if let Some(edit) = form.control(TEXT) {
-                    // C# parity: TextBox.OnGotFocus selects all text on the first focus when no
-                    // selection was set (.NET 10 probe: whole text selected, view at the top).
-                    // SAFETY: Value-only message to our own edit; EM_SETSEL does not scroll.
-                    unsafe {
-                        SendMessageW(edit, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
-                    }
-                }
+                form.edit_scroll_to_top(TEXT);
             }
             true
         },

@@ -664,7 +664,8 @@ fn main_replica() -> Vec<Node> {
             vec![Track::Percent(100.0)],
             vec![
                 Track::AutoSize,
-                Track::Absolute(theme::DIVIDER_HEIGHT),
+                // The WP-10a replica keeps its 1 px divider row (the main window dropped it).
+                Track::Absolute(1),
                 Track::Percent(100.0),
             ],
             vec![
