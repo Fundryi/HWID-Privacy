@@ -342,10 +342,11 @@ fn scan_lines(found: &[GhostDevice], list: &[GhostDevice]) -> (Vec<String>, Vec<
 
 /// C# `catch` in `StartCleaningProcess`, then `finally`.
 fn fail(form: &Form, st: &State, error: &str) {
-    // C# parity: CleanDevicesForm.cs:289-291 (HandleError format, then the box).
+    // C# parity: CleanDevicesForm.cs:289-291 (HandleError format, then the box). Raised after
+    // worker results, so the box belongs to the active window (DESIGN.md 8.5).
     status(form, &format!("Error in Cleaning Process: {error}"));
     msgbox::show(
-        form.hwnd(),
+        msgbox::active_window(),
         &format!("Error during cleaning process: {error}"),
         "Error",
         Buttons::Ok,
@@ -431,7 +432,13 @@ fn thread_error(error: std::io::Error) -> String {
 fn tree() -> Vec<Node> {
     let action = |id: u16, text: &str| {
         // C# parity: CleanDevicesForm.cs:176-191. ApplyStyle overrides the 12,4 padding.
-        Node::leaf(id, Ctl::Button(ButtonSpec::primary(text)))
+        // DESIGN.md 6: C# styles all three as primary; Reclean is the main action here.
+        let spec = if id == RECLEAN {
+            ButtonSpec::primary(text)
+        } else {
+            ButtonSpec::outline(text)
+        };
+        Node::leaf(id, Ctl::Button(spec))
             .auto_size()
             .min(theme::ACTION_BUTTON_MIN)
             .padding(theme::SHARED_BUTTON_PADDING)
@@ -451,7 +458,7 @@ fn tree() -> Vec<Node> {
                         Ctl::Edit(EditSpec::new(
                             theme::CLEANER_OUTPUT_FONT,
                             theme::TEXT_BOX_TEXT,
-                            theme::TEXT_BOX_BACKGROUND,
+                            theme::CLEANER_OUTPUT_BACKGROUND,
                         )),
                     )
                     .fill(),

@@ -4,13 +4,24 @@ use crate::win::wide::to_wide;
 use windows::{
     Win32::{
         Foundation::HWND,
-        UI::WindowsAndMessaging::{
-            IDNO, IDOK, IDYES, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING,
-            MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MessageBoxW,
+        UI::{
+            Input::KeyboardAndMouse::GetActiveWindow,
+            WindowsAndMessaging::{
+                IDNO, IDOK, IDYES, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION,
+                MB_ICONWARNING, MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MessageBoxW,
+            },
         },
     },
     core::PCWSTR,
 };
+
+/// The owner for a box raised after async work (DESIGN.md 8.5): C# `MessageBox.Show` without an
+/// owner uses the UI thread's active window, including a modal child. Never pass a form that a
+/// modal child disabled: the box would enable it again when it closes.
+pub fn active_window() -> HWND {
+    // SAFETY: Read-only query of this UI thread's active window; a null result is valid.
+    unsafe { GetActiveWindow() }
+}
 
 /// `MessageBoxButtons` subset.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

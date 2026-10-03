@@ -125,7 +125,13 @@ fn report_failure(owner: HWND, what: &str, error: &str) {
 fn tree() -> Vec<Node> {
     let action = |id: u16, text: &str| {
         // C# parity: WhitelistDevicesForm.cs:109-124. ApplyStyle overrides the 12,4 padding.
-        Node::leaf(id, Ctl::Button(ButtonSpec::secondary(text)))
+        // DESIGN.md 6: Save is the main action, Reset deletes the whitelist file.
+        let spec = match id {
+            SAVE => ButtonSpec::primary(text),
+            RESET => ButtonSpec::destructive(text),
+            _ => ButtonSpec::outline(text),
+        };
+        Node::leaf(id, Ctl::Button(spec))
             .auto_size()
             .min(theme::ACTION_BUTTON_MIN)
             .padding(theme::SHARED_BUTTON_PADDING)
@@ -135,8 +141,8 @@ fn tree() -> Vec<Node> {
         font: theme::WHITELIST_LIST_FONT,
         fore: theme::TEXT_BOX_TEXT,
         back: theme::TEXT_BOX_BACKGROUND,
-        selected_back: theme::SIDEBAR_ITEM_ACTIVE,
-        selected_fore: theme::WHITE,
+        selected_back: theme::LIST_SELECTED_BACKGROUND,
+        selected_fore: theme::LIST_SELECTED_TEXT,
     };
     vec![
         Node::table(

@@ -89,7 +89,7 @@ fn layout() -> Vec<Node> {
         Ctl::Edit(EditSpec::new(
             theme::CLEANER_OUTPUT_FONT,
             theme::TEXT_BOX_TEXT,
-            theme::TEXT_BOX_BACKGROUND,
+            theme::CLEANER_OUTPUT_BACKGROUND,
         )),
     )
     .fill();
@@ -100,6 +100,7 @@ fn layout() -> Vec<Node> {
         .back(theme::MAIN_BACKGROUND)
         .cell(0, 0);
     // C# parity: CleanLogsForm.cs:104-115; Buttons.cs:30 overrides the constructor padding.
+    // DESIGN.md 6: the only button, so it is the primary one.
     let close = Node::leaf(CLOSE, Ctl::Button(ButtonSpec::primary("Close")))
         .auto_size()
         .min(theme::CLEAN_LOGS_CLOSE_MIN)
@@ -165,8 +166,9 @@ fn finish(form: &Form, state: &State, outcome: CleanOutcome) {
                 OUTPUT,
                 &[&format!("Error in Log Cleaning Process: {error}\r\n")],
             );
+            // Raised after the worker result: the box belongs to the active window (8.5).
             window::show_error(
-                form.hwnd(),
+                msgbox::active_window(),
                 &format!("Error during log cleaning process: {error}"),
                 "Error",
             );

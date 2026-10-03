@@ -74,8 +74,12 @@ fn collect(owner: HWND) -> Option<Result<String, String>> {
         match rx.try_recv() {
             Ok(report) => *result.borrow_mut() = Some(report),
             Err(TryRecvError::Disconnected) => {
-                *result.borrow_mut() =
-                    Some(Err("Old View collection ended without a result".to_owned()))
+                // AD-01: the text carries the `{op} failed: 0x{code:08X}` shape.
+                *result.borrow_mut() = Some(Err(win::Error::msg(
+                    "Old View collection",
+                    "ended without a result",
+                )
+                .to_string()))
             }
             Err(TryRecvError::Empty) => {}
         }

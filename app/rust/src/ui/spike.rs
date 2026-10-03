@@ -8,9 +8,7 @@ use super::{
     layout::{Kind, Node, Rect, Size},
     theme,
 };
-use crate::ui::controls::{
-    Align, ButtonSpec, Ctl, EditBorder, EditSpec, Hover, LabelSpec, ListSpec,
-};
+use crate::ui::controls::{Align, ButtonSpec, Ctl, EditBorder, EditSpec, LabelSpec, ListSpec};
 use crate::ui::layout::{Anchor, FlowDir, Point, Track};
 use crate::win::wide::to_wide;
 use std::path::{Path, PathBuf};
@@ -587,18 +585,7 @@ const FOOTER_TEXTS: [&str; 6] = [
 ];
 
 fn sidebar_button(i: usize) -> Node {
-    let spec = ButtonSpec {
-        text: TITLES[i].to_owned(),
-        font: theme::SECTION_BUTTON_FONT,
-        back: theme::SIDEBAR_ITEM_BACKGROUND,
-        fore: theme::SIDEBAR_ITEM_TEXT,
-        border: theme::BORDER_SUBTLE,
-        border_size: 1,
-        over_back: Some(theme::SIDEBAR_ITEM_HOVER),
-        down_back: Some(theme::SIDEBAR_ITEM_ACTIVE),
-        align: Align::MiddleLeft,
-        hover: Hover::None,
-    };
+    let spec = ButtonSpec::sidebar(TITLES[i]);
     Node::leaf(FIRST_SECTION + i as u16, Ctl::Button(spec))
         .size(Size {
             w: 216,
@@ -713,14 +700,16 @@ fn main_replica() -> Vec<Node> {
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            Node::leaf(
-                FIRST_FOOTER_BUTTON + i as u16,
-                Ctl::Button(ButtonSpec::secondary(t)),
-            )
-            .auto_size()
-            .min(theme::FOOTER_BUTTON_MIN)
-            .padding(theme::SHARED_BUTTON_PADDING)
-            .margin(theme::FOOTER_BUTTON_MARGIN)
+            let spec = if i == 0 {
+                ButtonSpec::primary(t)
+            } else {
+                ButtonSpec::outline(t)
+            };
+            Node::leaf(FIRST_FOOTER_BUTTON + i as u16, Ctl::Button(spec))
+                .auto_size()
+                .min(theme::FOOTER_BUTTON_MIN)
+                .padding(theme::SHARED_BUTTON_PADDING)
+                .margin(theme::FOOTER_BUTTON_MARGIN)
         })
         .collect();
     vec![
@@ -794,50 +783,22 @@ fn responsive(form: &Form, client: Size) {
 
 fn confirm_replica() -> Vec<Node> {
     let button = |id: u16, text: &str, primary: bool| {
-        let (back, border, hover, font, size, min_w) = if primary {
-            (
-                theme::CONFIRM_PRIMARY,
-                theme::CONFIRM_PRIMARY_BORDER,
-                theme::CONFIRM_PRIMARY_HOVER,
-                theme::CONFIRM_PRIMARY_FONT,
-                theme::CONFIRM_PRIMARY_BORDER_SIZE,
-                theme::CONFIRM_PRIMARY_MIN_WIDTH,
-            )
+        let (spec, min_w) = if primary {
+            (ButtonSpec::primary(text), theme::CONFIRM_PRIMARY_MIN_WIDTH)
         } else {
             (
-                theme::CONFIRM_SECONDARY,
-                theme::CONFIRM_SECONDARY_BORDER,
-                theme::CONFIRM_SECONDARY_HOVER,
-                theme::CONFIRM_SECONDARY_FONT,
-                theme::CONFIRM_SECONDARY_BORDER_SIZE,
+                ButtonSpec::outline(text),
                 theme::CONFIRM_SECONDARY_MIN_WIDTH,
             )
         };
-        Node::leaf(
-            id,
-            Ctl::Button(ButtonSpec {
-                text: text.to_owned(),
-                font,
-                back,
-                fore: theme::WHITE,
-                border,
-                border_size: size,
-                over_back: None,
-                down_back: None,
-                align: Align::MiddleCenter,
-                hover: Hover::EnterLeave {
-                    normal: back,
-                    hover,
-                },
-            }),
-        )
-        .auto_size()
-        .min(Size {
-            w: min_w,
-            h: theme::CONFIRM_BUTTON_HEIGHT,
-        })
-        .padding(theme::CONFIRM_BUTTON_PADDING)
-        .margin(theme::CONFIRM_BUTTON_MARGIN)
+        Node::leaf(id, Ctl::Button(spec))
+            .auto_size()
+            .min(Size {
+                w: min_w,
+                h: theme::CONFIRM_BUTTON_HEIGHT,
+            })
+            .padding(theme::CONFIRM_BUTTON_PADDING)
+            .margin(theme::CONFIRM_BUTTON_MARGIN)
     };
     let wrap = Size {
         w: (theme::CONFIRM_CLIENT_SIZE.w - theme::CONFIRM_LABEL_WRAP_INSET)
@@ -855,7 +816,7 @@ fn confirm_replica() -> Vec<Node> {
                         LabelSpec::new(
                             "Remove 12 ghost devices?",
                             theme::CONFIRM_MESSAGE_FONT,
-                            theme::WHITE,
+                            theme::CONFIRM_MESSAGE_TEXT,
                         )
                         .align(Align::MiddleCenter),
                     ),
@@ -871,7 +832,7 @@ fn confirm_replica() -> Vec<Node> {
                         LabelSpec::new(
                             "Warning: This action cannot be undone",
                             theme::CONFIRM_WARNING_FONT,
-                            theme::ORANGE,
+                            theme::CONFIRM_WARNING_TEXT,
                         )
                         .align(Align::MiddleCenter),
                     ),
@@ -903,7 +864,12 @@ fn confirm_replica() -> Vec<Node> {
 
 fn extras_replica() -> Vec<Node> {
     let action = |id: u16, text: &str| {
-        Node::leaf(id, Ctl::Button(ButtonSpec::primary(text)))
+        let spec = if text == "Reclean" {
+            ButtonSpec::primary(text)
+        } else {
+            ButtonSpec::outline(text)
+        };
+        Node::leaf(id, Ctl::Button(spec))
             .auto_size()
             .min(theme::ACTION_BUTTON_MIN)
             .padding(theme::SHARED_BUTTON_PADDING)
@@ -913,8 +879,8 @@ fn extras_replica() -> Vec<Node> {
         font: theme::WHITELIST_LIST_FONT,
         fore: theme::TEXT_BOX_TEXT,
         back: theme::TEXT_BOX_BACKGROUND,
-        selected_back: theme::SIDEBAR_ITEM_ACTIVE,
-        selected_fore: theme::WHITE,
+        selected_back: theme::LIST_SELECTED_BACKGROUND,
+        selected_fore: theme::LIST_SELECTED_TEXT,
     };
     vec![
         Node::table(
@@ -1027,19 +993,8 @@ fn spike() {
                 }
                 if (FIRST_SECTION..FIRST_SECTION + 14).contains(&id) {
                     for i in 0..14 {
-                        form.set_button_colors(
-                            FIRST_SECTION + i,
-                            theme::SIDEBAR_ITEM_BACKGROUND,
-                            theme::SIDEBAR_ITEM_TEXT,
-                            theme::BORDER_SUBTLE,
-                        );
+                        form.set_active(FIRST_SECTION + i, FIRST_SECTION + i == id);
                     }
-                    form.set_button_colors(
-                        id,
-                        theme::SIDEBAR_ITEM_ACTIVE,
-                        theme::SIDEBAR_ITEM_ACTIVE_TEXT,
-                        theme::PRIMARY_BUTTON_HOVER,
-                    );
                 }
             }
             Event::Worker(v) => {
@@ -1055,12 +1010,7 @@ fn spike() {
     // First layout used the default sidebar width; C# runs UpdateResponsiveLayout in the
     // constructor, so run it once more before showing.
     main.relayout();
-    main.set_button_colors(
-        FIRST_SECTION,
-        theme::SIDEBAR_ITEM_ACTIVE,
-        theme::SIDEBAR_ITEM_ACTIVE_TEXT,
-        theme::PRIMARY_BUTTON_HOVER,
-    );
+    main.set_active(FIRST_SECTION, true);
     main.show();
     pump_for(400);
     let mh = main.hwnd();
@@ -1300,7 +1250,8 @@ fn spike() {
     let fb = main.control(FIRST_FOOTER_BUTTON).unwrap();
     let fr = window_rect(fb);
     let half = (fr.bottom - fr.top) / 2;
-    let focus_px = pixel(mh, fb, 4, half);
+    // The ring is 1 px at 3 px outside the button, painted by the footer panel.
+    let focus_px = pixel(mh, fb, -main.scale(theme::FOCUS_RING_OFFSET), half);
     let normal_px = pixel(mh, fb, 6, half);
     // BM_SETSTATE gives the pushed state without mouse capture, so the real cursor of the
     // live desktop cannot interfere.
@@ -1315,18 +1266,23 @@ fn spike() {
     let side_pressed_px = pixel(mh, sb0, 6, 20);
     send(sb0, bm_setstate, 0, 0);
     pump_for(80);
+    let rgb = |c: theme::Color| (c.r, c.g, c.b);
     record(
         "focus / pressed colors",
         format!(
-            "focus ring {focus_px:?} (WinForms LowHighlight of 45,45,48 = (133, 133, 138)), \
-             face {normal_px:?}, pressed {pressed_px:?} (expected (133, 133, 138)), \
-             sidebar pressed {side_pressed_px:?} (MouseDownBackColor (0, 120, 215))"
+            "focus ring {focus_px:?} (SECONDARY {:?}), primary face {normal_px:?} (TEXT {:?}), \
+             pressed {pressed_px:?} (PRIMARY_PRESSED {:?}), sidebar pressed {side_pressed_px:?} \
+             (HOVER {:?})",
+            rgb(theme::FOCUS_RING),
+            rgb(theme::PRIMARY_BUTTON),
+            rgb(theme::PRIMARY_BUTTON_PRESSED),
+            rgb(theme::SIDEBAR_ITEM_HOVER),
         ),
     );
-    assert_eq!(focus_px, (133, 133, 138));
-    assert_eq!(normal_px, (45, 45, 48));
-    assert_eq!(pressed_px, (133, 133, 138));
-    assert_eq!(side_pressed_px, (0, 120, 215));
+    assert_eq!(focus_px, rgb(theme::FOCUS_RING));
+    assert_eq!(normal_px, rgb(theme::PRIMARY_BUTTON));
+    assert_eq!(pressed_px, rgb(theme::PRIMARY_BUTTON_PRESSED));
+    assert_eq!(side_pressed_px, rgb(theme::SIDEBAR_ITEM_HOVER));
     log.clicks.borrow_mut().clear();
 
     // Disabled button paint (C# Old View while loading).
@@ -1867,7 +1823,7 @@ fn review_lifetimes() {
         started.elapsed()
     );
 
-    let button = Node::leaf(1, Ctl::Button(ButtonSpec::secondary("Short"))).auto_size();
+    let button = Node::leaf(1, Ctl::Button(ButtonSpec::outline("Short"))).auto_size();
     let form = Form::create(HWND::default(), spec, vec![button], |form, event| {
         if matches!(event, Event::Click(1)) {
             form.destroy();
@@ -1917,7 +1873,8 @@ fn review_lifetimes() {
         "GDI lifetime review",
         WindowSize::Client(Size { w: 400, h: 160 }),
     );
-    // Warm up native and buffered-paint caches before counting retained GDI objects.
+    // Warm up native, font, and buffered-paint caches (at every DPI the loop uses) before
+    // counting retained GDI objects.
     let warm = Form::create(
         HWND::default(),
         resource_spec.clone(),
@@ -1925,7 +1882,16 @@ fn review_lifetimes() {
         |_, _| true,
     )
     .unwrap();
-    let _ = capture(warm.hwnd());
+    let warm_rect = window_rect(warm.hwnd());
+    for new_dpi in [96u32, 144, 192, 96] {
+        send(
+            warm.hwnd(),
+            WM_DPICHANGED,
+            (new_dpi | new_dpi << 16) as usize,
+            (&warm_rect as *const RECT) as isize,
+        );
+        let _ = capture(warm.hwnd());
+    }
     warm.destroy();
     let before_gdi = gdi_count();
     for _ in 0..20 {

@@ -13,14 +13,13 @@
 use super::controls::{self, Ctl, LabelSpec};
 use super::layout::Node;
 use super::msgbox::{self, Answer, Buttons, Icon};
-use super::theme::{self, Color};
+use super::theme;
 use super::window::{Event, Form, FormSpec, FormStyle, StartPosition, WindowSize};
 use crate::update::{self, Downloaded, UpdateCheck};
 use crate::win::{self, process::Cancel};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
 
 // C# parity: UI/Forms/SectionedViewForm.cs:255,778,812.
 const UPDATES_TEXT: &str = "⟳ Updates";
@@ -37,10 +36,6 @@ const STEP_TIMER: usize = 1;
 const PAINT_MS: u32 = 10;
 // C# parity: Services/AutoUpdateService.cs:244 (`await Task.Delay(500)` after completion).
 const HOLD_MS: u32 = 500;
-// C# parity: Services/AutoUpdateService.cs:148-183 (the inline form keeps the system colors:
-// `SystemColors.Control` and `SystemColors.ControlText`).
-const CONTROL: Color = Color::rgb(240, 240, 240);
-const CONTROL_TEXT: Color = Color::rgb(0, 0, 0);
 
 enum Msg {
     Checked(Result<UpdateCheck, String>),
@@ -125,23 +120,37 @@ fn spec() -> FormSpec {
     );
     spec.style = FormStyle::FixedDialog;
     spec.start = StartPosition::CenterScreen;
-    spec.back = CONTROL;
+    spec.back = theme::UPDATE_BACKGROUND;
     spec
 }
 
 fn nodes() -> Vec<Node> {
-    let label = |text, font| Ctl::Label(LabelSpec::new(text, font, CONTROL_TEXT));
-    // C# parity: Services/AutoUpdateService.cs:158-183.
+    // C# parity: Services/AutoUpdateService.cs:158-183 (the inline form kept the system colors;
+    // here the tokens apply, and the status label is `INFO` while the update runs).
     vec![
-        Node::leaf(LABEL, label("Preparing download...", theme::DEFAULT_FONT))
-            .pos(theme::UPDATE_LABEL_POS)
-            .size(theme::UPDATE_LABEL_SIZE),
+        Node::leaf(
+            LABEL,
+            Ctl::Label(LabelSpec::new(
+                "Preparing download...",
+                theme::UPDATE_LABEL_FONT,
+                theme::INFO,
+            )),
+        )
+        .pos(theme::UPDATE_LABEL_POS)
+        .size(theme::UPDATE_LABEL_SIZE),
         Node::leaf(BAR, Ctl::Progress)
             .pos(theme::UPDATE_BAR_POS)
             .size(theme::UPDATE_BAR_SIZE),
-        Node::leaf(DETAIL, label("", theme::UPDATE_DETAIL_FONT))
-            .pos(theme::UPDATE_DETAIL_POS)
-            .size(theme::UPDATE_LABEL_SIZE),
+        Node::leaf(
+            DETAIL,
+            Ctl::Label(LabelSpec::new(
+                "",
+                theme::UPDATE_DETAIL_FONT,
+                theme::UPDATE_TEXT,
+            )),
+        )
+        .pos(theme::UPDATE_DETAIL_POS)
+        .size(theme::UPDATE_LABEL_SIZE),
     ]
 }
 
@@ -214,9 +223,10 @@ fn step(flow: &Flow, form: &Form) {
             form.set_timer(STEP_TIMER, PAINT_MS);
         }
         2 => {
-            // C# parity: Services/AutoUpdateService.cs:238-244.
+            // C# parity: Services/AutoUpdateService.cs:238-244. Status map: done = SUCCESS.
             form.progress_set(BAR, 100);
             form.set_text(LABEL, "Preparing to restart...");
+            form.set_label_color(DETAIL, theme::SUCCESS);
             form.set_text(DETAIL, "Download completed successfully");
             form.set_timer(STEP_TIMER, HOLD_MS);
         }
@@ -298,9 +308,7 @@ fn check_failed(error: &str) {
 
 fn active_owner() -> HWND {
     // C# parity: Services/AutoUpdateService.cs:82,135,279; UI/Forms/SectionedViewForm.cs:789.
-    // Ownerless MessageBox.Show uses the UI thread's active window, including a modal form.
-    // SAFETY: Read-only query of this UI thread's active window; a null result is valid.
-    unsafe { GetActiveWindow() }
+    msgbox::active_window()
 }
 
 fn restore(button: HWND) {
@@ -609,7 +617,9 @@ mod tests {
                 let start = Instant::now();
                 while !flag.load(Ordering::Acquire) {
                     assert!(
-                        start.elapsed() < Duration::from_secs(90),
+                        // Matches the 240 s the UI pump waits; the 404 path of the check has
+                        // taken 11 s to over 90 s on this PC (WinHTTP failure timing).
+                        start.elapsed() < Duration::from_secs(240),
                         "server not stopped"
                     );
                     let Ok((mut stream, _)) = listener.accept() else {
