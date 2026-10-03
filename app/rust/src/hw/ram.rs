@@ -36,38 +36,28 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     // C# parity: Hardware/RamInfo.cs:66-79. Preserve WMI order and untrimmed values.
     let rows = wmi::query(wmi::Namespace::Cimv2, "SELECT * FROM Win32_PhysicalMemory")?;
     let mut modules = Vec::with_capacity(rows.len());
-    let mut errors = Vec::new();
     for row in rows {
         let capacity = if row.str("Capacity").is_none() {
             // C# parity: Hardware/RamInfo.cs:70. A null Capacity converts to zero.
-            Some(0)
+            0
         } else {
-            row.u64("Capacity")
+            row.u64("Capacity").ok_or_else(|| {
+                win::Error::msg(
+                    "Convert.ToUInt64",
+                    "Win32_PhysicalMemory.Capacity is not an unsigned 64-bit value",
+                )
+            })?
         };
-        match capacity {
-            Some(capacity) => modules.push(RamModule::new(
-                row.str("DeviceLocator").unwrap_or_default(),
-                row.str("Manufacturer").unwrap_or_default(),
-                row.str("PartNumber").unwrap_or_default(),
-                capacity,
-                row.str("SerialNumber").unwrap_or_default(),
-            )),
-            None => errors.push(win::Error::msg(
-                "Convert.ToUInt64",
-                "Win32_PhysicalMemory.Capacity is not an unsigned 64-bit value",
-            )),
-        }
-    }
-    // Keep usable rows if one value cannot be converted; never report an empty
-    // result as "No RAM modules" when a failed conversion caused it.
-    if !modules.is_empty() || errors.is_empty() {
-        write_table(&modules, out);
-    }
-    for error in errors {
-        out.fallback_failed("WMI", &error).text(&format!(
-            "Error retrieving RAM MODULES information: {error}"
+        modules.push(RamModule::new(
+            row.str("DeviceLocator").unwrap_or_default(),
+            row.str("Manufacturer").unwrap_or_default(),
+            row.str("PartNumber").unwrap_or_default(),
+            capacity,
+            row.str("SerialNumber").unwrap_or_default(),
         ));
     }
+    // C# parity: Hardware/RamInfo.cs:68-79. Convert every row before printing the table.
+    write_table(&modules, out);
     Ok(())
 }
 
@@ -110,7 +100,10 @@ fn write_table(modules: &[RamModule], out: &mut Out) {
         .text(&"-".repeat(widths.iter().sum::<usize>() + 4));
     // C# parity: Hardware/RamInfo.cs:49-57. Keep padding on the last column.
     for module in modules {
-        out.id_value(&module.fields[4]).text(&table_line(
+        if !module.fields[4].is_empty() {
+            out.id_value(&module.fields[4]);
+        }
+        out.text(&table_line(
             module.fields.each_ref().map(String::as_str),
             widths,
         ));
@@ -165,7 +158,7 @@ mod tests {
             serde_json::from_str(include_str!("../../tests/fixtures/wp-04/ram-table.json"))
                 .expect("legacy RAM text with escaped CRLF");
         assert_eq!(section.body.as_bytes(), expected.as_bytes());
-        assert_eq!(section.ids, ["7C3E91A2", "", "24B7D19F    "]);
+        assert_eq!(section.ids, ["7C3E91A2", "24B7D19F    "]);
         let mut empty = Out::new();
         write_table(&[], &mut empty);
         assert_eq!(empty.finish().body, "No RAM modules detected.\r\n");

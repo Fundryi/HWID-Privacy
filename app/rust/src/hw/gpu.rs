@@ -240,9 +240,9 @@ fn render(
     if let Some(boards) = boards {
         for (_, error) in &boards.failures {
             if error.op != "NvAPI_Unload" {
-                out.text(&format!(
-                    "Error retrieving Board Serial Number information: {error}"
-                ));
+                // AD-15/46: the failed board occupies the same place as a board value.
+                out.blank()
+                    .text(&format!("Board Serial Number: Unavailable ({error})"));
             }
         }
     }
@@ -296,7 +296,12 @@ mod tests {
             hardware_id: Some("PCI\\VEN_8086&DEV_A780&SUBSYS_88881043&REV_04".to_owned()),
         };
         let mut out = Out::new();
-        render(&mut out, &[gpu], Some(&board), &[adapter]);
+        render(
+            &mut out,
+            std::slice::from_ref(&gpu),
+            Some(&board),
+            &[adapter],
+        );
         let section = out.finish();
         assert_eq!(
             section.body.trim_end(),
@@ -324,6 +329,22 @@ mod tests {
         let mut out = Out::new();
         render(&mut out, &[], None, &[]);
         assert_eq!(out.finish().body, "No GPU detected.\r\n");
+        let mut out = Out::new();
+        render(
+            &mut out,
+            &[gpu],
+            Some(&nvidia::Capture {
+                items: vec![],
+                failures: vec![(
+                    "NVAPI board",
+                    win::Error::msg("NvAPI_GPU_GetBoardInfo", "fabricated failure"),
+                )],
+            }),
+            &[],
+        );
+        assert!(out.finish().body.ends_with(
+            "\r\n\r\nBoard Serial Number: Unavailable (NvAPI_GPU_GetBoardInfo failed: 0x00000000 fabricated failure)\r\n"
+        ));
     }
 
     #[test]

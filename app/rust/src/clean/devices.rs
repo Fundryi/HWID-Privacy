@@ -17,6 +17,7 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     SETUP_DI_REGISTRY_PROPERTY, SP_DEVINFO_DATA, SPDRP_CLASS, SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME,
     SPDRP_HARDWAREID, SPDRP_INSTALL_STATE,
 };
+use windows::Win32::Foundation::{ERROR_INVALID_DATA, ERROR_NOT_FOUND};
 
 // C# parity: app/src/Services/DeviceCleaningService.cs:110-125. Exact joined-ID equality.
 const IGNORED: [&str; 10] = [
@@ -77,6 +78,9 @@ fn scan_inner() -> win::Result<Scan> {
         // INSTALL_STATE's required size, not its DWORD value, defines the legacy flag.
         let legacy_absent = match device.property_raw(SPDRP_INSTALL_STATE, 1024) {
             Ok(raw) => raw.required_size == 0,
+            Err(error) if error.code == ERROR_INVALID_DATA.0 || error.code == ERROR_NOT_FOUND.0 => {
+                true
+            }
             Err(error) => {
                 out.fallback_failed("Legacy INSTALL_STATE (failure means ghost)", &error);
                 true
@@ -98,7 +102,12 @@ fn scan_inner() -> win::Result<Scan> {
                 String::new()
             }
         };
-        let hardware_id = property_text(&device, &[SPDRP_HARDWAREID], &mut out)
+        let device_name = if instance_id.is_empty() {
+            format!("DEVINST {}", device.data().DevInst)
+        } else {
+            instance_id.clone()
+        };
+        let hardware_id = property_text(&device, &[SPDRP_HARDWAREID], &device_name, &mut out)
             .unwrap_or_default()
             .split('\0')
             .collect::<String>();
@@ -107,9 +116,15 @@ fn scan_inner() -> win::Result<Scan> {
         }
         // C# parity: app/src/Services/DeviceCleaningService.cs:97-107. Empty successful
         // descriptions win over friendly names; only missing properties fall back.
-        let description = property_text(&device, &[SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME], &mut out)
-            .unwrap_or_else(|| "Unknown Device".to_owned());
-        let class = property_text(&device, &[SPDRP_CLASS], &mut out).unwrap_or_default();
+        let description = property_text(
+            &device,
+            &[SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME],
+            &device_name,
+            &mut out,
+        )
+        .unwrap_or_else(|| "Unknown Device".to_owned());
+        let class =
+            property_text(&device, &[SPDRP_CLASS], &device_name, &mut out).unwrap_or_default();
         // C# parity: app/src/Services/DeviceCleaningService.cs:87-96,124.
         data.push(*device.data());
         devices.push(GhostDevice {
@@ -142,6 +157,7 @@ fn classify(legacy_absent: bool, present: Option<bool>) -> Option<Presence> {
 fn property_text(
     device: &Device<'_>,
     properties: &[SETUP_DI_REGISTRY_PROPERTY],
+    device_name: &str,
     out: &mut Out,
 ) -> Option<String> {
     // C# parity: app/src/Services/DeviceCleaningService.cs:59-69. Do not grow the
@@ -159,15 +175,22 @@ fn property_text(
                 }
                 return Some(text.trim_matches('\0').to_owned());
             }
+            // C# parity: DeviceCleaningService.cs:59-80. Unset properties have no value.
+            Err(error) if error.code == ERROR_INVALID_DATA.0 || error.code == ERROR_NOT_FOUND.0 => {
+                continue;
+            }
             Err(error) => {
-                out.fallback_failed(&format!("Device property {}", property.0), &error);
+                out.fallback_failed(
+                    &format!("Device {device_name} property {}", property.0),
+                    &error,
+                );
                 last_failure = Some(error);
             }
         }
     }
     // AD-03: failed sources stay diagnostic-only when another property supplied data.
     if let Some(error) = last_failure {
-        out.text(&error.to_string());
+        out.text(&format!("Device {device_name}: {error}"));
     }
     None
 }
@@ -283,7 +306,13 @@ fn remove_selected(
                 && !whitelist::is_whitelisted(&devices[index], whitelist)
         })
         .collect();
-    if eligible.is_empty() || cancel.is_cancelled() {
+    if cancel.is_cancelled() {
+        return;
+    }
+    if eligible.is_empty() {
+        if !selected.is_empty() {
+            status("No selected devices were removable.");
+        }
         return;
     }
     // C# parity: app/src/Services/DeviceCleaningService.cs:164,178,188,192-195.
@@ -400,6 +429,23 @@ mod tests {
         remove_selected(&devices, &[0], &[], &cancel, &|_| {}, |_, _| {
             panic!("cancelled selection removed")
         });
+        let protected = [
+            device("protected", Presence::Absent),
+            device("unclear", Presence::Unclear),
+        ];
+        let messages = RefCell::new(Vec::new());
+        remove_selected(
+            &protected,
+            &[0, 1],
+            &protected[..1],
+            &Cancel::new(),
+            &|text| messages.borrow_mut().push(text.to_owned()),
+            |_, _| panic!("protected selection removed"),
+        );
+        assert_eq!(
+            messages.into_inner(),
+            ["No selected devices were removable."]
+        );
     }
 
     #[test]

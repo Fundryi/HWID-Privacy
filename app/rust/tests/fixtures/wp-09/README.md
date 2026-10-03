@@ -14,6 +14,8 @@ synthetic link-local suffixes.
   space-only splitting, filtered records, and empty/localized output.
 
 These are source-derived synthetic format/parser cases, not scrubbed native
-captures. Native capture provenance remains blocked on the missing safe IpHelper
-wrappers. The non-admin provider capture stays outside git under the main
-checkout's `app/rust/golden/wp-09/`.
+captures. Safe IpHelper wrappers now provide interface and neighbor snapshots
+and dual-stack names, with IPv4 names taking priority on an index clash. Their
+byte projections and bounds are checked in `win/iphlp.rs`. Non-admin provider
+captures and the native-versus-arp.exe comparison stay outside git under the
+main checkout's `app/rust/golden/wp-09/`.

@@ -26,11 +26,7 @@ use windows::{
 #[derive(Clone, Debug, Default)]
 pub struct Interface {
     pub guid: GUID,
-    pub luid: u64,
-    pub index: u32,
-    pub alias: String,
     pub physical_address_length: u32,
-    pub physical_address: [u8; 32],
     pub permanent_physical_address: [u8; 32],
 }
 
@@ -78,12 +74,7 @@ pub fn interface_table() -> Result<Vec<Interface>> {
         .iter()
         .map(|row| Interface {
             guid: row.InterfaceGuid,
-            // SAFETY: NET_LUID's Value is the documented scalar view of this initialized union.
-            luid: unsafe { row.InterfaceLuid.Value },
-            index: row.InterfaceIndex,
-            alias: wide::from_wide(&row.Alias),
             physical_address_length: row.PhysicalAddressLength,
-            physical_address: row.PhysicalAddress,
             permanent_physical_address: row.PermanentPhysicalAddress,
         })
         .collect())
@@ -197,10 +188,11 @@ fn adapter_names(buffer: &[u64]) -> Result<HashMap<u32, String>> {
     let end = start + std::mem::size_of_val(buffer);
     let mut row = buffer.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
     let mut names = HashMap::new();
+    let mut ipv4_names = HashMap::new();
     // At most one full adapter row per storage slot; this also bounds cyclic Next lists.
     for _ in 0..std::mem::size_of_val(buffer) / size_of::<IP_ADAPTER_ADDRESSES_LH>() {
         if row.is_null() {
-            return Ok(names);
+            break;
         }
         let address = row as usize;
         if address < start
@@ -232,15 +224,18 @@ fn adapter_names(buffer: &[u64]) -> Result<HashMap<u32, String>> {
                 .position(|unit| *unit == 0)
                 .ok_or_else(|| Error::msg("GetAdaptersAddresses", "unterminated friendly name"))?;
             let name = wide::from_wide(&units[..length]);
-            for index in [index, adapter.Ipv6IfIndex] {
-                if index != 0 {
-                    names.insert(index, name.clone());
-                }
+            if index != 0 {
+                ipv4_names.insert(index, name.clone());
+            }
+            if adapter.Ipv6IfIndex != 0 {
+                names.insert(adapter.Ipv6IfIndex, name);
             }
         }
         row = adapter.Next;
     }
     if row.is_null() {
+        // C# parity: Hardware/ArpInfo.cs:101-113. IPv4 names take priority over added IPv6 names.
+        names.extend(ipv4_names);
         Ok(names)
     } else {
         Err(Error::msg(
@@ -319,6 +314,8 @@ mod tests {
             (7, 0, "Ethernet"),
             (0, 19, "vEthernet (IPv6)"),
             (23, 31, "Wi-Fi Écran"),
+            (0, 7, "IPv6 clash after IPv4"),
+            (19, 0, "Ethernet IPv4"),
         ];
         for (ordinal, (ipv4, ipv6, name)) in cases.iter().enumerate() {
             let units = wide::to_wide(name);
@@ -349,7 +346,7 @@ mod tests {
             adapter_names(&buffer).expect("fabricated adapter list"),
             HashMap::from([
                 (7, "Ethernet".to_owned()),
-                (19, "vEthernet (IPv6)".to_owned()),
+                (19, "Ethernet IPv4".to_owned()),
                 (23, "Wi-Fi Écran".to_owned()),
                 (31, "Wi-Fi Écran".to_owned()),
             ])

@@ -1,6 +1,6 @@
 //! Owned by WP-13: bounded WinHTTP downloads.
 
-use super::{Error, Result, hash, process::Cancel, wide};
+use super::{Error, Result, hash, process::Cancel, record, wide};
 use std::{
     ffi::c_void,
     fs::{self, File, OpenOptions},
@@ -39,7 +39,7 @@ impl Drop for Internet {
     fn drop(&mut self) {
         // SAFETY: This guard owns a valid WinHTTP handle, not a kernel HANDLE.
         if let Err(error) = unsafe { WinHttpCloseHandle(self.0) } {
-            eprintln!("{}", Error::from_win("WinHttpCloseHandle", error));
+            record(Error::from_win("WinHttpCloseHandle", error));
         }
     }
 }
@@ -116,7 +116,7 @@ impl Drop for TempFile {
             && let Err(error) = fs::remove_file(&self.path)
             && error.kind() != io::ErrorKind::NotFound
         {
-            eprintln!("{}", hash::io_error("Delete update temp file", error));
+            record(hash::io_error("Delete update temp file", error));
         }
     }
 }

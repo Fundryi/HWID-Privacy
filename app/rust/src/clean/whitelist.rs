@@ -202,7 +202,7 @@ impl Drop for PendingFile {
         if !self.published
             && let Err(error) = fs::remove_file(&self.path)
         {
-            eprintln!("{}", io_error("Remove temporary whitelist", error));
+            win::record(io_error("Remove temporary whitelist", error));
         }
     }
 }

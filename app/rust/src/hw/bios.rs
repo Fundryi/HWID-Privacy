@@ -29,7 +29,7 @@ fn collect_with(
     mut query: impl FnMut(&str) -> win::Result<Vec<wmi::Row>>,
 ) -> bool {
     let mut failures = Vec::new();
-    let mut bios = query_fields(
+    let bios = query_fields(
         "Win32_BIOS",
         [
             "Manufacturer",
@@ -40,24 +40,22 @@ fn collect_with(
         &mut query,
         &mut failures,
     );
-    let mut product = query_fields(
+    let product = query_fields(
         "Win32_ComputerSystemProduct",
         ["Vendor", "UUID", "IdentifyingNumber"],
         &mut query,
         &mut failures,
     );
-    // AD-10 explicitly requires all WMI-sourced values empty on any enrichment failure.
-    // Both queries still run independently; all direct SMBIOS fields remain available.
-    if !failures.is_empty() {
-        bios.fill(String::new());
-        product.fill(String::new());
+    // PLAN WP-02 / AD-46: a failed query leaves only its own fields empty.
+    let source = match (smbios.is_some(), failures.len() < 2) {
+        (true, true) => Some("native + WMI"),
+        (true, false) => Some("native"),
+        (false, true) => Some("WMI"),
+        (false, false) => None,
+    };
+    if let Some(source) = source {
+        out.source(source);
     }
-    out.source(match (smbios.is_some(), failures.is_empty()) {
-        (true, true) => "native + WMI",
-        (true, false) => "native",
-        (false, true) => "WMI",
-        (false, false) => "",
-    });
     write_information(smbios, &bios, &product, out);
     let has_information =
         smbios.is_some() || bios.iter().chain(&product).any(|value| !value.is_empty());
@@ -333,18 +331,76 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         thread::spawn(move || {
             let ctx = Ctx::new();
-            let sections: Vec<_> = crate::hw::PROVIDERS[1..4]
+            let sections: Vec<_> = crate::hw::PROVIDERS
                 .iter()
+                .filter(|provider| matches!(provider.title, "MOTHERBOARD" | "CHASSIS" | "(SM)BIOS"))
                 .map(|provider| crate::hw::collect_provider(provider, &ctx))
                 .collect();
             let raw = win::firmware::raw_table(0x5253_4d42, 0);
-            sender.send((sections, raw)).expect("capture receiver");
+            let mut faults = Vec::new();
+            for failed in ["Win32_BIOS", "Win32_ComputerSystemProduct"] {
+                let mut out = Out::new();
+                collect_with(ctx.smbios(), &mut out, |class| {
+                    if class == failed {
+                        Err(win::Error::msg(
+                            "WMI query",
+                            "injected single-query failure",
+                        ))
+                    } else {
+                        wmi::query(wmi::Namespace::Cimv2, &format!("SELECT * FROM {class}"))
+                    }
+                });
+                let section = out.finish();
+                assert_eq!(section.failures.len(), 1);
+                let (class, names) = if failed == "Win32_BIOS" {
+                    (
+                        "Win32_ComputerSystemProduct",
+                        ["Vendor", "UUID", "IdentifyingNumber"].as_slice(),
+                    )
+                } else {
+                    (
+                        "Win32_BIOS",
+                        ["SMBIOSBIOSVersion", "SerialNumber"].as_slice(),
+                    )
+                };
+                let rows = wmi::query(wmi::Namespace::Cimv2, &format!("SELECT * FROM {class}"))
+                    .expect("unaffected live WMI query");
+                let row = rows.last().expect("unaffected live query has data");
+                for name in names {
+                    let value = row.str(name).unwrap_or_default();
+                    let label = if *name == "SMBIOSBIOSVersion" {
+                        "SMBIOS Version"
+                    } else {
+                        name
+                    };
+                    // A direct SMBIOS UUID takes precedence over WMI; all other fields stay WMI-only.
+                    if *name != "UUID" {
+                        assert!(section.body.contains(&format!("{label}: {value}\r\n")));
+                    }
+                }
+                faults.push((failed, section));
+            }
+            sender
+                .send((sections, raw, faults))
+                .expect("capture receiver");
         });
-        let (sections, raw) = receiver
+        let (sections, raw, faults) = receiver
             .recv_timeout(Duration::from_secs(60))
             .expect("WP-02 capture completed within 60 seconds");
         let root = std::path::Path::new("D:/GIT/HWID-Privacy/app/rust/golden/wp-02");
         std::fs::create_dir_all(root).expect("private capture directory");
+        for (class, section) in faults {
+            std::fs::write(
+                root.join(format!("minors-bios-failed-{class}.txt")),
+                &section.body,
+            )
+            .expect("private single-query failure report");
+            std::fs::write(
+                root.join(format!("minors-bios-failed-{class}.diag.txt")),
+                section.failures.join("\r\n"),
+            )
+            .expect("private single-query failure diagnostics");
+        }
         let report = crate::hw::full_report(&sections);
         std::fs::write(root.join("rust-report.txt"), &report).expect("private report");
         let mut diagnostics = format!("Administrator: {}\r\n", win::security::is_admin());
