@@ -9,6 +9,8 @@ pub mod hash;
 pub mod http;
 pub mod ioctl;
 pub mod nvidia;
+mod panic_guard;
+pub use panic_guard::{catch_panic, is_guarded};
 pub mod process;
 pub mod registry;
 pub mod security;
@@ -35,6 +37,9 @@ const _: () = {
     let _ = std::mem::size_of::<windows::Win32::Networking::WinSock::SOCKADDR_INET>();
     let _ = std::mem::size_of::<windows::Win32::Security::TOKEN_PRIVILEGES>();
     let _ = std::mem::size_of::<windows::Win32::Security::Cryptography::BCRYPT_ALG_HANDLE>();
+    let _ = std::mem::size_of::<
+        windows::Win32::Security::Cryptography::Certificates::IX509EndorsementKey,
+    >();
     let _ = std::mem::size_of::<windows::Win32::Storage::FileSystem::FILE_ACCESS_RIGHTS>();
     let _ = std::mem::size_of::<windows::Win32::System::Com::COINIT>();
     let _ =
@@ -63,7 +68,7 @@ const _: () = {
     let _ = std::mem::size_of::<windows::Win32::UI::WindowsAndMessaging::MSG>();
 };
 
-use std::{fmt, marker::PhantomData, rc::Rc};
+use std::{fmt, marker::PhantomData, rc::Rc, sync::Mutex};
 use windows::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, RPC_E_TOO_LATE};
 use windows::Win32::System::Com::{
     COINIT_APARTMENTTHREADED, CoInitializeEx, CoInitializeSecurity, CoUninitialize, EOAC_NONE,
@@ -109,11 +114,16 @@ impl Error {
         Self { op, code, detail }
     }
 
-    /// Preserves a Windows HRESULT and its system description.
+    /// Normalizes HRESULT_FROM_WIN32 to a Win32 code; preserves other HRESULTs.
     pub fn from_win(op: &'static str, error: windows::core::Error) -> Self {
+        let code = error.code().0 as u32;
         Self {
             op,
-            code: error.code().0 as u32,
+            code: if code & 0xFFFF0000 == 0x80070000 {
+                code & 0xFFFF
+            } else {
+                code
+            },
             detail: error.message(),
         }
     }
@@ -135,6 +145,21 @@ impl fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 pub type Result<T> = std::result::Result<T, Error>;
+
+static RECORDED: Mutex<Vec<Error>> = Mutex::new(Vec::new());
+
+/// Records a helper failure process-wide, recovering the entries even after poison.
+pub fn record(err: Error) {
+    RECORDED
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .push(err);
+}
+
+/// Drains the process-wide helper diagnostics, recovering entries even after poison.
+pub fn take_recorded() -> Vec<Error> {
+    std::mem::take(&mut *RECORDED.lock().unwrap_or_else(|poison| poison.into_inner()))
+}
 
 #[derive(Debug)]
 pub struct OwnedHandle(HANDLE);
@@ -174,7 +199,7 @@ impl Drop for OwnedHandle {
     fn drop(&mut self) {
         // SAFETY: from_raw accepts only a uniquely owned, CloseHandle-compatible handle.
         if let Err(error) = unsafe { CloseHandle(self.0) } {
-            eprintln!("{}", Error::from_win("CloseHandle", error));
+            record(Error::from_win("CloseHandle", error));
         }
     }
 }
@@ -214,5 +239,50 @@ impl Drop for ComApartment {
     fn drop(&mut self) {
         // SAFETY: The !Send guard drops on the same thread after a successful CoInitializeEx.
         unsafe { CoUninitialize() };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::core::HRESULT;
+
+    #[test]
+    fn hresult_codes_normalize_win32_and_preserve_other_facilities() {
+        for (hresult, code) in [
+            (0x80070005_u32, 5),
+            (0x8007007A, 122),
+            (0x80041010, 0x80041010),
+        ] {
+            let original = windows::core::Error::from_hresult(HRESULT(hresult as i32));
+            let detail = original.message();
+            let error = Error::from_win("query", original);
+            assert_eq!(error.code, code);
+            assert_eq!(error.detail, detail);
+            assert_eq!(
+                error.to_string(),
+                format!("query failed: 0x{code:08X} {detail}")
+            );
+        }
+    }
+
+    #[test]
+    fn diagnostics_recover_entries_after_poison_and_drain_them() {
+        const OP: &str = "diagnostics poison test";
+        catch_panic(|| {
+            let mut recorded = RECORDED.lock().unwrap_or_else(|poison| poison.into_inner());
+            recorded.push(Error::msg(OP, "before poison"));
+            panic!("poison diagnostics lock");
+        })
+        .expect_err("lock must be poisoned by the caught panic");
+        assert!(RECORDED.is_poisoned());
+        record(Error::msg(OP, "after poison"));
+        let entries: Vec<_> = take_recorded()
+            .into_iter()
+            .filter(|error| error.op == OP)
+            .map(|error| error.detail)
+            .collect();
+        assert_eq!(entries, ["before poison", "after poison"]);
+        assert!(!take_recorded().iter().any(|error| error.op == OP));
     }
 }

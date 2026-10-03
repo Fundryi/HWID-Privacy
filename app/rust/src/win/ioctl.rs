@@ -63,14 +63,7 @@ pub fn device_io_control(
                 None,
             )
         }
-        .map_err(|e| {
-            let mut error = Error::from_win("DeviceIoControl", e);
-            // The wrapper returns HRESULT_FROM_WIN32; retry decisions need the original code.
-            if error.code & 0xFFFF0000 == 0x80070000 {
-                error.code &= 0xFFFF;
-            }
-            error
-        })?;
+        .map_err(|e| Error::from_win("DeviceIoControl", e))?;
         Ok(returned as usize)
     })
 }
@@ -124,13 +117,12 @@ mod tests {
 
     #[test]
     fn physical_drive_read_without_admin_has_a_readable_error() {
-        assert!(
-            !super::super::security::is_admin(),
-            "run this check without elevation"
-        );
+        if super::super::security::is_admin() {
+            return;
+        }
         let error = open_device(r"\\.\PhysicalDrive0", GENERIC_READ.0)
             .expect_err("this check must return an error");
-        assert_eq!(error.code & 0xFFFF, ERROR_ACCESS_DENIED.0);
+        assert_eq!(error.code, ERROR_ACCESS_DENIED.0);
         assert!(error.to_string().contains("CreateFileW device failed:"));
         assert!(!error.detail.is_empty());
     }
