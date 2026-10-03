@@ -3,9 +3,13 @@
 use crate::{
     hw::Ctx,
     report::{self, Out},
-    win::{self, registry, wmi},
+    win::{
+        self,
+        iphlp::{self, Interface},
+        registry, wmi,
+    },
 };
-use windows::{Win32::NetworkManagement::IpHelper::MIB_IF_ROW2, core::GUID};
+use windows::core::GUID;
 
 const NET_CLASS: &str =
     r"SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}";
@@ -102,7 +106,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             None
         }
     };
-    let interfaces = match interface_table() {
+    let interfaces = match iphlp::interface_table() {
         Ok(rows) => rows,
         Err(error) => {
             out.fallback_failed("native", &error);
@@ -149,16 +153,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     Ok(())
 }
 
-fn interface_table() -> win::Result<Vec<MIB_IF_ROW2>> {
-    // blocked: the frozen win/ surface has no safe GetIfTable2 + FreeMibTable wrapper.
-    // Keep unsafe out of the provider; never invent a permanent address from the current MAC.
-    Err(win::Error::msg(
-        "GetIfTable2",
-        "blocked: safe win helper is absent from the frozen base",
-    ))
-}
-
-fn permanent_mac(guid: Option<&str>, rows: &[MIB_IF_ROW2], out: &mut Out) -> Option<String> {
+fn permanent_mac(guid: Option<&str>, rows: &[Interface], out: &mut Out) -> Option<String> {
     let guid = guid?.trim_matches(['{', '}']);
     let guid = match GUID::try_from(guid) {
         Ok(guid) => guid,
@@ -170,7 +165,7 @@ fn permanent_mac(guid: Option<&str>, rows: &[MIB_IF_ROW2], out: &mut Out) -> Opt
             return None;
         }
     };
-    let mut matches = rows.iter().filter(|row| row.InterfaceGuid == guid);
+    let mut matches = rows.iter().filter(|row| row.guid == guid);
     let row = matches.next()?;
     if matches.next().is_some() {
         out.fallback_failed(
@@ -179,8 +174,8 @@ fn permanent_mac(guid: Option<&str>, rows: &[MIB_IF_ROW2], out: &mut Out) -> Opt
         );
         return None;
     }
-    let length = row.PhysicalAddressLength as usize;
-    let Some(address) = row.PermanentPhysicalAddress.get(..length) else {
+    let length = row.physical_address_length as usize;
+    let Some(address) = row.permanent_physical_address.get(..length) else {
         out.fallback_failed(
             "native",
             &win::Error::msg("GetIfTable2", "MAC length exceeds 32 bytes"),
@@ -331,12 +326,12 @@ mod tests {
             let mut out = Out::new();
             let mut interfaces = Vec::new();
             if let Some(guid) = case.interface_guid {
-                let mut row = MIB_IF_ROW2 {
-                    InterfaceGuid: GUID::try_from(guid.as_str()).expect("fixture GUID"),
-                    PhysicalAddressLength: case.length,
+                let mut row = Interface {
+                    guid: GUID::try_from(guid.as_str()).expect("fixture GUID"),
+                    physical_address_length: case.length,
                     ..Default::default()
                 };
-                row.PermanentPhysicalAddress[..case.permanent.len()]
+                row.permanent_physical_address[..case.permanent.len()]
                     .copy_from_slice(&case.permanent);
                 interfaces.push(row);
             }
@@ -367,17 +362,17 @@ mod tests {
     #[test]
     fn network_permanent_mac_rejects_ambiguous_guids_and_zero_addresses() {
         let guid = GUID::from_u128(0x6eba2c67_791a_4cbd_bfaa_4b9bbfc438ad);
-        let mut row = MIB_IF_ROW2 {
-            InterfaceGuid: guid,
-            PhysicalAddressLength: 6,
+        let mut row = Interface {
+            guid,
+            physical_address_length: 6,
             ..Default::default()
         };
-        row.PermanentPhysicalAddress[..6].copy_from_slice(&[0x3c, 0xfd, 0xfe, 0x64, 0x19, 0x82]);
+        row.permanent_physical_address[..6].copy_from_slice(&[0x3c, 0xfd, 0xfe, 0x64, 0x19, 0x82]);
         let id = "{6eba2c67-791a-4cbd-bfaa-4b9bbfc438ad}";
         let mut out = Out::new();
-        assert!(permanent_mac(Some(id), &[row, row], &mut out).is_none());
+        assert!(permanent_mac(Some(id), &[row.clone(), row.clone()], &mut out).is_none());
         assert!(out.finish().failures[0].contains("ambiguous interface GUID"));
-        row.PermanentPhysicalAddress = [0; 32];
+        row.permanent_physical_address = [0; 32];
         assert!(permanent_mac(Some(id), &[row], &mut Out::new()).is_none());
     }
 

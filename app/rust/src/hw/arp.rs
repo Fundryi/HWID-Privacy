@@ -3,23 +3,20 @@
 use crate::{
     hw::{self, Ctx},
     report::Out,
-    win::{self, process},
+    win::{
+        self,
+        iphlp::{self, Neighbor},
+        process,
+    },
 };
 use std::{
     collections::{BTreeMap, HashMap},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     time::Duration,
 };
-use windows::Win32::Networking::WinSock::{NL_NEIGHBOR_STATE, NlnsIncomplete};
+use windows::Win32::Networking::WinSock::NlnsIncomplete;
 
 const EMPTY_STATUS: &str = "No relevant dynamic ARP entries found.";
-
-struct Neighbor {
-    interface_index: u32,
-    ip: IpAddr,
-    physical_address: Vec<u8>,
-    state: NL_NEIGHBOR_STATE,
-}
 
 enum Cache {
     Native(Vec<Neighbor>),
@@ -28,21 +25,23 @@ enum Cache {
 
 /// Collects this hardware section through the shared output builder.
 pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
-    let native = || neighbor_table().map(Cache::Native);
+    let native = || iphlp::neighbor_table().map(Cache::Native);
     let fallback = || arp_exe().map(Cache::ArpExe);
     // C# parity: ArpInfo.cs:24-40. A successful empty table must not trigger arp.exe.
     match hw::first_ok(out, "ARP", &[("native", &native), ("arp.exe", &fallback)]) {
         Ok(Cache::Native(entries)) => {
             if !entries.iter().any(relevant_neighbor) {
                 format_neighbors(&entries, &HashMap::new(), out);
+                out.trim_end();
                 return Ok(());
             }
-            let names = match interface_names() {
+            let names = match iphlp::interface_names() {
                 Ok(names) => names,
                 Err(error) => {
                     out.fallback_failed("GetAdaptersAddresses", &error);
                     format_neighbors(&entries, &HashMap::new(), out);
                     out.text(&format!("Interface name lookup: {error}"));
+                    out.trim_end();
                     return Ok(());
                 }
             };
@@ -65,25 +64,9 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             );
         }
     }
-    // blocked: Out has no TrimEnd operation. The final CRLF is identical in full_report
-    // because format_section adds it to the trimmed C# body (ArpInfo.cs:29,36,40).
+    // C# parity: ArpInfo.cs:29,36,40. Trim the body, preserving identifier/source records.
+    out.trim_end();
     Ok(())
-}
-
-fn neighbor_table() -> win::Result<Vec<Neighbor>> {
-    // blocked: GetIpNetTable2 + FreeMibTable need an orchestrator-owned safe win/ wrapper.
-    Err(win::Error::msg(
-        "GetIpNetTable2",
-        "blocked: safe win helper is absent from the frozen base",
-    ))
-}
-
-fn interface_names() -> win::Result<HashMap<u32, String>> {
-    // blocked: GetAdaptersAddresses must return owned names keyed by both indices (AD-21).
-    Err(win::Error::msg(
-        "GetAdaptersAddresses",
-        "blocked: safe win helper is absent from the frozen base",
-    ))
 }
 
 fn arp_exe() -> win::Result<process::Output> {
@@ -248,6 +231,7 @@ fn format_arp_exe(output: &str, out: &mut Out) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::Networking::WinSock::NL_NEIGHBOR_STATE;
 
     #[derive(serde::Deserialize)]
     struct Entry {
@@ -282,8 +266,9 @@ mod tests {
             .collect();
         let mut out = Out::new();
         format_neighbors(&entries, &fixture.names, &mut out);
+        out.trim_end();
         let section = out.finish();
-        assert_eq!(section.body, fixture.expected);
+        assert_eq!(section.body, fixture.expected.trim_end());
         assert_eq!(section.ids.len(), 14);
         assert!(section.failures.is_empty());
     }
@@ -300,17 +285,19 @@ mod tests {
         };
         let mut out = Out::new();
         format_neighbors(&[entry], &HashMap::new(), &mut out);
+        out.trim_end();
         let section = out.finish();
         assert_eq!(
             section.body,
-            "[Interface #7]\r\nMAC: 3C:FD:FE:64:19:82:06:07:08:09:0A:0B:0C:0D:0E:0F:10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F | IP: 192.0.2.11\r\n"
+            "[Interface #7]\r\nMAC: 3C:FD:FE:64:19:82:06:07:08:09:0A:0B:0C:0D:0E:0F:10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F | IP: 192.0.2.11"
         );
         assert!(section.failures[0].contains("MAC length capped at 32 bytes"));
         let mut out = Out::new();
         format_neighbors(&[], &HashMap::new(), &mut out);
+        out.trim_end();
         assert_eq!(
             out.finish().body,
-            "Status: No relevant dynamic ARP entries found.\r\n"
+            "Status: No relevant dynamic ARP entries found."
         );
         // Expected strings were checked against this PC's System.Net.IPAddress.ToString.
         for (input, expected) in [
@@ -340,7 +327,66 @@ mod tests {
         for case in cases {
             let mut out = Out::new();
             format_arp_exe(&case.output, &mut out);
-            assert_eq!(out.finish().body, case.expected);
+            out.trim_end();
+            assert_eq!(out.finish().body, case.expected.trim_end());
+        }
+    }
+
+    #[test]
+    #[ignore = "reads real identifiers; redirect stdout into the private golden/wp-09 directory"]
+    fn wp09_compare_native_and_arp_exe() {
+        assert!(
+            !win::security::is_admin(),
+            "run this comparison without elevation"
+        );
+        let started = std::time::Instant::now();
+        let entries = iphlp::neighbor_table().expect("live native neighbor table");
+        let names = iphlp::interface_names().expect("live dual-stack interface names");
+        let mut native = Out::new();
+        format_neighbors(&entries, &names, &mut native);
+        native.trim_end();
+        let native_ms = started.elapsed().as_millis();
+        let started = std::time::Instant::now();
+        let fallback = arp_exe().expect("live arp.exe");
+        let mut legacy = Out::new();
+        format_arp_exe(&fallback.stdout, &mut legacy);
+        legacy.trim_end();
+        let fallback_ms = started.elapsed().as_millis();
+        println!(
+            "WP09_NATIVE_BEGIN\n{}\nWP09_NATIVE_END",
+            native.finish().body
+        );
+        println!(
+            "WP09_ARP_EXE_BEGIN\n{}\nWP09_ARP_EXE_END",
+            legacy.finish().body
+        );
+        println!(
+            "WP09_RAW_ARP_EXE_BEGIN\n{}\nWP09_RAW_ARP_EXE_END",
+            fallback.stdout
+        );
+        println!(
+            "Native: {native_ms} ms; arp.exe: {fallback_ms} ms; stderr={:?}",
+            fallback.stderr
+        );
+        println!("WP09_NATIVE_ROWS_BEGIN");
+        for entry in entries.iter().filter(|entry| relevant_neighbor(entry)) {
+            println!("{entry:?}");
+        }
+        println!("WP09_NATIVE_ROWS_END");
+        println!("WP09_INTERFACE_ROWS_BEGIN");
+        for row in iphlp::interface_table().expect("live native interface table") {
+            println!("{row:?}; resolved_name={:?}", names.get(&row.index));
+        }
+        println!("WP09_INTERFACE_ROWS_END");
+        let ctx = Ctx::new();
+        let mut out = Out::new();
+        collect(&ctx, &mut out).expect("live ARP provider");
+        let section = out.finish();
+        assert_eq!(section.source, "native");
+        assert!(section.failures.is_empty(), "{:?}", section.failures);
+        assert_eq!(section.body, section.body.trim_end());
+        for error in win::take_recorded() {
+            println!("Helper diagnostic: {error}");
         }
     }
 }

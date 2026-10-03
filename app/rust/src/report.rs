@@ -77,6 +77,16 @@ impl Out {
         self.section.failures.push(format!("{source}: {error}"));
         self
     }
+    /// Trims trailing body whitespace, preserving identifier, source and failure records.
+    pub fn trim_end(&mut self) -> &mut Self {
+        self.section.body.truncate(
+            self.section
+                .body
+                .trim_end_matches(char::is_whitespace)
+                .len(),
+        );
+        self
+    }
     /// Finishes the body and its identifier, source and failure records.
     pub fn finish(self) -> Section {
         self.section
@@ -238,6 +248,36 @@ mod tests {
 
     const RULE: &str = "=============================================================================================\r\n";
     const ITEM_RULE: &str = "----------------------------------------\r\n";
+
+    #[test]
+    fn out_trim_end_preserves_leading_whitespace_and_all_records() {
+        for (body, expected) in [
+            ("", ""),
+            (" \t\r\n\u{2003}", ""),
+            (
+                "  Name: Écran 😀\r\nID: SN7F29D4  \t\u{0085}\u{2003}\r\n",
+                "  Name: Écran 😀\r\nID: SN7F29D4",
+            ),
+        ] {
+            let mut out = Out::new();
+            out.section.title = "FIXTURE";
+            out.section.elapsed_ms = 7;
+            out.section.body = body.to_owned();
+            out.id_value("SN7F29D4")
+                .source("native")
+                .fallback_failed("WMI", &Error::msg("query", "fabricated failure"));
+            out.trim_end().trim_end();
+            let section = out.finish();
+            assert_eq!(section.body, expected);
+            assert_eq!(section.ids, ["SN7F29D4"]);
+            assert_eq!(section.source, "native");
+            assert_eq!(
+                section.failures,
+                ["WMI: query failed: 0x00000000 fabricated failure"]
+            );
+            assert_eq!((section.title, section.elapsed_ms), ("FIXTURE", 7));
+        }
+    }
 
     #[test]
     fn formatter_header_literals_and_utf16_centering() {
