@@ -1,0 +1,23 @@
+[
+  {
+    "DeviceLocator": "DIMM_BANK_0_🧩  ",
+    "Manufacturer": "Corsair",
+    "PartNumber": "CMH32GX5M2B6000C36   ",
+    "Capacity": 17179869184,
+    "SerialNumber": "7C3E91A2"
+  },
+  {
+    "DeviceLocator": null,
+    "Manufacturer": null,
+    "PartNumber": null,
+    "Capacity": null,
+    "SerialNumber": null
+  },
+  {
+    "DeviceLocator": "DIMM_B2",
+    "Manufacturer": "Kingston",
+    "PartNumber": "KSM32RD8/32HCR",
+    "Capacity": 1099511627776,
+    "SerialNumber": "24B7D19F    "
+  }
+]
