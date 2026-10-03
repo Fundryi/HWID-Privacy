@@ -6,21 +6,37 @@
 >
 > Evidence grades used here: **[C]** confirmed first hand by a named user with details, **[A]** agent-verified live during research (2026-08-21), **[CC]** community consensus, many reports, **[S]** single unverified claim. Untested steps are marked.
 
+> [!NOTE]
+> **[A]** grades refer to linked primary sources or this repository's source.
+
 ---
 
 ## Table of Contents
 
+- [Before you reset](#before-you-reset)
 - [How the AMD fTPM identity actually works](#how-the-amd-ftpm-identity-actually-works)
 - [Measure properly or you will fool yourself](#measure-properly-or-you-will-fool-yourself)
+- [Windows views and HWIDChecker baseline](#windows-views-and-hwidchecker-baseline)
 - [Method A: TPM-B firmware flash cycle (Gigabyte, works on other brands too)](#method-a-tpm-b-firmware-flash-cycle)
+  - [Step 0: Prepare (do not skip)](#step-0-prepare-do-not-skip)
+  - [Step 1: Pick the right BIOS pair](#step-1-pick-the-right-bios-pair)
+  - [Step 2: Flash](#step-2-flash)
+  - [Known results per board (from public reports)](#known-results-per-board-from-public-reports)
+  - [Failure modes and how to avoid them](#failure-modes-and-how-to-avoid-them)
 - [Method B: Pluton toggle (unverified, do not trust yet)](#method-b-pluton-toggle-unverified)
 - [Method C: dTPM module (different identity, gets flagged)](#method-c-dtpm-module)
 - [What does NOT change the EK](#what-does-not-change-the-ek)
 - [Check your certificate after any rotation](#check-your-certificate-after-any-rotation)
-- [Intel: Z790 vs Z890](#intel-z790-vs-z890)
+- [Certificate retrieval and trust](#certificate-retrieval-and-trust)
+- [Intel: Z790 vs Z890](#intel-z790-vs-z790-era-method-vs-z890)
 - [Evidence ledger](#evidence-ledger)
+- [Sources](#sources)
 
 ---
+
+## Before you reset
+
+Read the [TPM identity terms](../tpm-spoofing/tpm-spoofing.md#tpm-identity-and-terminology), [clear precautions](../tpm-spoofing/tpm-spoofing.md#what-clearing-the-tpm-changes), and [firmware-update limits](../tpm-spoofing/tpm-spoofing.md#firmware-updates-and-ek-continuity) first. Complete those precautions and capture the baseline below before any clear, firmware flash, or switch between fTPM, dTPM, and Pluton.
 
 ## How the AMD fTPM identity actually works
 
@@ -33,6 +49,9 @@ Three facts drive everything below.
 3. Windows fetches the EK certificate online from `https://ftpm.amd.com/pki/aia/<hash-of-EKpub>` at provisioning time and stores it in TPM NV. That server serves pre-registered certificates only. During live testing it returned HTTP 404 for keys it does not know and served stable certs for real chips. It does not mint certificates for arbitrary new keys on demand. **[A]**
 
 Consequence: a rotation path is only useful if your new EK also gets a valid certificate. If the server has never seen your new key hash, you get no manufacturer cert. Attestation-based checks then fail instead of pass. Check this after every attempt (section below).
+
+> [!IMPORTANT]
+> Primary sources establish that a normal clear does not change the EPS and that AMD firmware TPMs need access to AMD's certificate-retrieval endpoint. They do not document AMD's EK derivation inputs, the endpoint's per-key suffix, or whether certificates are pre-registered rather than created on request. Treat those AMD-specific explanations above as community or live-service observations, not **[A]** facts. The TCG field-upgrade requirement also says the original manufacturer-certified EK must remain reproducible for the same template until `TPM2_ChangeEPS`. **[A]** [TCG architecture](https://trustedcomputinggroup.org/wp-content/uploads/Trusted-Platform-Module-2.0-Library-Part-1-Architecture_Version-185_pub.pdf) and [Windows Autopilot requirements](https://learn.microsoft.com/en-us/autopilot/requirements)
 
 ---
 
@@ -62,6 +81,12 @@ openssl x509 -inform der -in ekcert.der -text -noout  # serial, NotBefore, issue
 ```
 
 Also run an MMIO-based checker if available. Community reports say cached readings and MMIO readings can disagree. **[CC]**
+
+---
+
+## Windows views and HWIDChecker baseline
+
+Use the commands and interpretation in [Inspect the TPM in Windows](../tpm-spoofing/tpm-spoofing.md#inspect-the-tpm-in-windows) and [Verify with HWIDChecker.exe](../tpm-spoofing/tpm-spoofing.md#verify-with-hwidcheckerexe) before and after each attempt. Preserve the raw PowerShell certificate collections. HWIDChecker is a convenient paired view, not an independent measurement or a complete certificate inventory.
 
 ---
 
@@ -142,6 +167,9 @@ On AM5 Gigabyte boards: Advanced -> Miscellaneous -> Trusted Platform Module. Op
 
 The claim from April 2026: switching to Pluton and back generates a completely fresh EK every time, while the ASP fTPM identity stays permanent. **[S]**
 
+> [!WARNING]
+> This **[S]** procedure is untested. The available screenshots do not contain a valid before-and-after pair, and no matching certificate was verified. Do not rely on it as an identity-rotation method.
+
 Why we do not trust it yet:
 
 - The poster's own attached screenshot album shows the SAME hashes twice, not a before-and-after pair.
@@ -175,6 +203,9 @@ Save yourself hours. These do nothing to the endorsement identity:
 - BIOS updates whose changelog has no TPM-B/fTPM entry. **[CC]**
 - On Z890-class Intel: everything listed in the Intel section below.
 
+> [!WARNING]
+> Reinstalling Windows as an EK-rotation procedure is **[S]** and untested. The cited report also included a BIOS flash, so it does not isolate the reinstall as the cause.
+
 ---
 
 ## Check your certificate after any rotation
@@ -201,12 +232,92 @@ try {
 }
 ```
 
+> [!WARNING]
+> **Diagnostic evidence limit:** the API contract is **[A]**, based on Microsoft's documented `AsnEncodedData` output contract and .NET RSA import APIs. The procedure as a whole remains **[S]** because the real cmdlet output could not be parsed without elevation and AMD does not publish the endpoint-suffix construction. Use PowerShell 7 or later as administrator. Do not treat a request failure as proof that a certificate is absent.
+
+```powershell
+# PowerShell 7+ as administrator. Diagnostic for RSA EKs only.
+$ek = Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256
+if ($ek -is [string]) { throw $ek }
+if (-not $ek.IsPresent -or $null -eq $ek.PublicKey) {
+    throw "Windows did not return an endorsement public key."
+}
+
+$rsa = [System.Security.Cryptography.RSA]::Create()
+try {
+    $bytesRead = 0
+    try {
+        $rsa.ImportSubjectPublicKeyInfo($ek.PublicKey.RawData, [ref]$bytesRead)
+    } catch [System.Security.Cryptography.CryptographicException] {
+        $rsa.Dispose()
+        $rsa = [System.Security.Cryptography.RSA]::Create()
+        $bytesRead = 0
+        $rsa.ImportRSAPublicKey($ek.PublicKey.RawData, [ref]$bytesRead)
+    }
+    if ($bytesRead -ne $ek.PublicKey.RawData.Length) {
+        throw "The RSA parser did not consume the complete public key."
+    }
+    $p = $rsa.ExportParameters($false)
+} finally {
+    $rsa.Dispose()
+}
+
+if ($p.Exponent.Length -gt 4) { throw "Unsupported RSA exponent size." }
+$exp = [byte[]]::new(4)
+[Array]::Copy($p.Exponent, 0, $exp, 4 - $p.Exponent.Length, $p.Exponent.Length)
+
+$pre = [byte[]](0x00,0x00,0x22,0x22)
+$sha = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $h = $sha.ComputeHash($pre + $exp + $p.Modulus)[0..15]
+} finally {
+    $sha.Dispose()
+}
+$url = "https://ftpm.amd.com/pki/aia/" + (($h | ForEach-Object { $_.ToString('X2') }) -join '')
+$url
+
+try {
+    $r = Invoke-WebRequest -Uri $url -TimeoutSec 20
+    "HTTP $($r.StatusCode): response received ($($r.RawContentLength) bytes)"
+} catch {
+    $status = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { $null }
+    if ($status -eq 404) {
+        "HTTP 404: no object exists at this derived URL"
+    } elseif ($null -ne $status) {
+        "HTTP ${status}: inconclusive response"
+    } else {
+        "Request failed: inconclusive ($($_.Exception.Message))"
+    }
+}
+```
+
 Reading the result:
 
 - HTTP 200: your key has a pre-registered AMD cert. Chain anchors are public (`PRG-RPL` intermediate and `AMDTPM` roots at the same host, all verified live 2026-08-21). **[A]**
 - HTTP 404: no cert exists for your key. Attestation that validates the EK cert will fail. Cycle back to your previous identity, because that one had a cert.
 
+> [!CAUTION]
+> A response from this derived URL does not by itself prove that a certificate matches the active EK or builds to a trusted root. A 404 is also inconclusive while the suffix construction remains **[S]**. Prefer the certificates Windows returns, validate their public key and chain, and do not clear or flash again based only on this script.
+
 Caveats: this scheme matches the documented AMD URL format for default-template RSA EKs. If you get 404 but `ManufacturerCertificates` shows a valid-looking cert, trust the cert and note the discrepancy. ECC EKs use a longer hash form; the PowerShell above covers the RSA case only.
+
+---
+
+## Certificate retrieval and trust
+
+Firmware TPMs may need network access to retrieve manufacturer certificates during provisioning. Microsoft's current Autopilot requirements list `https://ftpm.amd.com/pki/aia` for AMD and `https://ekop.intel.com/ekcertservice` for Intel. The same documentation says discrete TPM devices normally ship with the needed certificates already installed. **[A]** [Windows Autopilot requirements](https://learn.microsoft.com/en-us/autopilot/requirements)
+
+Microsoft documents those endpoints for certificate retrieval. It does not describe them as public certificate-minting APIs. An HTTP response alone does not prove that the returned certificate matches the active EK, chains to a trusted root, is within its validity period, or satisfies a particular relying party. Microsoft's EK-certificate attestation model separately validates the EK certificate chain against administrator-approved intermediate and root certificates. **[A]** [Microsoft TPM key attestation](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/component-updates/tpm-key-attestation)
+
+Intel's current public material needs platform context. Microsoft still lists EKOP as an Intel firmware-TPM dependency. Intel documents that CSME 15 and later use an On-Die Certificate Authority architecture. **[A]** Intel employee `liranper` stated that 11th-generation-and-later PTT EKs use an embedded intermediate chain instead of the older EKOP provisioning path. **[C]** Inspect the actual certificate and embedded chain instead of deciding trust from one endpoint test. [Intel CSME security white paper](https://www.intel.com/content/dam/www/public/us/en/security-advisory/documents/intel-csme-security-white-paper.pdf) and [Intel employee's PTT certificate-chain explanation](https://community.intel.com/t5/Mobile-and-Desktop-Processors/How-to-verify-an-Intel-PTT-endorsement-key-certificate/m-p/1613959)
+
+Keep these results distinct in your evidence:
+
+- **EKpub hash changed:** the public-key representation returned by Windows changed.
+- **EK certificate changed:** compare the leaf certificate's serial, thumbprint, issuer, validity dates, and public key.
+- **Certificate matches the active EK:** the certificate's public key equals the public key Windows returned for the current EK.
+- **Chain validates:** the leaf builds through the expected intermediate certificates to an approved root.
+- **Attestation succeeds:** a specific relying party accepted that chain and the rest of its policy. This cannot be inferred from the preceding checks alone.
 
 ---
 
@@ -219,6 +330,9 @@ Caveats: this scheme matches the documented AMD URL format for default-template 
   - The ME firmware tool ships code-only payloads. Byte analysis of three MSI flashback files confirms no PTT state inside. **[A]**
   - The only documented fresh-EK-with-cert mechanism is Intel-triggered TCB recovery with a firmware security version bump (CSME white paper 631900, section 5.3). There is no user knob for it. **[A]**
 - A single forum post claims flashing lowest-then-highest BIOS rotates EK on "most Gigabyte boards" for Intel 12th through 15th gen. Single source, no artifacts, contradicts the Z890 measurements above. **[S]** Do not plan around it.
+
+> [!WARNING]
+> The lowest-then-highest BIOS flash procedure is **[S]** and untested. Do not risk a firmware downgrade based on that report.
 
 ---
 
@@ -248,4 +362,27 @@ Known open questions (nobody has answered these publicly):
 2. Does a TPM-B flash rotation leave the NEW key with a server-registered cert on AM5? Needs one paired test on any listed board. The check script above answers it in five minutes.
 3. Does the ASP fTPM EK derivation include the fTPM firmware version, or something coarser? Explains the two-set behavior either way, but the exact input set is undocumented.
 
+> [!NOTE]
+> **Diagnostic limit:** the script can probe one derived URL, but it cannot answer question 2 by itself while the AMD suffix construction remains **[S]**. A useful result also needs a paired EK public key, the returned certificate, a public-key match, and chain validation.
+
 Boundary note: this page records what verifiably changes the identity and how to check it safely. It does not rank paths by anti-cheat acceptance.
+
+---
+
+## Sources
+
+- [TCG TPM 2.0 Library specification index](https://trustedcomputinggroup.org/resource/tpm-library-specification/)
+- [TCG TPM 2.0 Library Part 1: Architecture, version 185](https://trustedcomputinggroup.org/wp-content/uploads/Trusted-Platform-Module-2.0-Library-Part-1-Architecture_Version-185_pub.pdf)
+- [TCG EK Credential Profile for TPM 2.0, version 2.7](https://trustedcomputinggroup.org/wp-content/uploads/TCG-EK-Credential-Profile-for-TPM-Family-2.0-Level-0-Version-2.7_Pub.pdf)
+- [Microsoft: Troubleshoot and clear the TPM](https://learn.microsoft.com/en-us/windows/security/hardware-security/tpm/initialize-and-configure-ownership-of-the-tpm)
+- [Microsoft: Get-TpmEndorsementKeyInfo](https://learn.microsoft.com/en-us/powershell/module/trustedplatformmodule/get-tpmendorsementkeyinfo?view=windowsserver2025-ps)
+- [Microsoft: tpmtool](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/tpmtool)
+- [Microsoft: How Windows uses the TPM](https://learn.microsoft.com/en-us/windows/security/hardware-security/tpm/how-windows-uses-the-tpm)
+- [Microsoft: Windows Autopilot requirements](https://learn.microsoft.com/en-us/autopilot/requirements)
+- [Microsoft: TPM key attestation](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/component-updates/tpm-key-attestation)
+- [Microsoft .NET: AsnEncodedData](https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.asnencodeddata)
+- [Microsoft .NET: RSA.ImportSubjectPublicKeyInfo](https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.rsa.importsubjectpublickeyinfo)
+- [Microsoft .NET: RSA.ImportRSAPublicKey](https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.rsa.importrsapublickey)
+- [Microsoft: Pluton as TPM](https://learn.microsoft.com/en-us/windows/security/hardware-security/pluton/pluton-as-tpm)
+- [Intel: CSME security white paper](https://www.intel.com/content/dam/www/public/us/en/security-advisory/documents/intel-csme-security-white-paper.pdf)
+- [Intel employee: PTT endorsement certificate chain explanation](https://community.intel.com/t5/Mobile-and-Desktop-Processors/How-to-verify-an-Intel-PTT-endorsement-key-certificate/m-p/1613959)

@@ -3,6 +3,9 @@
 > **Disclaimer:** This guide is for privacy research, hardware fingerprint testing, and education. It is not for violating any Terms of Service.
 > **What this guide is:** A deep, technical hardware privacy guide about spoofing/changing hardware identifiers to make a machine as unidentifiable and untraceable as possible under advanced fingerprinting.
 
+> **Read it as a website:** [hwid.idkzal.cc](https://hwid.idkzal.cc)
+> **New here?** Start with [Getting Started](guides/getting-started/getting-started.md): what an HWID is, the order of work, and how to check before and after.
+
 ---
 
 ## Table of Contents
@@ -38,6 +41,7 @@
 #### Serial Spoofing
 
 - **Complete Guide**: [Motherboard Spoofing Guide](guides/motherboard-spoofing/motherboard-spoofing.md)
+- **NVRAM / EFI variables**: [NVRAM Guide](guides/nvram-spoofing/nvram-spoofing.md)
 - **Key Points**:
   - Use **DMIEdit** (for AMI BIOS)
   - Change only 2–5 digits of original serial
@@ -53,6 +57,8 @@
 ---
 
 ### 2. **Storage**
+
+- **Complete Guide**: [Storage Guide](guides/ssd-spoofing/ssd-spoofing.md) (identifier layers, controller check, USB enclosures, RAID vs volume serials)
 
 #### NVMe SSDs (M.2)
 
@@ -83,6 +89,7 @@
 
 #### MAC Address Spoofing
 
+- **Complete Guide**: [MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md)
 - **Internal NICs**: Permanent changes possible for Intel, Realtek, and Mellanox:
   - [Intel NIC MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#intel-nics)
   - [Realtek NIC MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#realtek-nics)
@@ -107,6 +114,7 @@
 
 ### 5. **RAM**
 
+- **Complete Guide**: [RAM Guide](guides/ram-spoofing/ram-spoofing.md)
 - **Null Serials**:
   - Corsair DDR4/DDR5
   - GEIL DDR4/DDR5
@@ -128,9 +136,10 @@
 
 ### 7. **EDID / Monitor Spoofing**
 
+- **Complete Guide**: [Monitor / EDID Guide](guides/monitor-spoofing/monitor-spoofing.md)
 - **Why It Matters**: Monitors contain EDID data with a potentially unique serial.
 - **Tools**:
-  - **Fuser** or **Dr.HDMI** ([4K version](https://www.hdfury.eu/shop/drhdmi4k/)).
+  - **Fuser** or **Dr.HDMI** ([4K version](https://hdfury.com/product/dr-hdmi-4k/)).
   - EDID can be dumped, edited in a hex tool, and re-flashed via these devices.
 - **Result**: The monitor appears as a different device, reducing traceability.
 - Using a Fuser on 🍊 is not recommended, even with EDID spoofing.
@@ -139,6 +148,7 @@
 
 ### 8. **Router (ARP Table Isolation)**
 
+- **Complete Guide**: [Router / ARP Guide](guides/arp-spoofing/arp-spoofing.md)
 - **Hardware**: GL.iNet running OpenWrt firmware or a custom-flashed OpenWrt router.
 - **Process**:
   - Change the router's MAC and hostname.
@@ -161,6 +171,7 @@
 ### 9. **TPM**
 
 - **Complete Guide**: [TPM Spoofing Guide](guides/tpm-spoofing/tpm-spoofing.md)
+- **fTPM identity reset (AMD AM5)**: [fTPM Reset Guide](guides/resets/ftpm-reset-tutorial.md)
 - **Warning**: dTPM is flagged by some strict telemetry stacks (e.g., 🍊).
 - **Current Recommendation**: Use **fTPM** for 🍊/🍒.
   - Since 2025-04-04, 🍒 enforces **fTPM** if you’re flagged; dTPM no longer works there.
