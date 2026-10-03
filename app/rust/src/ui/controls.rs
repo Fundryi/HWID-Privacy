@@ -1152,7 +1152,9 @@ pub(crate) fn create(
         ),
         Ctl::Label(l) => (
             WC_STATICW,
-            l.text.as_str(),
+            // Layered status glyphs are decorative; keep private-use characters out of the
+            // native accessible name. Painting and measurement still use the label spec.
+            if l.stacked { "" } else { l.text.as_str() },
             base,
             WINDOW_EX_STYLE(0),
             Data::Label(RefCell::new(l.clone())),
@@ -1453,6 +1455,10 @@ impl CtlState {
                 let r = def(hwnd, msg, wparam, lparam);
                 if msg == WM_SETFONT {
                     edit_set_margins(hwnd, self.dpi.get());
+                    if let Data::Edit(e) = &self.data {
+                        // The cached width is in device pixels of the previous font/DPI.
+                        e.longest.set(widest_line(self.font.get(), &text(hwnd)));
+                    }
                 }
                 edit_update_bars(hwnd);
                 Some(r)

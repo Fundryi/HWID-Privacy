@@ -43,7 +43,14 @@ const COPY_ID: u16 = 0x0102;
 /// modal child disabled: the box would enable it again when it closes.
 pub fn active_window() -> HWND {
     // SAFETY: Read-only query of this UI thread's active window; a null result is valid.
-    unsafe { GetActiveWindow() }
+    let active = unsafe { GetActiveWindow() };
+    if active.is_invalid() {
+        // Losing activation to another application must not detach an async result's box
+        // from an existing modal dialog and leave both independently interactive.
+        window::modal_window().unwrap_or_default()
+    } else {
+        active
+    }
 }
 
 /// `MessageBoxButtons` subset.
@@ -418,6 +425,117 @@ pub(crate) mod testing {
         }
     }
 
+    /// Exercises dialog keys on real HWNDs with thread-local keyboard state, without sending
+    /// input to the owner's desktop. Called by the existing update-window UI run.
+    pub fn review_keyboard() {
+        use super::super::window::Form;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            GetFocus, SetKeyboardState, VK_CONTROL, VK_ESCAPE, VK_MENU, VK_RETURN, VK_SPACE, VK_TAB,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{MSG, SendMessageW, WM_KEYDOWN, WM_KEYUP};
+        for (buttons, tab, key, expected) in [
+            (Buttons::Ok, false, VK_ESCAPE, Answer::Ok),
+            (Buttons::YesNo, false, VK_RETURN, Answer::Yes),
+            (Buttons::YesNo, true, VK_RETURN, Answer::No),
+            (Buttons::YesNo, true, VK_SPACE, Answer::No),
+        ] {
+            let answer = Rc::new(Cell::new(None));
+            let result = Rc::clone(&answer);
+            let default = if buttons == Buttons::Ok { IDOK } else { IDYES };
+            let mut spec = FormSpec::new(
+                "UI review keys",
+                WindowSize::Client(theme::CONFIRM_CLIENT_SIZE),
+            );
+            spec.style = FormStyle::FixedDialog;
+            spec.message_box = true;
+            spec.accept = Some(default.0 as u16);
+            spec.cancel = (buttons == Buttons::Ok).then_some(IDOK.0 as u16);
+            let form = Form::create(
+                HWND::default(),
+                spec,
+                tree("Synthetic keyboard check", Icon::Information, buttons),
+                move |form, event| {
+                    if let Event::Click(id) = event {
+                        result.set(Some(match i32::from(id) {
+                            i if i == IDYES.0 => Answer::Yes,
+                            i if i == IDNO.0 => Answer::No,
+                            _ => Answer::Ok,
+                        }));
+                        form.destroy();
+                    }
+                    true
+                },
+            )
+            .unwrap();
+            form.show();
+            // SAFETY: This only sets the calling test thread's keyboard state. It does not
+            // inject desktop input; HWND queries and messages stay within this test's form.
+            unsafe {
+                SetKeyboardState(&[0; 256]).unwrap();
+                assert_eq!(
+                    GetFocus(),
+                    form.control(default.0 as u16).unwrap(),
+                    "initial default focus"
+                );
+                let key_msg = |vk: u16| MSG {
+                    hwnd: form.hwnd(),
+                    message: WM_KEYDOWN,
+                    wParam: WPARAM(vk as usize),
+                    ..Default::default()
+                };
+                for modifier in [VK_CONTROL, VK_MENU] {
+                    let mut keys = [0; 256];
+                    keys[modifier.0 as usize] = 0x80;
+                    SetKeyboardState(&keys).unwrap();
+                    assert!(
+                        !window::pre_translate(&key_msg(VK_RETURN.0)),
+                        "modified Enter does not confirm"
+                    );
+                    assert!(form.is_alive());
+                }
+                SetKeyboardState(&[0; 256]).unwrap();
+                if buttons == Buttons::YesNo {
+                    assert!(window::pre_translate(&key_msg(VK_ESCAPE.0)));
+                    assert!(form.is_alive(), "Yes/No ignores Esc");
+                }
+                if tab {
+                    assert!(window::pre_translate(&key_msg(VK_TAB.0)));
+                    assert_eq!(
+                        GetFocus(),
+                        form.control(IDNO.0 as u16).unwrap(),
+                        "Tab reaches No"
+                    );
+                }
+                if key == VK_SPACE {
+                    let focus = GetFocus();
+                    SendMessageW(
+                        focus,
+                        WM_KEYDOWN,
+                        Some(WPARAM(key.0 as usize)),
+                        Some(LPARAM(0)),
+                    );
+                    SendMessageW(
+                        focus,
+                        WM_KEYUP,
+                        Some(WPARAM(key.0 as usize)),
+                        Some(LPARAM(0)),
+                    );
+                } else {
+                    assert!(window::pre_translate(&key_msg(key.0)));
+                }
+            }
+            assert_eq!(
+                answer.get(),
+                Some(expected),
+                "{buttons:?}, Tab={tab}, key={key:?}"
+            );
+            assert!(!form.is_alive());
+        }
+        println!(
+            "RESULT review: OK Esc; Yes/No default Enter, Tab/Enter, Tab/Space, Esc ignored and modified Enter passed"
+        );
+    }
+
     /// Presses `id` on `dialog` when dropped, so a test helper can never skip the click.
     pub struct PressOnDrop {
         /// The box.
@@ -541,6 +659,185 @@ mod tests {
 
     const GOLDEN: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\wp-19";
 
+    // Real HWND checks inside the existing ignored UI run: no hardware queries or cleaning.
+    fn review_regressions() {
+        use super::super::window::Form;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{IsWindowEnabled, SetActiveWindow};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GW_OWNER, GWL_STYLE, GetWindow, GetWindowLongPtrW, SIZE_MINIMIZED, SIZE_RESTORED,
+            WM_SIZE, WM_TIMER, WS_HSCROLL,
+        };
+
+        let ticks = Rc::new(Cell::new(0));
+        let seen = Rc::clone(&ticks);
+        let form = Form::create(
+            HWND::default(),
+            FormSpec::new("UI review", WindowSize::Client(Size { w: 600, h: 300 })),
+            vec![
+                Node::leaf(
+                    1,
+                    Ctl::Edit(EditSpec::new(theme::CONTENT_FONT, theme::TEXT, theme::CARD)),
+                )
+                .fill(),
+            ],
+            move |form, event| {
+                if let Event::Timer(1) = event {
+                    seen.set(seen.get() + 1);
+                    form.kill_timer(1);
+                }
+                true
+            },
+        )
+        .unwrap();
+        let edit = form.control(1).unwrap();
+        let horizontal = || {
+            // SAFETY: Read-only style query of this test's edit window.
+            unsafe { GetWindowLongPtrW(edit, GWL_STYLE) as u32 & WS_HSCROLL.0 != 0 }
+        };
+        form.edit_set_text(1, &"0123456789".repeat(5));
+        assert!(!horizontal(), "short text has no horizontal bar");
+        let r = form.window_rect();
+        // Keep the physical viewport fixed while its font doubles, then restore the font.
+        let original_dpi = form.dpi();
+        for (dpi, bar) in [(original_dpi * 2, true), (original_dpi, false)] {
+            // SAFETY: Synchronous DPI message with a live RECT to this test's form.
+            unsafe {
+                SendMessageW(
+                    form.hwnd(),
+                    WM_DPICHANGED,
+                    Some(WPARAM((dpi | (dpi << 16)) as usize)),
+                    Some(LPARAM(&r as *const RECT as isize)),
+                );
+            }
+            assert_eq!(horizontal(), bar, "horizontal bar at {dpi} DPI");
+        }
+        form.set_timer(1, 60_000);
+        // SAFETY: Value-only timer/size messages to this test's own form.
+        unsafe {
+            SendMessageW(form.hwnd(), WM_TIMER, Some(WPARAM(1)), Some(LPARAM(0)));
+            SendMessageW(form.hwnd(), WM_TIMER, Some(WPARAM(1)), Some(LPARAM(0)));
+        }
+        assert_eq!(ticks.get(), 1, "a killed timer's queued message is ignored");
+        form.set_timer(1, 60_000);
+        // SAFETY: Value-only messages; the form's actual viewport is unchanged.
+        unsafe {
+            SendMessageW(
+                form.hwnd(),
+                WM_SIZE,
+                Some(WPARAM(SIZE_MINIMIZED as usize)),
+                Some(LPARAM(0)),
+            );
+            SendMessageW(form.hwnd(), WM_TIMER, Some(WPARAM(1)), Some(LPARAM(0)));
+        }
+        assert_eq!(ticks.get(), 1, "no timer dispatch while minimized");
+        // SAFETY: Restores the test state and delivers a value-only timer message.
+        unsafe {
+            SendMessageW(
+                form.hwnd(),
+                WM_SIZE,
+                Some(WPARAM(SIZE_RESTORED as usize)),
+                Some(LPARAM(0)),
+            );
+            SendMessageW(form.hwnd(), WM_TIMER, Some(WPARAM(1)), Some(LPARAM(0)));
+        }
+        assert_eq!(ticks.get(), 2, "recorded timers resume after restore");
+        println!(
+            "RESULT review: DPI scroll-bar refresh and queued timer stop/minimize/restore passed"
+        );
+
+        let owner = form.hwnd();
+        let verified = Rc::new(Cell::new(false));
+        let done = Rc::clone(&verified);
+        let mut spec = FormSpec::new(
+            "UI review modal",
+            WindowSize::Client(Size { w: 320, h: 160 }),
+        );
+        spec.style = FormStyle::FixedDialog;
+        window::run_modal(owner, spec, vec![], move |outer, event| {
+            match event {
+                Event::Created => outer.set_timer(1, 10),
+                Event::Timer(1) => {
+                    outer.kill_timer(1);
+                    // SAFETY: Clears activation only for the test's own UI thread, without
+                    // foregrounding another app; reads enabled state of its own owner.
+                    unsafe {
+                        assert!(!IsWindowEnabled(owner).as_bool());
+                        let _ = SetActiveWindow(HWND::default());
+                    }
+                    assert_eq!(
+                        active_window(),
+                        outer.hwnd(),
+                        "inactive modal remains the async box owner"
+                    );
+                    let expected_owner = outer.hwnd().0 as isize;
+                    let closer = std::thread::spawn(move || {
+                        let end = Instant::now() + Duration::from_secs(5);
+                        let inner = loop {
+                            if let Some(h) = testing::find("UI review nested") {
+                                break h;
+                            }
+                            assert!(Instant::now() < end, "nested box did not open");
+                            std::thread::sleep(Duration::from_millis(10));
+                        };
+                        let _press = testing::PressOnDrop {
+                            dialog: inner,
+                            id: IDOK,
+                        };
+                        std::thread::sleep(Duration::from_millis(50));
+                        // SAFETY: Relationship and enabled-state queries of test windows.
+                        unsafe {
+                            assert_eq!(
+                                GetWindow(inner, GW_OWNER).unwrap().0 as isize,
+                                expected_owner
+                            );
+                            assert!(
+                                !IsWindowEnabled(HWND(expected_owner as *mut core::ffi::c_void))
+                                    .as_bool()
+                            );
+                        }
+                    });
+                    assert_eq!(
+                        show(
+                            active_window(),
+                            "Synthetic worker result",
+                            "UI review nested",
+                            Buttons::Ok,
+                            Icon::Information
+                        ),
+                        Answer::Ok
+                    );
+                    closer.join().unwrap();
+                    // SAFETY: Read-only enabled-state queries of test windows.
+                    unsafe {
+                        assert!(
+                            !IsWindowEnabled(owner).as_bool(),
+                            "base owner stays disabled"
+                        );
+                        assert!(
+                            IsWindowEnabled(outer.hwnd()).as_bool(),
+                            "inner restores only outer"
+                        );
+                    }
+                    done.set(true);
+                    outer.destroy();
+                }
+                _ => {}
+            }
+            true
+        })
+        .unwrap();
+        assert!(verified.get());
+        // SAFETY: Read-only query of the surviving test owner.
+        let owner_enabled = unsafe { IsWindowEnabled(owner) }.as_bool();
+        assert!(owner_enabled, "outer restores its owner");
+        assert!(
+            window::modal_window().is_none(),
+            "modal state removed after exit"
+        );
+        form.destroy();
+        println!("RESULT review: nested modal ownership and inactive async owner passed");
+    }
+
     /// Opens every icon kind, captures each at the real DPI and a synthetic 144 DPI, presses
     /// a button by HWND, and checks the answers (Enter, Esc and X rules included).
     #[test]
@@ -548,6 +845,7 @@ mod tests {
     fn wp19_boxes() {
         std::fs::create_dir_all(GOLDEN).unwrap();
         assert!(dpi::set_per_monitor_v2_for_tests(), "PerMonitorV2");
+        review_regressions();
         let cases: Vec<(&str, &str, Buttons, Icon, MESSAGEBOX_RESULT, Answer)> = vec![
             (
                 "Update Check Failed",
@@ -650,6 +948,34 @@ mod tests {
                     )
                     .unwrap_or_else(|e| e),
                 );
+                // These cases exercise keyboard translation, not just command-by-id clicks.
+                // A delayed fallback still closes the test window if a keyboard check fails.
+                if i <= 2 {
+                    use windows::Win32::UI::Input::KeyboardAndMouse::{
+                        VK_ESCAPE, VK_RETURN, VK_TAB,
+                    };
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        PostMessageW, WM_CLOSE, WM_KEYDOWN,
+                    };
+                    // SAFETY: Value-only key/close messages posted by HWND to this test box.
+                    unsafe {
+                        if i == 2 {
+                            PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0)).unwrap();
+                            std::thread::sleep(Duration::from_millis(50));
+                            assert!(testing::find(&title_owned).is_some(), "Yes/No ignores X");
+                            PostMessageW(Some(h), WM_KEYDOWN, WPARAM(VK_TAB.0 as usize), LPARAM(0))
+                                .unwrap();
+                        }
+                        let key = if i == 0 { VK_ESCAPE } else { VK_RETURN };
+                        PostMessageW(Some(h), WM_KEYDOWN, WPARAM(key.0 as usize), LPARAM(0))
+                            .unwrap();
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                    assert!(
+                        testing::find(&title_owned).is_none(),
+                        "keyboard did not close {title_owned}"
+                    );
+                }
                 drop(press);
                 (shown, notes)
             });

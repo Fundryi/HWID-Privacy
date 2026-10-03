@@ -407,6 +407,7 @@ mod tests {
         std::fs::create_dir_all(GOLDEN).unwrap();
         assert!(dpi::set_per_monitor_v2_for_tests(), "PerMonitorV2");
         assert!(flow::activate_comctl6(), "comctl v6");
+        msgbox::testing::review_keyboard();
         let form = Form::create(HWND::default(), spec(), nodes(), |_, _| true).unwrap();
         form.show();
         let pump = |ms: u64| {

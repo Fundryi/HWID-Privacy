@@ -26,8 +26,8 @@ use windows::{
         Graphics::{
             Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute},
             Gdi::{
-                FillRect, GetMonitorInfoW, HDC, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-                MonitorFromPoint, MonitorFromWindow, UpdateWindow,
+                FillRect, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+                MonitorFromPoint, MonitorFromRect, MonitorFromWindow, UpdateWindow,
             },
         },
         System::{
@@ -52,23 +52,23 @@ use windows::{
                 GCW_ATOM, GWLP_USERDATA, GetAncestor, GetClassLongPtrW, GetClientRect,
                 GetCursorPos, GetMessageW, GetNextDlgTabItem, GetSystemMetrics, GetWindowLongPtrW,
                 GetWindowRect, GetWindowThreadProcessId, HICON, IDC_ARROW, IMAGE_ICON,
-                IsDialogMessageW, IsIconic, IsWindow, IsZoomed, KillTimer, LR_DEFAULTCOLOR,
-                LoadCursorW, LoadIconW, LoadImageW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK,
-                MINMAXINFO, MSG, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassExW,
-                RegisterWindowMessageW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
-                SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL, SIZE_MINIMIZED, SIZE_RESTORED,
-                SM_CXSMICON, SM_CXVSCROLL, SM_CYSMICON, SPI_SETWORKAREA, SW_SHOWMAXIMIZED,
-                SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
-                SWP_NOZORDER, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
-                ShowWindow, TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE,
-                WM_ACTIVATE, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
-                WM_CTLCOLORSTATIC, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DRAWITEM,
-                WM_ERASEBKGND, WM_GETDPISCALEDSIZE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_MOUSEWHEEL,
-                WM_NCCREATE, WM_NCDESTROY, WM_NULL, WM_PAINT, WM_SETFOCUS, WM_SETTINGCHANGE,
-                WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_VKEYTOITEM, WM_VSCROLL, WNDCLASSEXW,
-                WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW,
-                WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-                WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+                IsDialogMessageW, IsIconic, IsWindow, IsWindowVisible, IsZoomed, KillTimer,
+                LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, LoadImageW, MB_ICONERROR,
+                MB_ICONINFORMATION, MB_OK, MINMAXINFO, MSG, MessageBoxW, PostMessageW,
+                PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SB_BOTTOM, SB_LINEDOWN,
+                SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO,
+                SIF_ALL, SIZE_MINIMIZED, SIZE_RESTORED, SM_CXSMICON, SM_CXVSCROLL, SM_CYSMICON,
+                SPI_SETWORKAREA, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE,
+                SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetTimer, SetWindowLongPtrW,
+                SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE,
+                WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT,
+                WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+                WM_DRAWITEM, WM_ERASEBKGND, WM_GETDPISCALEDSIZE, WM_GETMINMAXINFO, WM_KEYDOWN,
+                WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_NULL, WM_PAINT, WM_SETFOCUS,
+                WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_VKEYTOITEM, WM_VSCROLL,
+                WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+                WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_MAXIMIZEBOX,
+                WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -329,6 +329,24 @@ impl Drop for DpiChange<'_> {
 
 thread_local! {
     static NEXT_SERIAL: Cell<u64> = const { Cell::new(1) };
+    static MODAL_WINDOW: Cell<Option<Form>> = const { Cell::new(None) };
+}
+
+/// Restores the previous modal on every exit, including a caught unwind.
+struct ModalWindow(Option<Form>);
+
+impl Drop for ModalWindow {
+    fn drop(&mut self) {
+        MODAL_WINDOW.with(|m| m.set(self.0));
+    }
+}
+
+/// The innermost live modal on this thread, also when another application is active.
+pub(crate) fn modal_window() -> Option<HWND> {
+    MODAL_WINDOW
+        .with(Cell::get)
+        .filter(Form::is_alive)
+        .map(|f| f.hwnd())
 }
 
 fn form_class() -> PCWSTR {
@@ -433,20 +451,28 @@ pub fn force_work_area(rect: Option<RECT>) {
 }
 
 /// The work area of the monitor nearest to `hwnd` (or the forced test work area).
-fn monitor_work_area(hwnd: HWND) -> RECT {
+fn monitor_work_area(hwnd: HWND) -> win::Result<RECT> {
     if let Some(forced) = FORCED_WORK_AREA.with(Cell::get) {
-        return forced;
+        return Ok(forced);
     }
-    // SAFETY: Monitor queries with valid out-parameters.
-    unsafe {
-        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-        let mut mi = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        let _ = GetMonitorInfoW(monitor, &mut mi);
-        mi.rcWork
+    // SAFETY: Read-only window-to-monitor query; the handle is checked by monitor_work.
+    monitor_work(unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) })
+}
+
+fn monitor_work(monitor: HMONITOR) -> win::Result<RECT> {
+    let mut mi = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: Writable, correctly sized MONITORINFO. A disconnected monitor can fail.
+    if !unsafe { GetMonitorInfoW(monitor, &mut mi) }.as_bool() {
+        return Err(win::Error::last("GetMonitorInfoW"));
     }
+    // Never shrink a live window to the zero RECT of a failed or unusable monitor query.
+    if mi.rcWork.right <= mi.rcWork.left || mi.rcWork.bottom <= mi.rcWork.top {
+        return Err(win::Error::msg("GetMonitorInfoW", "empty work area"));
+    }
+    Ok(mi.rcWork)
 }
 
 /// Clamps an outer rectangle into `work`: never larger than the work area, and moved inside
@@ -834,11 +860,16 @@ impl FormState {
         let target = if zoomed {
             suggested
         } else {
-            let center = POINT {
-                x: (suggested.left + suggested.right) / 2,
-                y: (suggested.top + suggested.bottom) / 2,
-            };
-            fit_to_work_area(suggested, work_area_at(center))
+            // Match MonitorFromWindow: greatest intersection, not the rectangle's centre
+            // (which can select a different monitor on vertically offset displays).
+            match work_area_for_rect(suggested) {
+                Ok(work) => fit_to_work_area(suggested, work),
+                Err(error) => {
+                    // Keep Windows' suggested placement if a monitor disappears mid-query.
+                    win::record(error);
+                    suggested
+                }
+            }
         };
         // SAFETY: Moves our own window to the rectangle Windows suggested for the new DPI.
         unsafe {
@@ -882,7 +913,14 @@ impl FormState {
         if unsafe { GetWindowRect(hwnd, &mut r) }.is_err() {
             return;
         }
-        let fitted = fit_to_work_area(r, monitor_work_area(hwnd));
+        let work = match monitor_work_area(hwnd) {
+            Ok(work) => work,
+            Err(error) => {
+                win::record(error);
+                return;
+            }
+        };
+        let fitted = fit_to_work_area(r, work);
         if fitted != r {
             // SAFETY: Moves our own window inside its monitor's work area.
             unsafe {
@@ -1274,7 +1312,13 @@ fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             let min = state.spec.min?;
             let dpi = state.dpi.get();
             // The minimum never exceeds the work area of the window's monitor (DESIGN.md 11.1).
-            let work = monitor_work_area(hwnd);
+            let work = match monitor_work_area(hwnd) {
+                Ok(work) => work,
+                Err(error) => {
+                    win::record(error);
+                    return None;
+                }
+            };
             // SAFETY: For WM_GETMINMAXINFO, lParam points to a writable MINMAXINFO.
             let mmi = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
             mmi.ptMinTrackSize.x = dpi::scale(min.w, dpi).min(work.right - work.left);
@@ -1340,6 +1384,13 @@ fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             Some(LRESULT(0))
         }
         WM_DESTROY => {
+            let timers = std::mem::take(&mut *state.timers.borrow_mut());
+            for id in timers.into_keys() {
+                // SAFETY: Removes this window's timers before its destruction handler runs.
+                unsafe {
+                    let _ = KillTimer(Some(hwnd), id);
+                }
+            }
             state.destroyed.set(true);
             state.enable_owner();
             // GetMessage dispatches sent messages internally and can keep waiting after a
@@ -1352,7 +1403,12 @@ fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             Some(LRESULT(0))
         }
         WM_TIMER => {
-            state.dispatch(Event::Timer(wparam.0));
+            // KillTimer does not remove an already queued WM_TIMER. Discard it after a
+            // stop or minimize rather than repainting a hidden indicator or advancing work.
+            let running = !state.minimized.get() && state.timers.borrow().contains_key(&wparam.0);
+            if running {
+                state.dispatch(Event::Timer(wparam.0));
+            }
             Some(LRESULT(0))
         }
         WM_COMMAND if lparam.0 == 0 => {
@@ -1386,12 +1442,24 @@ fn restore_focus(state: &FormState) {
     let last = state.last_focus.get();
     // SAFETY: Window queries and focus changes within this thread's windows.
     unsafe {
-        let target =
-            if !last.is_invalid() && IsWindow(Some(last)).as_bool() && root_of(last) == hwnd {
-                last
-            } else {
-                GetNextDlgTabItem(hwnd, None, false).unwrap_or_default()
-            };
+        let target = if !last.is_invalid()
+            && IsWindow(Some(last)).as_bool()
+            && root_of(last) == hwnd
+            && IsWindowEnabled(last).as_bool()
+            && IsWindowVisible(last).as_bool()
+        {
+            last
+        } else if state.spec.message_box {
+            // The right-to-left button row is created No then Yes. Initial focus must
+            // still be the declared default, so Enter answers Yes on a Yes/No box.
+            state
+                .spec
+                .accept
+                .and_then(|id| state.hwnd_of(id))
+                .unwrap_or_default()
+        } else {
+            GetNextDlgTabItem(hwnd, None, false).unwrap_or_default()
+        };
         if !target.is_invalid() {
             let _ = SetFocus(Some(target));
         }
@@ -1425,23 +1493,23 @@ pub(crate) fn styles(spec: &FormSpec) -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
 }
 
 /// The work area of the monitor at `pt` (or the forced test work area).
-fn work_area_at(pt: POINT) -> RECT {
+fn work_area_at(pt: POINT) -> win::Result<RECT> {
     if let Some(forced) = FORCED_WORK_AREA.with(Cell::get) {
-        return forced;
+        return Ok(forced);
     }
-    // SAFETY: Monitor queries with valid out-parameters.
-    unsafe {
-        let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-        let mut mi = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        let _ = GetMonitorInfoW(monitor, &mut mi);
-        mi.rcWork
-    }
+    // SAFETY: Read-only point-to-monitor query; the handle is checked by monitor_work.
+    monitor_work(unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) })
 }
 
-fn work_area(owner: HWND, start: StartPosition) -> RECT {
+fn work_area_for_rect(rect: RECT) -> win::Result<RECT> {
+    if let Some(forced) = FORCED_WORK_AREA.with(Cell::get) {
+        return Ok(forced);
+    }
+    // SAFETY: The live input rectangle is used only for this read-only monitor query.
+    monitor_work(unsafe { MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST) })
+}
+
+fn work_area(owner: HWND, start: StartPosition) -> win::Result<RECT> {
     if start == StartPosition::CenterParent && !owner.is_invalid() {
         monitor_work_area(owner)
     } else {
@@ -1499,7 +1567,7 @@ impl Form {
             minimized: Cell::new(false),
             logical_client: Cell::new(Size::default()),
         });
-        let work = work_area(owner, spec.start);
+        let work = work_area(owner, spec.start)?;
         let title = to_wide(&spec.title);
         let class = if spec.message_box {
             message_box_class()
@@ -2020,6 +2088,7 @@ pub fn run_modal(
     let Some(state) = form.state() else {
         return Ok(());
     };
+    let _modal = ModalWindow(MODAL_WINDOW.with(|m| m.replace(Some(form))));
     // Only restore an owner that this loop actually disabled.
     // SAFETY: Queries the owner window on the UI thread.
     if !owner.is_invalid() && unsafe { IsWindowEnabled(owner) }.as_bool() {
