@@ -1,0 +1,44 @@
+[
+  {
+    "adapter": { "name": "Mellanox ConnectX-4 Lx Ethernet Adapter", "product_name": "Mellanox ConnectX-4 Lx Ethernet Adapter", "device_id": "12", "adapter_type": "Ethernet 802.3", "pnp_device_id": "PCI\\VEN_15B3&DEV_1015\\5&4C7915D&0&0010", "guid": "{6eba2c67-791a-4cbd-bfaa-4b9bbfc438ad}", "mac": "EC:0D:9A:5E:72:C4", "physical": true },
+    "hardware_id": "PCI\\VEN_15B3&DEV_1015&SUBSYS_001615B3&REV_00",
+    "interface_guid": "6EBA2C67-791A-4CBD-BFAA-4B9BBFC438AD",
+    "permanent": [236, 13, 154, 94, 114, 180], "length": 6, "registry_overridden": false,
+    "expected": "Name: Mellanox ConnectX-4 Lx Ethernet Adapter\r\nProduct Name: Mellanox ConnectX-4 Lx Ethernet Adapter\r\nDevice ID: 12\r\nAdapter Type: Ethernet\r\nHardware ID: PCI\\VEN_15B3&DEV_1015&SUBSYS_001615B3&REV_00\r\nMAC Address (Overridden): EC:0D:9A:5E:72:C4\r\nPermanent MAC: EC:0D:9A:5E:72:B4\r\n"
+  },
+  {
+    "adapter": { "name": "Intel(R) Wi-Fi 6E AX210", "product_name": "Intel(R) Wi-Fi 6E AX210", "device_id": "4", "adapter_type": "Wireless 802.11", "pnp_device_id": "PCI\\VEN_8086&DEV_2725\\4&39171C6&0&00E4", "guid": "{a49c384d-bfeb-4d7d-86b8-9a6ce011837f}", "mac": "c8:7f:54:e4:13:92", "physical": true },
+    "hardware_id": null, "interface_guid": "a49c384d-bfeb-4d7d-86b8-9a6ce011837f",
+    "permanent": [200, 127, 84, 228, 19, 146], "length": 6, "registry_overridden": true,
+    "expected": "Name: Intel(R) Wi-Fi 6E AX210\r\nProduct Name: Intel(R) Wi-Fi 6E AX210\r\nDevice ID: 4\r\nAdapter Type: WiFi\r\nMAC Address: c8:7f:54:e4:13:92\r\nPermanent MAC: C8:7F:54:E4:13:92\r\n"
+  },
+  {
+    "adapter": { "name": "Mellanox ConnectX-3", "product_name": "Mellanox ConnectX-3", "device_id": "7", "adapter_type": "", "pnp_device_id": "MLX4\\CONNECTX3\\6&4E17B39&0&0001", "guid": null, "mac": "", "physical": null },
+    "hardware_id": null, "interface_guid": null, "permanent": [], "length": 0, "registry_overridden": false,
+    "expected": "Name: Mellanox ConnectX-3\r\nProduct Name: Mellanox ConnectX-3\r\nDevice ID: 7\r\nAdapter Type: Unknown\r\nMAC Address: \r\nPermanent MAC: Unavailable\r\n"
+  },
+  {
+    "adapter": { "name": "USB Ethernet Adapter", "product_name": "USB Ethernet Adapter", "device_id": "5", "adapter_type": "Ethernet 802.3", "pnp_device_id": "USB\\VID_0BDA&PID_8153\\4D9182736", "guid": "6eba2c67-791a-4cbd-bfaa-4b9bbfc438ad", "mac": "3C:2C:30:F7:89:54", "physical": true },
+    "hardware_id": null, "interface_guid": "a49c384d-bfeb-4d7d-86b8-9a6ce011837f",
+    "permanent": [200, 127, 84, 228, 19, 146], "length": 6, "registry_overridden": true,
+    "expected": "Name: USB Ethernet Adapter\r\nProduct Name: USB Ethernet Adapter\r\nDevice ID: 5\r\nAdapter Type: Ethernet\r\nMAC Address (Overridden): 3C:2C:30:F7:89:54\r\nPermanent MAC: Unavailable\r\n"
+  },
+  {
+    "adapter": { "name": "USB Ethernet Adapter", "product_name": "USB Ethernet Adapter", "device_id": "5", "adapter_type": "Ethernet 802.3", "pnp_device_id": "USB\\VID_0BDA&PID_8153\\4D9182736", "guid": "6eba2c67-791a-4cbd-bfaa-4b9bbfc438ad", "mac": "3C:2C:30:F7:89:54", "physical": true },
+    "hardware_id": null, "interface_guid": "6eba2c67-791a-4cbd-bfaa-4b9bbfc438ad",
+    "permanent": [60, 44, 48, 247, 137, 84], "length": 33, "registry_overridden": false,
+    "expected": "Name: USB Ethernet Adapter\r\nProduct Name: USB Ethernet Adapter\r\nDevice ID: 5\r\nAdapter Type: Ethernet\r\nMAC Address: 3C:2C:30:F7:89:54\r\nPermanent MAC: Unavailable\r\n"
+  },
+  {
+    "adapter": { "name": "Physical NDIS Adapter", "product_name": "PCI Ethernet Adapter", "device_id": "6", "adapter_type": "Ethernet 802.3", "pnp_device_id": "PCI\\VEN_8086&DEV_15F3\\4&361281B&0&00E0", "guid": null, "mac": "3C:FD:FE:64:19:82", "physical": true },
+    "hardware_id": null, "interface_guid": null, "permanent": [], "length": 0, "registry_overridden": false, "expected": ""
+  },
+  {
+    "adapter": { "name": "PCI Ethernet Adapter", "product_name": "PCI Ethernet Adapter", "device_id": "6", "adapter_type": "Ethernet 802.3", "pnp_device_id": "PCI\\VEN_8086&DEV_15F3\\4&361281B&0&00E0", "guid": null, "mac": "3C:FD:FE:64:19:82", "physical": false },
+    "hardware_id": null, "interface_guid": null, "permanent": [], "length": 0, "registry_overridden": false, "expected": ""
+  },
+  {
+    "adapter": { "name": "PCI Ethernet Adapter", "product_name": "PCI Ethernet Adapter", "device_id": "6", "adapter_type": "Ethernet 802.3", "pnp_device_id": "PCI\\VEN_8086&DEV_15F3\\4&361281B&0&00E0", "guid": null, "mac": null, "physical": true },
+    "hardware_id": null, "interface_guid": null, "permanent": [], "length": 0, "registry_overridden": false, "expected": ""
+  }
+]

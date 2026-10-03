@@ -1,0 +1,8 @@
+[
+  {
+    "output": "\r\nInterface: 192.0.2.3 --- 0x7\r\n  Internet Address      Physical Address      Type\r\n  192.0.2.100           3c-fd-fe-64-19-84     dynamic\r\n  192.0.2.2             ec-0d-9a-5e-72-b4     dynamic\r\n  192.0.2.255           ff-ff-ff-ff-ff-ff     static\r\n  224.0.0.22            01-00-5e-00-00-16     dynamic\r\n  192.0.2.9             3c-fd-fe-64-19-83     static\r\n  192.0.2.10            3c-fd-fe-64-19-85     Dynamic\r\n  192.0.2.11\t3c-fd-fe-64-19-86\tdynamic\r\n  dynamic-broken\r\n  192.0.2.12            3c-fd-fe-64-19-87     dynamic static\r\n",
+    "expected": "Dynamic ARP Entries:\r\nMAC: 3c:fd:fe:64:19:84 | IP: 192.0.2.100\r\nMAC: ec:0d:9a:5e:72:b4 | IP: 192.0.2.2\r\n"
+  },
+  { "output": "", "expected": "Status: No relevant dynamic ARP entries found.\r\n" },
+  { "output": "  192.0.2.1             3c-fd-fe-64-19-82     dynamisch\r\n", "expected": "Status: No relevant dynamic ARP entries found.\r\n" }
+]
