@@ -229,7 +229,7 @@ A hardware RAID subsystem exposes storage as logical units. Whether Windows can 
 
 Creating a Windows Storage Spaces virtual disk, changing the partition layout, or formatting a volume creates or changes identities at those layers. It does not by itself document a firmware change to member SSDs. Record and compare both the physical and virtual objects. **[A]**
 
-A reported anti-cheat issue dated 2026-08-16 involved RAID 0; see the [Reported anti-cheat status](../getting-started/getting-started.md#reported-anti-cheat-status).
+A reported anti-cheat issue involved RAID 0; see the [Reported anti-cheat status](../getting-started/getting-started.md#reported-anti-cheat-status). Whether anti-cheats still read member serials through an array is reported both ways; the reports conflict and none includes a versioned test.
 
 > [!NOTE]
 > Software/BIOS-based RAID0 is generally virtual and unsafe for HWID evasion.

@@ -239,6 +239,28 @@ AMI publishes Aptio firmware utilities, but public availability of a utility doe
 
 ## Reported anti-cheat status
 
+This table separates what each vendor states from what the community reports. Every cell carries its own grade. Requirements are current as of 2026-10-03.
+
+| Anti-cheat / game | Official hardware-ban statement | Current requirements (2026-10) | Vendor-disclosed identifier classes | Community-reported candidates | Spoofer-tool detection |
+|---|---|---|---|---|---|
+| EAC / Fortnite | Yes. Epic names hardware bans **[A]** | Game-dependent | Device identifiers and hardware/software specifications, no field list **[A]** | Rust/EOS sample: MAC, MBR disk signature, partition number, disk LUN **[C]** ([artifact](https://github.com/goldzik1/eac-eos-driver-analysis/blob/main/EVIDENCE.md)). Broader disk, SMBIOS, GPU, EDID, MachineGuid, NVRAM list **[S]** | Yes. Epic warns about tools that hide or change identifiers **[A]** |
+| EAC / Rust | No Rust vendor field formula. A 2026 ban on a freshly reinstalled used PC is reported **[S]** | TPM 2.0 + Secure Boot on Secure servers, expanding in October 2026, not global yet **[A]** | Same Epic categories **[A]** | Same Rust/EOS sample **[C]**. RAID 0 physical-serial claim: no confirmation found | Yes, at the EAC tool level **[A]** |
+| BattlEye | Game- or publisher-specific, not universal **[A]** | No product-wide requirement found | Hardware identifiers including serial numbers, IP and account, processes, drivers, executable code **[A]** | CPUID, SMBIOS, disk, MAC, GPU lists **[S]** | Yes. Collects processes, drivers, and executable code **[A]** |
+| Vanguard / VALORANT | Yes. VAN 152 is a hardware-ID ban **[A]** | May require TPM 2.0, Secure Boot, IOMMU, VBS/HVCI by configuration. Pre-Check baseline: Windows 11 25H2 + TPM 2.0 + Secure Boot + IOMMU + VBS + HVCI **[A]** | Unique device IDs, manufacturer, model, specifications **[A]** | Disk, SMBIOS, TPM, MachineGuid, GPT, EDID, UEFI **[S]** | Yes. Validates memory and system state **[A]** |
+| FACEIT / CS2 | Hardware/device IDs used for ban-evasion and multi-account review **[A]** | TPM 2.0 for all players since 2025-11-25, with Secure Boot. IOMMU/VBS for about 60% of players and all above 3,000 Elo, still expanding **[A]** | Device-identifying information, processes, boot-chain and memory integrity **[A]** | No artifact-backed field list found | Yes. Bans cheat loaders, drivers, bypass attempts, and VMs **[A]** |
+| RICOCHET / Black Ops 7, Warzone | Yes. Cross-title hardware bans **[A]** | TPM 2.0 + Secure Boot + Microsoft Azure Attestation. Failed checks reduce playlists **[A]** | Hardware/software information and identifying device/process information, no field list **[A]** | Motherboard, CPU, GPU, disk, MAC, TPM claims **[S]** | Yes. The September 2026 post targets spoofers and evasion tools **[A]** |
+| ACE / Delta Force | Yes. Hardware bans are an opt-in option for game developers **[A]** | Delta Force: TPM 2.0 + Secure Boot **[A]** | MAC and NIC metadata, disk serial/model/firmware/GUID, MBR/GPT hash, display, OS, RAM, CPU, system hashes. The game developer picks the optional fields **[A]** | The vendor list is already more precise. Per-title use varies | Yes. Driver signatures, suspicious DLL/SYS paths, processes, registry, file traces **[A]** |
+| EA Javelin / Battlefield 6 | No device-ban statement found. EA reports account bans | Secure Boot required. Strict TPM 2.0 since 2026-08-31 **[A]** | Hardware identifiers, machine-component fingerprint/hash, peripheral hardware **[A]** | No artifact-backed field list found | Yes. Prohibited software/hardware, vulnerable drivers, spoofed compliance **[A]** |
+| VAC | No vendor hardware-ban statement. Enforcement is account-oriented **[A]** | No requirement in VAC docs | Valve platform device IDs, not a VAC ban formula **[A]** | Community claims conflict **[S]** | Detects identifiable cheats. Valve says hardware configuration does not trigger a VAC ban **[A]** |
+
+Grades in this table: **[A]** is a statement in a cited vendor document, **[C]** is community evidence with an inspectable artifact, **[S]** is a claim without such an artifact. "No confirmation found" means no reliable public source supports the claim.
+
+Reported identifiers are observations or claims, not a guaranteed checklist. Anti-cheat vendors can change fields and weights without notice. **[C]** means a versioned trace, binary, log, screenshot, or controlled result was inspectable. Field lists without those artifacts stay **[S]**. Permanent hardware and firmware changes leave no resident spoofing hook, but no vendor promises that a changed machine state will be accepted or unlinkable.
+
+The requirements column lists platform settings, not spoofing steps. **dTPM** is a discrete TPM module: a separate chip with its own endorsement identity, unlike a firmware TPM. **Secure Boot** is the UEFI feature that allows only signed boot loaders; the reported setups run with it on. **IOMMU** (Intel VT-d, AMD-Vi) is the processor feature that controls how devices access memory; the reported setups run with it on too. See [TPM implementation types](../tpm-spoofing/tpm-spoofing.md#tpm-implementation-types) for the dTPM-versus-fTPM difference. **[S]**
+
+<details><summary>Older info (outdated)</summary>
+
 These statuses are community-reported. This project has not verified them. Every row is **[S]**. The date is the date of the last reported issue, not a re-test.
 
 | Game(s) | Anti-cheat | Reported status | Last reported issue | Reported requirements |
@@ -249,7 +271,7 @@ These statuses are community-reported. This project has not verified them. Every
 | Any | EA Javelin | Undetected | none listed | dTPM, Secure Boot |
 | Any | Tencent ACE | Undetected | none listed | dTPM, Secure Boot, IOMMU |
 
-The reported requirements are platform settings, not spoofing steps. **dTPM** is a discrete TPM module: a separate chip with its own endorsement identity, unlike a firmware TPM. **Secure Boot** is the UEFI feature that allows only signed boot loaders; the reported setups run with it on. **IOMMU** (Intel VT-d, AMD-Vi) is the processor feature that controls how devices access memory; the reported setups run with it on too. See [TPM implementation types](../tpm-spoofing/tpm-spoofing.md#tpm-implementation-types) for the dTPM-versus-fTPM difference. **[S]**
+</details>
 
 ## Sources
 
@@ -267,3 +289,17 @@ The reported requirements are platform settings, not spoofing steps. **dTPM** is
 - [Microsoft Q&A: choosing a machine identifier](https://learn.microsoft.com/en-us/answers/questions/5762504/unique-id-of-machine) (supporting context, not a Windows product specification)
 - [AMI Aptio Utilities](https://www.ami.com/resources/aptio-utilities/)
 - [HWIDChecker hardware providers](https://github.com/Fundryi/HWID-Privacy/tree/main/app/src/Hardware) and [Windows batch scripts](https://github.com/Fundryi/HWID-Privacy/tree/main/app/scripts)
+- [Riot: error VAN 152](https://support.riotgames.com/en-us/riot/performance/error-van-152/)
+- [Riot: Vanguard security requirements](https://support.riotgames.com/en-us/riot/performance/vanguard-security-requirements)
+- [Riot: Vanguard Pre-Check](https://support.riotgames.com/en-us/riot/performance/vanguard-pre-check)
+- [FACEIT: Windows Security Requirements FAQ](https://support.faceit.com/hc/en-us/articles/23117181142556-Windows-Security-Requirements-FAQ)
+- [FACEIT: Known issues with Anti-Cheat requirements](https://support.faceit.com/hc/en-us/articles/22851956652956-Known-issues-with-Anti-Cheat-Requirements)
+- [Call of Duty: RICOCHET, taking on the cheating ecosystem (September 2026)](https://www.callofduty.com/blog/2026/09/ricochet-taking-on-the-cheating-ecosystem)
+- [Activision: Call of Duty security and enforcement policy](https://support.activision.com/uk/en/articles/call-of-duty-security-and-enforcement-policy)
+- [ACE: PC privacy protocol (PDF)](https://down.anticheatexpert.com/docs/ACE-files/wsa/privacy_protocol.pdf)
+- [EA: Battlefield 6 Season 4 anti-cheat update](https://www.ea.com/games/battlefield/battlefield-6/news/battlefield-6-anticheat-update-season-4)
+- [Facepunch: Rust March 2026 update](https://rust.facepunch.com/news/shipshape) and [October 2026 update](https://rust.facepunch.com/news/livestock)
+- [BattlEye privacy policy](https://www.battleye.com/privacy-policy/)
+- [Epic Games: hardware identifiers help page](https://www.epicgames.com/help/c-34254770/c-40491939/a12518314?lang=en-US)
+- [Steam Support: Valve Anti-Cheat (VAC)](https://help.steampowered.com/en/faqs/view/571A-97DA-70E9-FF74)
+- [EAC/EOS driver analysis evidence (community artifact)](https://github.com/goldzik1/eac-eos-driver-analysis/blob/main/EVIDENCE.md)

@@ -4,9 +4,15 @@
 > **TL;DR:** The TPM carries its own endorsement identity (EK, EK certificate) that survives Windows reinstalls and TPM clears. This guide explains what that identity is, what changes it, and what does not.
 > Who reads it: Windows, BitLocker, and any attestation-based check that validates the EK certificate chain.
 > **Status:** identity model verified against TCG and Microsoft sources **[A]**. The fTPM flash-button method was tested on one MSI Z790 board **[C]**.
-> **Warning**: dTPM is flagged by some strict telemetry stacks (e.g., 🍊).
+> **Warning**: dTPM support is product-specific. A faulty dTPM can fail attestation; FACEIT documents this and suggests fTPM as the fix. **[A]** Call of Duty's TPM requirements explicitly list systems with a discrete TPM chip as supported. **[A]** Blanket "dTPM is flagged" rules (e.g., 🍊) are community reports, not vendor statements. **[S]**
 > **Current recommendation**: use **fTPM** for 🍊/🍒.
+
+<details><summary>Older info (outdated)</summary>
+
+> **Warning**: dTPM is flagged by some strict telemetry stacks (e.g., 🍊).
 > Since 2025-04-04, 🍒 enforces **fTPM** if you're flagged; dTPM no longer works there.
+
+</details>
 
 Evidence grades appear inline. See [How to read these guides](../getting-started/getting-started.md#how-to-read-these-guides). **[A]** means verified against the linked specification, Microsoft documentation, vendor documentation, or this repository's source.
 
@@ -100,7 +106,7 @@ Save the complete before-and-after output, but use the PowerShell certificate co
       - Dedicated USB Flash port
       - BIOS Flash Button
         - Tested: MSI Z790
-        - Should work with all Intel boards since the 11th-generation release, when the EK went offline.
+        - Other Intel boards from the 11th generation onward are untested. One MSI Z790 report only; the mechanism is unknown. Intel documents on-die EK certificate provisioning from CSME 15 (11th generation), not an offline EK. **[A]**
 <details>
   <summary>Intel Forum Confirmation</summary>
 
@@ -114,9 +120,17 @@ Save the complete before-and-after output, but use the PowerShell certificate co
   - Place the BIOS file on the USB stick, then insert it into the designated flash USB port.
     - Each vendor has a different flash process; follow official documentation closely to avoid a bad flash.
   - Press the Flash Button and let it rewrite motherboard sectors.
-  - This regenerates the fTPM seed
-  - Results in a *new, unique fTPM serial* signed by EK
+  - Reported outcome: the fTPM seed regenerates
+  - Reported outcome: a *new, unique fTPM serial*. The "signed by EK" description is not a verified mechanism.
 - **Note**: doesn't work on AMD boards
+
+<details><summary>Older info (outdated)</summary>
+
+- Should work with all Intel boards since the 11th-generation release, when the EK went offline.
+- This regenerates the fTPM seed
+- Results in a *new, unique fTPM serial* signed by EK
+
+</details>
 
 > [!WARNING]
 > The MSI Z790 result is **[C]** for that board only. Intel documents an on-die certificate-authority design for CSME 15 and later, not an "offline EK." Do not use this procedure on another board without board-specific evidence. See [Firmware updates and EK continuity](#firmware-updates-and-ek-continuity) and the [generation-specific Intel findings](../resets/ftpm-reset-tutorial.md#intel-z790-vs-z790-era-method-vs-z890).

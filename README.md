@@ -5,7 +5,7 @@
 
 > **Read it as a website:** [hwid.idkzal.cc](https://hwid.idkzal.cc)
 > **New here?** Start with [Getting Started](guides/getting-started/getting-started.md): what an HWID is, the order of work, and how to check before and after.
-> **Anti-cheats:** see the [Reported anti-cheat status](guides/getting-started/getting-started.md#reported-anti-cheat-status) (community-reported, not verified here).
+> **Anti-cheats:** see the [Reported anti-cheat status](guides/getting-started/getting-started.md#reported-anti-cheat-status) (evidence matrix: vendor statements, artifact-backed reports, and unverified claims, graded).
 
 ---
 
@@ -78,18 +78,25 @@ Rewrites the controller-reported model, serial, and firmware of supported SSDs. 
   - [NORMAL 2.5' SSD Spoofing](guides/ssd-spoofing/ssd-spoofing.md#normal-25-ssd-spoofing)
 
 > Modifying these drives can void warranties.  
-> Software/BIOS-based RAID0 is generally virtual and unsafe for HWID evasion.
-
-#### Hardware RAID
-
-- **Why**: A hardware RAID controller hides member-drive serials from the OS only if the controller and its driver do not pass them through. A reported issue dated 2026-08-16 involved RAID 0; see [Reported anti-cheat status](guides/getting-started/getting-started.md#reported-anti-cheat-status) and [RAID, disk identity, and volume identity](guides/ssd-spoofing/ssd-spoofing.md#raid-disk-identity-and-volume-identity) in the storage guide.
-- **Examples**:
-  - **S322M225R** (for M.2 drives).
-  - **LSI/MegaRAID** models for SATA/SAS drives.
-- **Note**: True hardware RAID tends to cost more, but it helps mask original drive identifiers on a lower level.
+> RAID behavior depends on the controller. The logical array identity, and whether member-drive serials pass through, depend on the exact controller, firmware, and driver. Neither hardware RAID nor software/BIOS RAID is established as an accepted identity-change method.
 
 <details><summary>Older info (outdated)</summary>
 
+> Software/BIOS-based RAID0 is generally virtual and unsafe for HWID evasion.
+
+</details>
+
+#### Hardware RAID
+
+- **Why**: A hardware RAID controller hides member-drive serials from the OS only if the controller and its driver do not pass them through. Whether a given anti-cheat still reads member serials through an array is reported both ways; the reports conflict and none includes a versioned test. Controller-level spoofing (above) changes the serial itself and does not depend on this. See [Reported anti-cheat status](guides/getting-started/getting-started.md#reported-anti-cheat-status) and [RAID, disk identity, and volume identity](guides/ssd-spoofing/ssd-spoofing.md#raid-disk-identity-and-volume-identity) in the storage guide.
+- **Examples**:
+  - **S322M225R** (for M.2 drives).
+  - **LSI/MegaRAID** models for SATA/SAS drives.
+- **Note**: True hardware RAID tends to cost more. Whether it masks member-drive identifiers depends on the controller, its firmware, and its driver. Check pass-through on your exact controller before you rely on it.
+
+<details><summary>Older info (outdated)</summary>
+
+- **Note**: True hardware RAID tends to cost more, but it helps mask original drive identifiers on a lower level.
 - **Why**: A proper hardware RAID controller prevents the OS (and fingerprinting agents) from querying individual drive serials.
 
 </details>
@@ -104,6 +111,7 @@ Changes the MAC address the network sees. A Windows `NetworkAddress` override is
 
 - **Complete Guide**: [MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md)
 - **Internal NICs**: Permanent changes possible for Intel, Realtek, and Mellanox:
+  - Intel i225 from NVM 1.53 and all i226 versions lock the NVM after a unique MAC is provisioned and the card is power-cycled. Retail i226 is normally already provisioned once, so it is not repeatably rewritable. **[A]** ([Intel Community](https://community.intel.com/t5/Embedded-Connectivity/i226-v-issue-with-eeupdate/td-p/1502910))
   - [Intel NIC MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#intel-nics)
   - [Realtek NIC MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#realtek-nics)
   - [Mellanox ConnectX-3 MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#mellanox-connectx-3-cx311a--mcx311a-xcat) - firmware-level, repeatable, 10 Gbps SFP+
@@ -118,12 +126,20 @@ Changes the MAC address the network sees. A Windows `NetworkAddress` override is
 
 ### 4. **GPU**
 
-No verified persistent-change method for current cards. NVIDIA exposes a UUID through `nvidia-smi`; AMD has no publicly documented UUID.
+No verified persistent-change method for current cards. Both vendors document a per-unit GPU ID. Which ID a program can read depends on the card, the driver, and the OS.
 
 - **NVIDIA**: UUID accessible via `nvidia-smi`.
   - **No stable public spoofing guide** is widely known. Advanced driver-level hooking may exist, but it's risky and can be flagged.
-  - NVIDIA GPU UUIDs are not always globally unique, but they can still be used for correlation.
+  - NVIDIA defines the GPU UUID as globally unique and immutable. It also exposes a 64-bit per-device ID (PDI) and, on supported products, a board serial. **[A]** ([nvidia-smi documentation](https://docs.nvidia.com/deploy/nvidia-smi/index.html))
+- **AMD**: The Linux AMDGPU driver exposes a persistent `unique_id` on supported GFX9+ GPUs. AMD SMI exposes `amdsmi_get_gpu_device_uuid()` and an ASIC serial, and ROCm SMI has `--showuniqueid`. Support depends on the device and platform; unsupported cards return N/A. **[A]** ([AMDGPU docs](https://docs.kernel.org/gpu/amdgpu/driver-misc.html), [AMD SMI header](https://github.com/ROCm/amdsmi/blob/amd-mainline/include/amd_smi/amdsmi.h))
+
+<details><summary>Older info (outdated)</summary>
+
+- AMD has no publicly documented UUID.
+- NVIDIA GPU UUIDs are not always globally unique, but they can still be used for correlation.
 - **AMD**: No publicly documented UUID. Generally seen as safer for HWID privacy.
+
+</details>
 
 ---
 
@@ -143,13 +159,24 @@ RAM modules carry a serial in SPD storage. Modules that ship with null serials n
 
 Keyboards, mice, and sticks expose USB serials that fingerprinting stacks can read directly from the protocol. Registry edits do not hide them.
 
-- **Keyboards/Mice**:
-  - Roccat (now Turtleshell), Xtrfy models and "all" Razer products should not have USB serials.
-- **USB Sticks**: Some “UDisk” drives default to `00000000`
+- **Keyboards/Mice**: Serial behavior is per model and per connection mode, not per brand. Check the exact VID:PID.
+  - Razer DeathAdder V3 wired (`1532:00b2`): `SerialNumber=0`, so no serial descriptor. One log. **[S]** ([log](https://lists.debian.org/debian-kernel/2026/04/msg00244.html))
+  - Razer DeathAdder V3 Pro wired (`1532:00b7`): serial string `000000000000`. The descriptor exists but is zero-filled and not unique. One log. **[S]** ([log](https://paste.cachyos.org/p/7c49eed.log))
+  - Razer HyperPolling receiver (`1532:00c3`): `SerialNumber=0`. One log. **[S]** ([OpenRazer issue](https://github.com/openrazer/openrazer/issues/2547))
+  - The printed warranty serial on the product is a separate ID. It does not tell you whether a USB serial descriptor exists. **[A]** ([Razer support](https://mysupport.razer.com/app/answers/detail/a_id/548/))
+  - No current per-model evidence exists for ROCCAT, whose product lines moved to Turtle Beach, or for Xtrfy.
+- **USB Sticks**: Some “UDisk” drives default to `00000000`. This is an unverified historical report. **[S]**
   - Verify with **USBDeview**.
 - **Avoid**: Devices with hardcoded hardware serials you cannot edit.
-  - Don't trust software claiming to hide USB serials via registry edits; those methods are useless.
+  - Don't trust software claiming to hide USB serials via registry edits. Windows `IgnoreHWSerNum` only changes how Windows builds the PnP instance ID. It does not change the device's descriptor serial, which a program can still request at the protocol level. **[A]** ([Microsoft](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/usb-device-specific-registry-settings))
   - Any advanced fingerprinting stack can pull serials directly from the USB protocol. Registry changes do not hide that data. You can validate this yourself: hide USB devices in the registry, then inspect traffic with a USB debugger; the serials still appear.
+
+<details><summary>Older info (outdated)</summary>
+
+- Roccat (now Turtleshell), Xtrfy models and "all" Razer products should not have USB serials.
+- Don't trust software claiming to hide USB serials via registry edits; those methods are useless.
+
+</details>
 
 ---
 
@@ -203,9 +230,15 @@ The TPM carries its own endorsement identity (EK, EK certificate). Clearing the 
 
 - **Complete Guide**: [TPM Spoofing Guide](guides/tpm-spoofing/tpm-spoofing.md)
 - **fTPM identity reset (AMD AM5)**: [fTPM Reset Guide](guides/resets/ftpm-reset-tutorial.md)
-- **Warning**: dTPM is flagged by some strict telemetry stacks (e.g., 🍊).
+- **Warning**: dTPM support is product-specific. A faulty dTPM can fail attestation; FACEIT documents this and suggests fTPM as the fix. **[A]** Call of Duty's TPM requirements explicitly list systems with a discrete TPM chip as supported. **[A]** Blanket "dTPM is flagged" rules (e.g., 🍊) are community reports, not vendor statements. **[S]**
 - **Current Recommendation**: Use **fTPM** for 🍊/🍒.
+
+<details><summary>Older info (outdated)</summary>
+
+- **Warning**: dTPM is flagged by some strict telemetry stacks (e.g., 🍊).
   - Since 2025-04-04, 🍒 enforces **fTPM** if you’re flagged; dTPM no longer works there.
+
+</details>
 
 ---
 
