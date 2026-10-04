@@ -79,7 +79,7 @@ fn format_capacity(bytes: u64) -> String {
 fn write_table(modules: &[RamModule], out: &mut Out) {
     // C# parity: Hardware/RamInfo.cs:29. The empty result has no table header.
     if modules.is_empty() {
-        out.text("No RAM modules detected.");
+        out.text("No RAM modules detected.").trim_end();
         return;
     }
     // C# parity: Hardware/RamInfo.cs:32-46. Widths use data, not the headers.
@@ -161,7 +161,7 @@ mod tests {
         assert_eq!(section.ids, ["7C3E91A2", "24B7D19F    "]);
         let mut empty = Out::new();
         write_table(&[], &mut empty);
-        assert_eq!(empty.finish().body, "No RAM modules detected.\r\n");
+        assert_eq!(empty.finish().body, "No RAM modules detected.");
     }
 
     #[test]

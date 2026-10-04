@@ -33,7 +33,8 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     let rows = wmi::query(Namespace::Cimv2, "SELECT * FROM Win32_DiskDrive")?;
     out.source("WMI (Win32_DiskDrive)");
     if rows.is_empty() {
-        out.text("No disk drives detected.");
+        // C# parity: Hardware/DiskDriveInfo.cs:42. The empty body has no final CRLF.
+        out.text("No disk drives detected.").trim_end();
         return Ok(());
     }
     let mut sources = vec!["WMI (Win32_DiskDrive)"];

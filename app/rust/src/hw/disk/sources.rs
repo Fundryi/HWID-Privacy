@@ -52,7 +52,8 @@ pub(super) fn logical_drives(
                     }
                     Err(error) => {
                         out.fallback_failed(&format!("WMI volume {letter}:"), &error);
-                        failures.push(format!("Drive {letter}: {error}"));
+                        // AD-46: C# loses the section when this association query fails.
+                        failures.push(format!("Drive {letter}: Unavailable ({error})"));
                     }
                 }
             }
