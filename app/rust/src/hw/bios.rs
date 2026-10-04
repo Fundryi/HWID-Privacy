@@ -19,11 +19,45 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             &format!("SELECT {} FROM {class}", names.join(", ")),
         )
     });
+    if let Some(smbios) = smbios {
+        append_components(smbios, out);
+    }
     // AD-03: show the firmware failure when WMI supplies no replacement values.
     if !has_information && let Some(error) = firmware_error {
         return Err(error);
     }
     Ok(())
+}
+
+fn append_components(smbios: &Smbios, out: &mut Out) {
+    let mut components = win::firmware::firmware_components(smbios);
+    components.retain(|component| {
+        metadata_record_has_values(
+            out,
+            "Firmware Component",
+            Some(component.handle),
+            &[
+                &component.name,
+                &component.version,
+                &component.id,
+                &component.date,
+            ],
+        )
+    });
+    for (index, component) in components.iter().enumerate() {
+        if components.len() >= 2 {
+            out.text(&format!("Firmware Component #{} (SMBIOS)", index + 1));
+        }
+        for (label, value) in [
+            ("Component Name (SMBIOS)", &component.name),
+            ("Component Version (SMBIOS)", &component.version),
+            ("Component ID (SMBIOS)", &component.id),
+            ("Component Release Date (SMBIOS)", &component.date),
+        ] {
+            // SMBIOS firmware IDs identify components/releases, not individual machines.
+            write_metadata_field(out, label, false, value);
+        }
+    }
 }
 
 fn collect_with(
@@ -243,6 +277,52 @@ fn write_information(
     }
 }
 
+/// Appends independent optional firmware fields without changing legacy output.
+pub(super) fn metadata_record_has_values(
+    out: &mut Out,
+    kind: &str,
+    handle: Option<u16>,
+    fields: &[&win::Result<Option<String>>],
+) -> bool {
+    let printable = fields
+        .iter()
+        .any(|field| matches!(field, Ok(Some(value)) if useful_new_value(value)));
+    if !printable {
+        let source = match handle {
+            Some(handle) => format!("{kind} (SMBIOS handle 0x{handle:04X})"),
+            None => format!("{kind} (SMBIOS)"),
+        };
+        out.fallback_failed(
+            &source,
+            &win::Error::msg("SMBIOS metadata", "record has no printable fields"),
+        );
+    }
+    printable
+}
+
+/// Keeps independent malformed-field statuses in otherwise printable records.
+pub(super) fn write_metadata_field(
+    out: &mut Out,
+    label: &str,
+    identity: bool,
+    value: &win::Result<Option<String>>,
+) {
+    match value {
+        Ok(Some(value)) if useful_new_value(value) => {
+            if identity {
+                out.id(label, value);
+            } else {
+                out.info(label, value);
+            }
+        }
+        Err(error) => {
+            out.fallback_failed(label, error)
+                .info(label, &format!("Unavailable ({error})"));
+        }
+        _ => {}
+    }
+}
+
 /// Filters only optional new firmware fields; legacy values remain byte-identical.
 pub(super) fn useful_new_value(value: &str) -> bool {
     if value.chars().any(char::is_control) {
@@ -277,6 +357,52 @@ pub(super) fn useful_new_value(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn component_rendering_omits_empty_handles_and_retains_independent_context() {
+        let mut record = win::firmware::Structure {
+            kind: 45,
+            handle: 0x4501,
+            formatted: vec![0; 10],
+            strings: vec!["System Firmware".into(), "2802".into()],
+        };
+        let mut table = Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record.clone()],
+        };
+        let mut out = Out::new();
+        append_components(&table, &mut out);
+        let empty = out.finish();
+        assert!(empty.body.is_empty());
+        assert_eq!(empty.failures.len(), 1);
+        assert!(empty.failures[0].contains("0x4501"));
+        record.formatted[4] = 1;
+        record.formatted[5] = 2;
+        record.formatted[7] = 255;
+        table.structures.push(record.clone());
+        let mut out = Out::new();
+        append_components(&table, &mut out);
+        let single = out.finish();
+        assert!(
+            single
+                .body
+                .starts_with("Component Name (SMBIOS): System Firmware\r\n")
+        );
+        assert!(single.body.contains("Component ID (SMBIOS): Unavailable ("));
+        assert!(!single.body.contains("0x4501"));
+        assert!(single.ids.is_empty());
+        table.structures.push(record);
+        let mut out = Out::new();
+        append_components(&table, &mut out);
+        let multiple = out.finish();
+        assert!(
+            multiple
+                .body
+                .starts_with("Firmware Component #1 (SMBIOS)\r\n")
+        );
+        assert!(multiple.body.contains("Firmware Component #2 (SMBIOS)\r\n"));
+    }
 
     fn fixture() -> Smbios {
         let raw: Vec<u8> = include_str!("../../tests/fixtures/wp-02/smbios.hex")

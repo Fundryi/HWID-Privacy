@@ -258,6 +258,170 @@ pub fn battery_date(year: u16, month: u8, day: u8) -> Result<String> {
     Ok(format!("{year:04}-{month:02}-{day:02}"))
 }
 
+/// Per-socket context from type 4, separate from the legacy processor identity.
+pub struct ProcessorMetadata {
+    pub handle: u16,
+    pub socket: Result<Option<String>>,
+    pub manufacturer: Result<Option<String>>,
+    pub part: Result<Option<String>>,
+    pub asset: Result<Option<String>>,
+}
+
+pub fn processor_metadata(table: &Smbios) -> Vec<ProcessorMetadata> {
+    table
+        .structures
+        .iter()
+        .filter(|record| record.kind == 4)
+        .map(|record| {
+            // Asset/part fields were introduced in SMBIOS 2.3.
+            let optional = |offset| {
+                if (table.major, table.minor) < (2, 3) {
+                    Ok(None)
+                } else {
+                    metadata_string(record, offset)
+                }
+            };
+            ProcessorMetadata {
+                handle: record.handle,
+                socket: metadata_string(record, 4),
+                manufacturer: metadata_string(record, 7),
+                part: optional(0x22),
+                asset: optional(0x21),
+            }
+        })
+        .collect()
+}
+
+/// Each type-39 record retains independently decoded identity/context fields.
+pub struct PowerSupply {
+    pub manufacturer: Result<Option<String>>,
+    pub model: Result<Option<String>>,
+    pub revision: Result<Option<String>>,
+    pub serial: Result<Option<String>>,
+    pub asset: Result<Option<String>>,
+}
+
+pub fn power_supplies(table: &Smbios) -> Vec<PowerSupply> {
+    table
+        .structures
+        .iter()
+        .filter(|record| record.kind == 39)
+        .map(|record| PowerSupply {
+            manufacturer: metadata_string(record, 7),
+            model: metadata_string(record, 0x0A),
+            revision: metadata_string(record, 0x0B),
+            serial: metadata_string(record, 8),
+            asset: metadata_string(record, 9),
+        })
+        .collect()
+}
+
+/// Firmware-published TPM context; none of these fields is a per-unit identity.
+pub struct TpmDevice {
+    pub handle: u16,
+    pub vendor: Result<Option<String>>,
+    pub spec: Result<(u8, u8)>,
+    pub firmware1: Result<u32>,
+    pub firmware2: Result<u32>,
+    pub description: Result<Option<String>>,
+    pub characteristics: Result<u64>,
+}
+
+pub fn tpm_devices(table: &Smbios) -> Vec<TpmDevice> {
+    table
+        .structures
+        .iter()
+        .filter(|record| record.kind == 43)
+        .map(|record| TpmDevice {
+            handle: record.handle,
+            vendor: tpm_vendor(record),
+            spec: record
+                .byte(8)
+                .zip(record.byte(9))
+                .ok_or_else(|| metadata_error("truncated TPM specification version"))
+                .and_then(|version| {
+                    if version.0 == 0 {
+                        Err(metadata_error("invalid TPM specification version"))
+                    } else {
+                        Ok(version)
+                    }
+                }),
+            firmware1: record
+                .dword(0x0A)
+                .ok_or_else(|| metadata_error("truncated TPM firmware version 1")),
+            firmware2: record
+                .dword(0x0E)
+                .ok_or_else(|| metadata_error("truncated TPM firmware version 2")),
+            description: metadata_string(record, 0x12),
+            characteristics: record
+                .qword(0x13)
+                .ok_or_else(|| metadata_error("truncated TPM characteristics")),
+        })
+        .collect()
+}
+
+fn tpm_vendor(record: &Structure) -> Result<Option<String>> {
+    let bytes = record
+        .formatted
+        .get(4..8)
+        .ok_or_else(|| metadata_error("truncated TPM vendor ID"))?;
+    let end = bytes.iter().position(|byte| *byte == 0).unwrap_or(4);
+    if bytes[..end]
+        .iter()
+        .any(|byte| !byte.is_ascii_graphic() && *byte != b' ')
+        || bytes[end..].iter().any(|byte| *byte != 0)
+    {
+        return Err(metadata_error("malformed TPM vendor ID"));
+    }
+    let value: String = bytes[..end].iter().copied().map(char::from).collect();
+    Ok((!value.trim().is_empty()).then(|| value.trim().to_owned()))
+}
+
+/// Type-45 values describe firmware components, not the machine's identity.
+pub struct FirmwareComponent {
+    pub handle: u16,
+    pub name: Result<Option<String>>,
+    pub version: Result<Option<String>>,
+    pub id: Result<Option<String>>,
+    pub date: Result<Option<String>>,
+}
+
+pub fn firmware_components(table: &Smbios) -> Vec<FirmwareComponent> {
+    table
+        .structures
+        .iter()
+        .filter(|record| record.kind == 45)
+        .map(|record| FirmwareComponent {
+            handle: record.handle,
+            name: metadata_string(record, 4),
+            version: metadata_string(record, 5),
+            id: metadata_string(record, 7),
+            date: metadata_string(record, 9),
+        })
+        .collect()
+}
+
+fn metadata_error(detail: &'static str) -> Error {
+    Error::msg("SMBIOS metadata", detail)
+}
+
+fn metadata_string(record: &Structure, offset: usize) -> Result<Option<String>> {
+    let index = record
+        .byte(offset)
+        .ok_or_else(|| metadata_error("truncated string index"))?;
+    if index == 0 {
+        return Ok(None);
+    }
+    let value = record
+        .strings
+        .get(usize::from(index) - 1)
+        .ok_or_else(|| metadata_error("string index outside string table"))?;
+    if value.chars().any(char::is_control) {
+        return Err(metadata_error("control character in string"));
+    }
+    Ok((!value.trim().is_empty()).then(|| value.trim().to_owned()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +430,257 @@ mod tests {
     const TRUNCATED: &str = include_str!("../../tests/fixtures/phase1-smbios/truncated-last.hex");
     const REPEATED: &str = include_str!("../../tests/fixtures/phase1-smbios/repeated-types.hex");
     const INDEXES: &str = include_str!("../../tests/fixtures/phase1-smbios/string-indexes.hex");
+
+    #[test]
+    fn type4_metadata_keeps_handles_optional_version_fields_and_partial_strings() {
+        let mut record = Structure {
+            kind: 4,
+            handle: 0x0401,
+            formatted: vec![0; 0x23],
+            strings: [
+                "CPU1",
+                "Intel(R) Corporation",
+                "BX8071512700K",
+                "CPU-INV-2418",
+            ]
+            .map(String::from)
+            .to_vec(),
+        };
+        for (offset, index) in [(4, 1), (7, 2), (0x22, 3), (0x21, 4)] {
+            record.formatted[offset] = index;
+        }
+        let mut table = Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record.clone()],
+        };
+        let first = processor_metadata(&table).remove(0);
+        assert_eq!(first.handle, 0x0401);
+        assert_eq!(first.socket.unwrap().as_deref(), Some("CPU1"));
+        assert_eq!(
+            first.manufacturer.unwrap().as_deref(),
+            Some("Intel(R) Corporation")
+        );
+        assert_eq!(first.part.unwrap().as_deref(), Some("BX8071512700K"));
+        assert_eq!(first.asset.unwrap().as_deref(), Some("CPU-INV-2418"));
+        record.handle = 0x0402;
+        record.formatted[0x21] = 255;
+        table.structures.push(record.clone());
+        let records = processor_metadata(&table);
+        assert_eq!(
+            records.iter().map(|r| r.handle).collect::<Vec<_>>(),
+            [0x0401, 0x0402]
+        );
+        assert!(records[1].asset.is_err());
+        assert!(records[1].part.is_ok());
+        for end in 0..0x23 {
+            record.formatted.truncate(end);
+            let mut short = table.clone();
+            short.structures = vec![record.clone()];
+            let value = processor_metadata(&short).remove(0);
+            assert_eq!(value.socket.is_ok(), end > 4);
+            assert_eq!(value.manufacturer.is_ok(), end > 7);
+            assert!(value.part.is_err());
+            record = table.structures[0].clone();
+        }
+        table.major = 2;
+        table.minor = 2;
+        table.structures[0].formatted.truncate(0x20);
+        let old = processor_metadata(&table).remove(0);
+        assert!(old.part.unwrap().is_none());
+        assert!(old.asset.unwrap().is_none());
+        assert!(old.socket.unwrap().is_some());
+    }
+
+    #[test]
+    fn type39_power_supply_offsets_bounds_and_bad_strings_are_independent() {
+        let mut record = Structure {
+            kind: 39,
+            handle: 0x3901,
+            formatted: vec![0; 0x16],
+            strings: [
+                "Delta Electronics",
+                "DPS-750AB-12",
+                "A01",
+                "PSU2418K73196",
+                "INV-PSU-2418",
+            ]
+            .map(String::from)
+            .to_vec(),
+        };
+        record.formatted[7..12].copy_from_slice(&[1, 4, 5, 2, 3]);
+        let table = |record: Structure| Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record],
+        };
+        let supply = power_supplies(&table(record.clone())).remove(0);
+        let mut repeated = table(record.clone());
+        repeated.structures.push(record.clone());
+        assert_eq!(power_supplies(&repeated).len(), 2);
+        assert_eq!(
+            supply.manufacturer.unwrap().as_deref(),
+            Some("Delta Electronics")
+        );
+        assert_eq!(supply.model.unwrap().as_deref(), Some("DPS-750AB-12"));
+        assert_eq!(supply.revision.unwrap().as_deref(), Some("A01"));
+        assert_eq!(supply.serial.unwrap().as_deref(), Some("PSU2418K73196"));
+        assert_eq!(supply.asset.unwrap().as_deref(), Some("INV-PSU-2418"));
+        for end in 0..12 {
+            let mut short = record.clone();
+            short.formatted.truncate(end);
+            let supply = power_supplies(&table(short)).remove(0);
+            for (offset, field) in [
+                (7, supply.manufacturer),
+                (8, supply.serial),
+                (9, supply.asset),
+                (10, supply.model),
+                (11, supply.revision),
+            ] {
+                assert_eq!(field.is_ok(), end > offset);
+            }
+        }
+        record.formatted[8] = 255;
+        record.formatted[9] = 0;
+        record.strings[1] = "DPS\r\n750".into();
+        let supply = power_supplies(&table(record)).remove(0);
+        assert!(supply.serial.is_err());
+        assert!(supply.asset.unwrap().is_none());
+        assert!(supply.model.is_err());
+        assert!(supply.manufacturer.is_ok());
+        assert!(supply.revision.is_ok());
+    }
+
+    #[test]
+    fn type43_tpm_vendor_version_words_and_characteristics_are_bounds_checked() {
+        let mut record = Structure {
+            kind: 43,
+            handle: 0x4301,
+            formatted: vec![0; 0x1F],
+            strings: vec!["Firmware TPM".into()],
+        };
+        record.formatted[4..10].copy_from_slice(&[b'I', b'F', b'X', 0, 2, 0]);
+        record.formatted[0x0A..0x0E].copy_from_slice(&0x0007_0055_u32.to_le_bytes());
+        record.formatted[0x0E..0x12].copy_from_slice(&0x11CB_0000_u32.to_le_bytes());
+        record.formatted[0x12] = 1;
+        record.formatted[0x13..0x1B].copy_from_slice(&0x8000_0000_0000_0020_u64.to_le_bytes());
+        let table = |record: Structure| Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record],
+        };
+        let device = tpm_devices(&table(record.clone())).remove(0);
+        let mut repeated = table(record.clone());
+        let mut second = record.clone();
+        second.handle = 0x4302;
+        repeated.structures.push(second);
+        assert_eq!(
+            tpm_devices(&repeated)
+                .iter()
+                .map(|device| device.handle)
+                .collect::<Vec<_>>(),
+            [0x4301, 0x4302]
+        );
+        assert_eq!(device.handle, 0x4301);
+        assert_eq!(device.vendor.unwrap().as_deref(), Some("IFX"));
+        assert_eq!(device.spec.unwrap(), (2, 0));
+        assert_eq!(device.firmware1.unwrap(), 0x0007_0055);
+        assert_eq!(device.firmware2.unwrap(), 0x11CB_0000);
+        assert_eq!(device.characteristics.unwrap(), 0x8000_0000_0000_0020);
+        assert_eq!(device.description.unwrap().as_deref(), Some("Firmware TPM"));
+        for end in 0..0x1B {
+            let mut short = record.clone();
+            short.formatted.truncate(end);
+            let device = tpm_devices(&table(short)).remove(0);
+            assert_eq!(device.vendor.is_ok(), end >= 8);
+            assert_eq!(device.spec.is_ok(), end >= 10);
+            assert_eq!(device.firmware1.is_ok(), end >= 14);
+            assert_eq!(device.firmware2.is_ok(), end >= 18);
+            assert_eq!(device.description.is_ok(), end >= 19);
+            assert!(device.characteristics.is_err());
+        }
+        for vendor in [*b"IF\0X", [0xFF; 4], *b"I\nX\0"] {
+            record.formatted[4..8].copy_from_slice(&vendor);
+            let device = tpm_devices(&table(record.clone())).remove(0);
+            assert!(device.vendor.is_err());
+            assert!(device.firmware1.is_ok());
+        }
+        record.formatted[4..8].fill(0);
+        record.formatted[8..10].copy_from_slice(&[1, 2]);
+        let device = tpm_devices(&table(record.clone())).remove(0);
+        assert!(device.vendor.unwrap().is_none());
+        assert_eq!(device.spec.unwrap(), (1, 2));
+        record.formatted[8] = 0;
+        assert!(tpm_devices(&table(record)).remove(0).spec.is_err());
+    }
+
+    #[test]
+    fn type45_inventory_keeps_component_context_and_partial_fields() {
+        let mut record = Structure {
+            kind: 45,
+            handle: 0x4501,
+            formatted: vec![0; 0x18],
+            strings: [
+                "System Firmware",
+                "2802",
+                "e542bf75-2169-4e86-91c5-7c18a95d0634",
+                "2023-09-27T00:00:00Z",
+            ]
+            .map(String::from)
+            .to_vec(),
+        };
+        for (offset, index) in [(4, 1), (5, 2), (7, 3), (9, 4)] {
+            record.formatted[offset] = index;
+        }
+        let table = |record: Structure| Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record],
+        };
+        let component = firmware_components(&table(record.clone())).remove(0);
+        let mut repeated = table(record.clone());
+        let mut second = record.clone();
+        second.handle = 0x4502;
+        repeated.structures.push(second);
+        assert_eq!(
+            firmware_components(&repeated)
+                .iter()
+                .map(|component| component.handle)
+                .collect::<Vec<_>>(),
+            [0x4501, 0x4502]
+        );
+        assert_eq!(component.handle, 0x4501);
+        assert_eq!(component.name.unwrap().as_deref(), Some("System Firmware"));
+        assert_eq!(component.version.unwrap().as_deref(), Some("2802"));
+        assert_eq!(
+            component.id.unwrap().as_deref(),
+            Some("e542bf75-2169-4e86-91c5-7c18a95d0634")
+        );
+        assert_eq!(
+            component.date.unwrap().as_deref(),
+            Some("2023-09-27T00:00:00Z")
+        );
+        for end in 0..10 {
+            let mut short = record.clone();
+            short.formatted.truncate(end);
+            let component = firmware_components(&table(short)).remove(0);
+            for (offset, field) in [
+                (4, component.name),
+                (5, component.version),
+                (7, component.id),
+                (9, component.date),
+            ] {
+                assert_eq!(field.is_ok(), end > offset);
+            }
+        }
+        record.formatted[4] = 0;
+        record.formatted[7] = 255;
+        let component = firmware_components(&table(record)).remove(0);
+        assert!(component.name.unwrap().is_none());
+        assert!(component.id.is_err());
+        assert!(component.version.is_ok());
+        assert!(component.date.is_ok());
+    }
 
     #[test]
     fn type22_string_priority_sbds_encoding_and_bounds() {

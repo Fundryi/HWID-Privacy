@@ -187,6 +187,11 @@ Version: 1.2
 Serial Number: CH2411B728493
 Asset Tag: ENC2024K6198
 SKU: DESK-Z690-ATX
+Manufacturer (SMBIOS): Delta Electronics
+Model/Part (SMBIOS): DPS-750AB-12
+Revision (SMBIOS): A01
+Serial (SMBIOS): PSU2418K73196
+Asset Tag (SMBIOS): INV-PSU-2418
 ```
 
 | Label | Meaning | ID | Appears when |
@@ -196,12 +201,15 @@ SKU: DESK-Z690-ATX
 | Version | Enclosure revision | No | Nonempty. |
 | Serial Number / Asset Tag | Enclosure serial/asset claims | Yes | Nonempty. |
 | SKU | Chassis SKU | Yes | SMBIOS ≥2.7, valid variable-length field, meaningful and different from existing chassis strings. |
+| Power Supply #{n} (SMBIOS) | One-based rendered type-39 record number | No | At least two records have printable fields; precedes each rendered record. No header for one. |
+| Manufacturer / Model/Part / Revision (SMBIOS) | PSU maker, OEM model/part and revision | No | Meaningful string in that type-39 record. |
+| Serial / Asset Tag (SMBIOS) | PSU serial/asset claims | Yes | Meaningful string in that type-39 record; marked with `Out::id`. |
 
-**Sources/order.** RSMB type 3 only; no WMI fallback. Legacy fields use later present offsets. SKU is associated with the last type-3 record and follows its contained-element array; placeholders/control characters are rejected. Direct firmware is already the source.
+**Sources/order.** Shared RSMB snapshot: existing type-3 lines first, then printable type-39 records in table order, with Manufacturer, Model/Part, Revision, Serial and Asset Tag in that order; each field label ends in ` (SMBIOS)`. With at least two printable records, `Power Supply #{n} (SMBIOS)` precedes each, numbered from 1 among rendered records; a single record has no header. No WMI fallback or additional firmware read. Legacy fields use later present offsets. SKU is associated with the last type-3 record and follows its contained-element array; placeholders/control characters are rejected. Type-39 fields are decoded independently, outer-trimmed and filtered with the same optional SMBIOS placeholder rules. A record with no printable field emits no value text and one diagnostic. Printable PSU records still append when type-3 manufacturer is missing. No type 39 or only empty records leaves the existing section byte-identical.
 
-**Admin/timing/limits.** Admin app; firmware read. Historically sub-ms; latest SKU timing unverified. Missing manufacturer gives `Chassis information not available.` A firmware failure adds `Error retrieving CHASSIS information: {E}`. Multi-enclosure inventory is collapsed and unverified.
+**Admin/timing/limits.** Admin app; firmware read. Five-run median 0 → 0 ms on the dev machine (2026-10-04). Its type-39 record contains only placeholder strings and is omitted; meaningful PSU serial/asset fields remain untested on hardware. Missing chassis manufacturer gives `Chassis information not available.` A firmware failure adds `Error retrieving CHASSIS information: {E}`. In a printable record, a truncated/invalid type-39 field adds `{label}: Unavailable ({E})` and a diagnostic without dropping sibling fields; new errors contain no identifier values. Serial/asset values use the existing case-sensitive, whole-token masking with a four-character minimum. Multi-enclosure inventory is collapsed and unverified.
 
-**AD:** 01–03, 09, 46, 73, 77. **Not built:** separate extra enclosures/type-3 topology — exposes multi-chassis systems; decoding and stable group-order cost.
+**AD:** 01–03, 09, 46, 73, 77, 124. **Not built:** separate extra enclosures/type-3 topology — exposes multi-chassis systems; decoding and stable group-order cost.
 
 ## (SM)BIOS
 
@@ -227,6 +235,10 @@ System SKU: ASUS-MB-Z690
 System Family: Desktop
 System Version: 1.2
 OEM String (0x0038, 1): Asset Tag: INV24D8517
+Component Name (SMBIOS): System Firmware
+Component Version (SMBIOS): 2802
+Component ID (SMBIOS): e542bf75-2169-4e86-91c5-7c18a95d0634
+Component Release Date (SMBIOS): 2023-09-27T00:00:00Z
 ```
 
 | Label | Meaning | ID | Appears when |
@@ -242,14 +254,16 @@ OEM String (0x0038, 1): Asset Tag: INV24D8517
 | System Serial / System SKU | Firmware system serial/SKU | Yes | Nonempty direct values. |
 | System Version | Type-1 revision | No | Meaningful optional value, excluding known placeholders. |
 | OEM String (0xHHHH, n) | Explicitly labeled type-11 serial/asset/SKU/part number | Yes, value only | Accepted text; trimmed value after `:`/`=` is marked, not the full line. |
+| Firmware Component #{n} (SMBIOS) | One-based rendered type-45 component number | No | At least two records have printable fields; precedes each rendered record. No header for one. |
+| Component Name / Version / ID / Release Date (SMBIOS) | Type-45 firmware inventory strings, not machine identity | No | Each meaningful string independently; component ID is not treated as a per-unit serial. |
 
-**Sources/order.** Manufacturer/Version: type 0 → `Win32_BIOS.Manufacturer/Version` only when direct empty. Release Date: type 0 only. UUID: type 1 bytes → `Win32_ComputerSystemProduct.UUID` when direct empty. Vendor/IdentifyingNumber: `Win32_ComputerSystemProduct` only; SMBIOS Version/SerialNumber: `Win32_BIOS` only. Both WMI queries run independently with explicit selected properties in `root\cimv2`. Other System fields/version: type 1 only. OEM strings: type 11 only. This retains WMI fields whose semantics have no proven direct equivalent.
+**Sources/order.** Manufacturer/Version: type 0 → `Win32_BIOS.Manufacturer/Version` only when direct empty. Release Date: type 0 only. UUID: type 1 bytes → `Win32_ComputerSystemProduct.UUID` when direct empty. Vendor/IdentifyingNumber: `Win32_ComputerSystemProduct` only; SMBIOS Version/SerialNumber: `Win32_BIOS` only. Both WMI queries run independently with explicit selected properties in `root\cimv2`. Other System fields/version: type 1 only. OEM strings: type 11 only. Printable type-45 components then append after all existing lines, including WMI errors, in shared RSMB table order; each has Component Name, Version, ID and Release Date in that order, with ` (SMBIOS)` on each field label. Handles associate records internally and appear only in new diagnostics. At least two printable records get `Firmware Component #{n} (SMBIOS)` headers, numbered from 1; one gets only fields. Component strings are outer-trimmed and use the optional placeholder/control rules below; no extra OS query. A record with no printable field emits one diagnostic and no value text. Missing type 45 adds nothing. This retains WMI fields whose semantics have no proven direct equivalent.
 
-**Admin/timing/limits.** Admin app; firmware plus WMI. Historically a few ms; latest enrichment timing unverified. UUID swaps the first 4/2/2 bytes for every SMBIOS version, including zero/FF sentinels. Repeated direct records overwrite present fields; last WMI row wins. One failed WMI query blanks only its own fields, retaining direct/other-query fields, then adds `WMI query failed: {class}: {E}`. OEM text must use an accepted explicit label, contain no controls and have a useful value not already in the legacy field sets; arbitrary OEM messages are omitted. Cross-OEM behavior unverified.
+**Admin/timing/limits.** Admin app; firmware plus WMI. Final five-run median 5 → 3 ms on the dev machine (2026-10-04). Its type-45 Name, Version and Release Date were present; Component ID had string index zero and was omitted. UUID swaps the first 4/2/2 bytes for every SMBIOS version, including zero/FF sentinels. Repeated direct records overwrite present fields; last WMI row wins. One failed WMI query blanks only its own fields, retaining direct/other-query fields, then adds `WMI query failed: {class}: {E}`. Type-45 fields survive either WMI query failure; a malformed/truncated inventory field adds `{label}: Unavailable ({E})` and a value-free diagnostic while sibling fields remain. OEM text must use an accepted explicit label, contain no controls and have a useful value not already in the legacy field sets; arbitrary OEM messages are omitted. Component ID, multi-component and cross-OEM hardware paths remain unverified; type-45 associations/state and BIOS characteristics are not decoded.
 
 Accepted OEM labels (case-insensitive, trimmed): `serial`, `serial number`, `serialnumber`, `s/n`, `sn`, `asset tag`, `sku`, `part number`, `p/n`. Optional System Version/OEM values/chassis SKU reject controls, empty or only `0`/`F`/hyphens/spaces, and known placeholders: default string, to be filled by O.E.M./OEM, not specified/applicable/available, unspecified, unknown, none, n/a, system version/SKU/family/serial number, chassis serial number, no asset tag. This filtering does not rewrite legacy fields.
 
-**AD:** 01–03, 09, 10, 46, 75, 76. **Not built:** type-45 firmware inventory/BIOS characteristics — component context, not replacement BIOS identity; typed decoding cost. Further WMI reduction — small latency gain; requires equality per field, never substitute table version for `SMBIOSBIOSVersion`.
+**AD:** 01–03, 09, 10, 46, 75, 76, 125. **Not built:** BIOS characteristics and type-45 associations/state — additional component context; typed decoding cost. Further WMI reduction — small latency gain; requires equality per field, never substitute table version for `SMBIOSBIOSVersion`.
 
 ## SYSTEM INFORMATION
 
@@ -325,6 +339,10 @@ SerialNumber: CPU24J731982
 
 CPUID Vendor: GenuineIntel
 CPUID Signature (decoded): Family 6, Model 151, Stepping 2
+Socket Designation (SMBIOS): CPU1
+Socket Manufacturer (SMBIOS): Intel(R) Corporation
+Socket Part Number (SMBIOS): BX8071512700K
+Socket Asset Tag (SMBIOS): CPU-INV-2418
 ```
 
 | Label | Meaning | ID | Appears when |
@@ -335,16 +353,20 @@ CPUID Signature (decoded): Family 6, Model 151, Stepping 2
 | CPUID Vendor | Leaf-0 vendor bytes (EBX, EDX, ECX) | No | Always, after blank line. |
 | CPUID Signature (decoded) | Leaf-1 Family/Model/Stepping | No | Maximum leaf permits leaf 1. |
 | CPUID Serial Number | Leaf-3 EDX:ECX as 16 hex digits | Yes | Maximum leaf ≥3 and result nonzero. |
+| CPU Socket #{n} (SMBIOS) | One-based rendered type-4 socket number, not an OS processor index | No | At least two records have printable fields; precedes each rendered record. No header for one. |
+| Socket Designation / Manufacturer (SMBIOS) | Per-socket firmware context | No | Meaningful independently decoded string. |
+| Socket Part Number (SMBIOS) | CPU model/part context | No | Meaningful string and SMBIOS ≥2.3. |
+| Socket Asset Tag (SMBIOS) | Per-socket asset claim | Yes | Meaningful string and SMBIOS ≥2.3; marked with `Out::id`. |
 
-**Sources/order.** Direct path requires exactly one populated, enabled type-4 CPU of processor type 3, nonzero/non-FF ID and nonempty serial. Name comes from HKLM `HARDWARE\DESCRIPTION\System\CentralProcessor\{n}\ProcessorNameString`; all numeric logical-processor subkeys must have the same nonempty name. Otherwise use `root\cimv2:Win32_Processor` preserving row order. ProcessorId is the little-endian type-4 qword as uppercase X16; live CPUID EDX:EAX must not replace it. CPUID leaves 0/1/3 are independent and still print if WMI fails.
+**Sources/order.** Direct path requires exactly one populated, enabled type-4 CPU of processor type 3, nonzero/non-FF ID and nonempty serial. Name comes from HKLM `HARDWARE\DESCRIPTION\System\CentralProcessor\{n}\ProcessorNameString`; all numeric logical-processor subkeys must have the same nonempty name. Otherwise use `root\cimv2:Win32_Processor` preserving row order. ProcessorId is the little-endian type-4 qword as uppercase X16; live CPUID EDX:EAX must not replace it. CPUID leaves 0/1/3 are independent and still print if WMI fails. Per-socket metadata appends from the same RSMB snapshot after CPUID and any legacy WMI failure line, with Socket Designation, Manufacturer, Part Number and Asset Tag in that order; each field label ends in ` (SMBIOS)`. Handles associate records internally and appear only in new diagnostics. At least two printable records get `CPU Socket #{n} (SMBIOS)` headers in table order, numbered from 1; one gets only fields. Unpopulated/disabled sockets can supply firmware context without association to WMI rows or registry indices. Optional values are outer-trimmed and use the BIOS placeholder/control rules. A record with no printable field emits one diagnostic and no value text. No type 4 adds nothing; older SMBIOS versions omit unsupported asset/part offsets.
 
-**Admin/timing/limits.** Admin app; registry/firmware/CPUID user-mode sources. Latest direct result 0 ms at integer resolution, previously ~1 s WMI. Multi-socket, disabled/unclear states and missing serial force WMI; successful multi-socket behavior is unverified. Leaf 3 has no PSN feature-bit check: any emitted value is unverified as a unique serial. OEM placeholders remain visible/marked.
+**Admin/timing/limits.** Admin app; registry/firmware/CPUID user-mode sources. Five-run median 0 → 0 ms on the dev machine (2026-10-04), previously ~1 s WMI. Single-socket legacy lines stay byte-identical; its Designation/Manufacturer append, while placeholder Part Number/Asset Tag values are omitted. Multi-socket, disabled/unclear states and missing serial force WMI for legacy fields; successful multi-socket behavior and meaningful socket asset/part hardware fields are unverified. Metadata still survives WMI failure; each malformed/truncated field adds `{label}: Unavailable ({E})` and a value-free diagnostic without removing siblings. Asset tags use case-sensitive, whole-token masking with a four-character minimum. Leaf 3 has no PSN feature-bit check: any emitted value is unverified as a unique serial. Legacy OEM placeholders remain visible/marked.
 
-**AD:** 01–03, 45, 46 (partial-output conventions). **Not built:** socket/manufacturer/part/asset metadata — per-socket context from type 4; inventory/order matching cost. PPIN — platform-specific inventory number; privileged MSR interface/firmware locks and driver cost, untested.
+**AD:** 01–03, 45, 46 (partial-output conventions), 126. **Not built:** type-4-to-WMI multi-socket association — OS/socket matching needs platform evidence. PPIN — platform-specific inventory number; privileged MSR interface/firmware locks and driver cost, untested.
 
 ## TPM MODULES
 
-[Provider](src/hw/tpm.rs), [TPM helper](src/win/tpm.rs).
+[Provider](src/hw/tpm.rs), [TPM helper](src/win/tpm.rs), [firmware](src/win/firmware.rs), [TBS](src/win/tbs.rs).
 
 **WQL projection (WP-A6).** `Win32_Tpm` selects `ManufacturerIdTxt`, `ManufacturerId`, `ManufacturerVersion`, `SpecVersion`, `IsEnabled_InitialValue`, and `IsActivated_InitialValue`. The WMI wrapper retains `__PATH`/`__RELPATH` for both method calls; first-object behavior, initial-state fallbacks, nonzero method errors, independent EK collection, and identifier marking are unchanged.
 
@@ -359,6 +381,12 @@ Sha256 Hash: 73a19d6c8f204be592d37a06c4185f9b2e641c7a908d53f68b12e074a9c635d2
 Serial Number: 03A761B29E845C17D0F638
 Thumbprint: 49B617C230A8E56D91F47B0C3D825AE679104FC2
 Issuer: CN=IFX TPM EK CA, O=Infineon Technologies AG
+TPM Vendor (SMBIOS): IFX
+TPM Spec Version (SMBIOS): 2.0
+TPM Firmware Version (SMBIOS): 0x00070055 0x11CB0000
+TPM Characteristics (SMBIOS): Configurable via OEM proprietary mechanism
+TPM Description (SMBIOS): Firmware TPM
+TPM Spec Version (TBS): 2.0
 ```
 
 | Label | Meaning | ID | Appears when |
@@ -370,12 +398,21 @@ Issuer: CN=IFX TPM EK CA, O=Infineon Technologies AG
 | Serial Number | EK certificate serial, **not chip serial** | Yes | Usable certificate field. |
 | Thumbprint | EK certificate SHA-1 thumbprint | Yes | Usable certificate field. |
 | Issuer | Literal CN/O components, in that order | No | At least one usable component. |
+| TPM Firmware #{n} (SMBIOS) | One-based rendered type-43 record number | No | At least two records have printable fields; precedes each rendered record. No header for one. |
+| TPM Vendor / Spec Version (SMBIOS) | Four-byte ASCII vendor ID and major.minor specification version | No | Valid independently decoded field. |
+| TPM Firmware Version (SMBIOS) | Raw words as `0x{v1:08X} 0x{v2:08X}` | No | Both complete DWORDs in one line; a failed word becomes `Unavailable ({E})` in its position without dropping the other. No vendor-specific version interpretation. |
+| TPM Characteristics (SMBIOS) | DMTF 7.44 bit names, comma-separated | No | Complete field: bit 2 `Not supported`, 3 `Configurable via firmware update`, 4 `Configurable via platform software`, 5 `Configurable via OEM proprietary mechanism`; other set bits combined as `0x` + 16 uppercase hex digits. Zero → `None reported`. Context, not unit identity. |
+| TPM Description (SMBIOS) | Optional firmware-published description | No | Meaningful valid string. |
+| TPM Spec Version (TBS) | TPM 1.2/2.0 from `Tbsi_GetDeviceInfo` | No | Always appended: version, `Not found`, or `Unavailable ({E})`. |
+| TPM Version Cross-check | Plain observation about SMBIOS/TBS disagreement | No | Within each rendered record when specification versions differ (`SMBIOS {major}.{minor} differs from TBS {major}.{minor}`) or TBS finds no TPM (`SMBIOS reports a TPM; TBS did not find one`). Never changes status or records a mismatch as an error. |
 
 **Sources/order.** Status: first `Win32_Tpm` in `root\cimv2\Security\MicrosoftTpm` → PowerShell `Get-Tpm`. `IsEnabled`/`IsActivated` methods are read; only enabled controls the visible status. Missing/unsupported Boolean output can use the corresponding initial-state property; a returned nonzero TPM method code remains unknown. EK, only when enabled: Microsoft Platform Crypto Provider (`NCryptOpenStorageProvider`, `PCP_EKPUB`, `PCP_EKNVCERT`, `PCP_EKCERT`) plus crypt32 → full `Get-TpmEndorsementKeyInfo -Hash 'Sha256' | Format-List` fallback. Native path accepts RSA public blobs, hashes PKCS#1 DER, requires exactly one manufacturer certificate and at most one identical additional certificate, and rejects long/multiline issuer formatting. This preserves legacy encodings and ambiguous certificate behavior rather than inventing a different native result.
 
-**Admin/timing/limits.** Admin app; TPM/EK policies can deny access. Latest ~292 ms. PowerShell processes each have 15 s; provider still 60 s. Native parity was tested on one Intel TPM; second TPM implementation gate is unmet. ECC/ambiguous stores use fallback; their live parity is unverified. Fallback parser retains only the next nonempty certificate-field line; repeated keys overwrite. No key possession, certificate binding/chain or attestation verification. Absent status gives `TPM OFF`; unknown/empty collection uses `Unable to retrieve TPM information`, optionally `: {E}`. EK failures can give `Unable to retrieve detailed TPM information`, optionally `: {E}`.
+Firmware context independently appends in shared RSMB type-43 table order: Vendor, Spec Version, the paired raw Firmware Version words, decoded Characteristics, Description, then an optional cross-check observation. At least two printable records get `TPM Firmware #{n} (SMBIOS)` headers, numbered from 1; one gets only fields. Handles associate records internally and appear only in new diagnostics. A record with no successfully decoded numeric field or meaningful string emits one diagnostic and no value text. TBS version appends last. The TBS query runs even when no firmware record exists or legacy status collection fails, and a TBS failure cannot discard firmware/status/EK fields. Description uses the optional SMBIOS placeholder/control rules; vendor bytes allow only printable ASCII with trailing NUL padding. No new identity value is introduced by this context. TBS comes from runtime-loaded System32 `tbs.dll`; no context, command submission or key use. Only specification versions are compared; Microsoft reserves the device-info interface/revision fields, so they are not interpreted or compared to firmware versions.
 
-**AD:** 01–03, 11, 46. **Not built:** type-43 firmware metadata/TBS capability cross-check — extra vendor/version context; command/state semantics and TPM1.2 compatibility cost. ECC/complete multi-certificate native EK and certificate validation — broader coverage/authenticity evidence; encoding/order and second-TPM testing cost.
+**Admin/timing/limits.** Admin app; TPM/EK policies can deny access. Final five-run median 279 → 286 ms on the dev machine (2026-10-04); one type-43 record and TBS both reported specification 2.0. The final parallel dump took 825 ms for this section; timing medians use sequential per-provider runs. PowerShell processes each have 15 s; provider still 60 s. TBS has a two-second caller bound; an outstanding native call owns its DLL until it returns. Not-found is distinct from missing DLL/API, access denial, timeout and unsupported/malformed version results; failures retain their codes and value-free diagnostics. A malformed/truncated firmware field adds `{label}: Unavailable ({E})` without losing siblings. TPM 1.2, mismatches, no-record/not-found, missing API, access-denied and timeout paths remain unverified on hardware. Native EK parity was tested on one Intel TPM; second TPM implementation gate is unmet. ECC/ambiguous stores use fallback; their live parity is unverified. Fallback parser retains only the next nonempty certificate-field line; repeated keys overwrite. No key possession, certificate binding/chain or attestation verification. Absent status gives `TPM OFF`; unknown/empty collection uses `Unable to retrieve TPM information`, optionally `: {E}`. EK failures can give `Unable to retrieve detailed TPM information`, optionally `: {E}`.
+
+**AD:** 01–03, 11, 46, 127. **Not built:** TBS command-based capability/firmware cross-check — command/state semantics and TPM1.2 compatibility cost. ECC/complete multi-certificate native EK and certificate validation — broader coverage/authenticity evidence; encoding/order and second-TPM testing cost.
 
 ## USB DEVICES
 
