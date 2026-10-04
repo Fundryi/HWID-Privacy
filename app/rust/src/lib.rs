@@ -5,6 +5,7 @@
 pub mod clean;
 pub mod hw;
 pub mod report;
+pub mod settings;
 pub mod ui;
 pub mod update;
 pub mod win;

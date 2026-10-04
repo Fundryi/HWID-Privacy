@@ -143,6 +143,10 @@ pub struct ButtonSpec {
     pub align: Align,
     /// Icon-font glyph drawn before the text (`DESIGN.md` section 14), tinted like the text.
     pub icon: Option<char>,
+    /// Carries a persistent on/off state instead of a momentary action.
+    pub toggle: bool,
+    /// Draws only the icon; text remains the accessible name.
+    pub icon_only: bool,
 }
 
 impl ButtonSpec {
@@ -153,12 +157,26 @@ impl ButtonSpec {
             kind,
             align: Align::MiddleCenter,
             icon: None,
+            toggle: false,
+            icon_only: false,
         }
     }
 
     /// Adds an icon glyph before the text.
     pub fn icon(mut self, glyph: char) -> Self {
         self.icon = Some(glyph);
+        self
+    }
+
+    /// Makes this button an on/off toggle, initially off.
+    pub fn toggle(mut self) -> Self {
+        self.toggle = true;
+        self
+    }
+
+    /// Centers the icon and keeps the caption for accessibility only.
+    pub fn icon_only(mut self) -> Self {
+        self.icon_only = true;
         self
     }
 
@@ -260,6 +278,12 @@ pub struct EditSpec {
     pub border: EditBorder,
     /// `WordWrap` (true hides the horizontal scroll bar, like WinForms).
     pub word_wrap: bool,
+    /// Editable single-line input instead of a read-only data well.
+    pub single_line: bool,
+    /// Keeps the selection visible while another control has focus.
+    pub keep_selection: bool,
+    /// Cue banner of a single-line input, also shown while focused.
+    pub cue: String,
 }
 
 impl EditSpec {
@@ -271,6 +295,9 @@ impl EditSpec {
             back,
             border: EditBorder::Fixed3D,
             word_wrap: false,
+            single_line: false,
+            keep_selection: false,
+            cue: String::new(),
         }
     }
 
@@ -283,6 +310,27 @@ impl EditSpec {
     /// Sets `WordWrap = true`.
     pub fn word_wrap(mut self) -> Self {
         self.word_wrap = true;
+        self
+    }
+
+    /// Uses the kit input style: editable, one line, no native frame or scroll bars.
+    pub fn single_line(mut self) -> Self {
+        self.single_line = true;
+        self.font = theme::FIND_EDIT_FONT;
+        self.fore = theme::TEXT;
+        self.back = theme::CARD;
+        self
+    }
+
+    /// Sets the cue banner (including while focused).
+    pub fn cue(mut self, text: &str) -> Self {
+        self.cue = text.to_owned();
+        self
+    }
+
+    /// Keeps a find match or user selection visible while unfocused.
+    pub fn keep_selection(mut self) -> Self {
+        self.keep_selection = true;
         self
     }
 }
@@ -337,7 +385,9 @@ impl Ctl {
     /// The icon font of a button with an icon.
     pub fn icon_font(&self) -> Option<FontSpec> {
         match self {
-            Ctl::Button(b) if b.icon.is_some() => Some(theme::icon_font(theme::ICON_PX)),
+            Ctl::Button(b) if b.icon.is_some() || b.toggle => {
+                Some(theme::icon_font(theme::ICON_PX))
+            }
             _ => None,
         }
     }
@@ -347,6 +397,13 @@ impl Ctl {
         match self {
             Ctl::Button(_) => (theme::DEFAULT_MARGIN, theme::BUTTON_DEFAULT_SIZE),
             Ctl::Label(_) => (theme::LABEL_DEFAULT_MARGIN, theme::LABEL_DEFAULT_SIZE),
+            Ctl::Edit(e) if e.single_line => (
+                theme::DEFAULT_MARGIN,
+                Size {
+                    w: theme::FIND_EDIT_MIN_WIDTH,
+                    h: theme::FIND_BAR_HEIGHT,
+                },
+            ),
             Ctl::Edit(_) => (theme::DEFAULT_MARGIN, theme::TEXT_BOX_DEFAULT_SIZE),
             Ctl::CheckedList(_) => (theme::DEFAULT_MARGIN, theme::LIST_BOX_DEFAULT_SIZE),
             Ctl::Progress => (theme::DEFAULT_MARGIN, theme::PROGRESS_BAR_DEFAULT_SIZE),
@@ -373,6 +430,8 @@ impl Ctl {
 pub(crate) enum CtlEvent {
     /// Button click (mouse, Space, or a double click counted as a click).
     Click,
+    /// Editable input text changed.
+    TextChanged,
     /// Check box toggled: item index and new state.
     ItemCheck(usize, bool),
 }
@@ -922,7 +981,13 @@ fn rect_in_parent(hwnd: HWND) -> Option<Rect> {
 /// The ring rectangle around a focused control, in parent coordinates.
 fn ring_rect(hwnd: HWND, dpi: u32) -> Option<Rect> {
     let offset = dpi::scale(theme::FOCUS_RING_OFFSET, dpi);
-    Some(rect_in_parent(hwnd)?.deflate(Pad {
+    let area = state_of(hwnd)
+        .and_then(|st| match &st.data {
+            Data::Edit(e) => e.frame.get(),
+            _ => None,
+        })
+        .or_else(|| rect_in_parent(hwnd))?;
+    Some(area.deflate(Pad {
         l: -offset,
         t: -offset,
         r: -offset,
@@ -963,7 +1028,7 @@ pub(crate) fn paint_focus_ring(parent: HWND, hdc: HDC, background: Color) {
     let Some(st) = state_of(focus) else {
         return;
     };
-    if !matches!(st.data, Data::Button(_)) || !st.ui_state().0 {
+    if !(is_button(focus) || is_input(focus)) || !st.ui_state().0 {
         return;
     }
     let dpi = st.dpi.get();
@@ -998,7 +1063,7 @@ pub(crate) fn paint_card(hwnd: HWND, hdc: HDC, outer: Color, fill_color: Color, 
 /// layout pass to repaint when the button moves.
 pub(crate) fn focused_ring(hwnd: HWND) -> Option<RECT> {
     // SAFETY: Reads this thread's focus window.
-    if unsafe { GetFocus() } != hwnd || !is_button(hwnd) {
+    if unsafe { GetFocus() } != hwnd || !(is_button(hwnd) || is_input(hwnd)) {
         return None;
     }
     let dpi = state_of(hwnd)?.dpi.get();
@@ -1021,6 +1086,8 @@ struct ButtonData {
     active: Cell<bool>,
     /// Sidebar item whose section is not collected yet (`FAINT` text while loading).
     pending: Cell<bool>,
+    checked: Cell<bool>,
+    fore: Cell<Option<Color>>,
 }
 
 struct EditData {
@@ -1030,6 +1097,8 @@ struct EditData {
     longest: Cell<i32>,
     /// Re-entrancy guard: showing a bar sends WM_SIZE to the edit.
     updating_bars: Cell<bool>,
+    /// Outer input frame in parent coordinates; the native EDIT occupies its interior.
+    frame: Cell<Option<Rect>>,
 }
 
 struct SpinnerData {
@@ -1148,6 +1217,8 @@ pub(crate) fn create(
                 hover: Cell::new(false),
                 active: Cell::new(false),
                 pending: Cell::new(false),
+                checked: Cell::new(false),
+                fore: Cell::new(None),
             }),
         ),
         Ctl::Label(l) => (
@@ -1160,6 +1231,7 @@ pub(crate) fn create(
             Data::Label(RefCell::new(l.clone())),
         ),
         Ctl::Edit(e) => {
+            use windows::Win32::UI::WindowsAndMessaging::ES_NOHIDESEL;
             let mut style = base
                 | WS_TABSTOP
                 | WS_VSCROLL
@@ -1167,13 +1239,21 @@ pub(crate) fn create(
             if !e.word_wrap {
                 style |= WS_HSCROLL | WINDOW_STYLE(ES_AUTOHSCROLL as u32);
             }
-            let ex = match e.border {
-                EditBorder::Fixed3D => WS_EX_CLIENTEDGE,
-                EditBorder::FixedSingle => {
-                    style |= WS_BORDER;
-                    WINDOW_EX_STYLE(0)
+            let ex = if e.single_line {
+                style = base | WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32);
+                WINDOW_EX_STYLE(0)
+            } else {
+                match e.border {
+                    EditBorder::Fixed3D => WS_EX_CLIENTEDGE,
+                    EditBorder::FixedSingle => {
+                        style |= WS_BORDER;
+                        WINDOW_EX_STYLE(0)
+                    }
                 }
             };
+            if e.keep_selection {
+                style |= WINDOW_STYLE(ES_NOHIDESEL as u32);
+            }
             (
                 WC_EDITW,
                 "",
@@ -1184,6 +1264,7 @@ pub(crate) fn create(
                     brush: Brush::new(e.back),
                     longest: Cell::new(0),
                     updating_bars: Cell::new(false),
+                    frame: Cell::new(None),
                 }),
             )
         }
@@ -1288,8 +1369,26 @@ pub(crate) fn create(
     }
     send(hwnd, WM_SETFONT, font.0 as usize, 0);
     match ctl {
-        Ctl::Edit(_) => {
-            send(hwnd, EM_SETLIMITTEXT, 0, 0);
+        Ctl::Edit(e) => {
+            send(
+                hwnd,
+                EM_SETLIMITTEXT,
+                if e.single_line {
+                    theme::FIND_QUERY_MAX
+                } else {
+                    0
+                },
+                0,
+            );
+            if e.single_line {
+                let cue = to_wide(&e.cue);
+                send(
+                    hwnd,
+                    windows::Win32::UI::Controls::EM_SETCUEBANNER,
+                    1,
+                    cue.as_ptr() as isize,
+                );
+            }
             edit_set_margins(hwnd, dpi);
             edit_update_bars(hwnd);
         }
@@ -1299,6 +1398,11 @@ pub(crate) fn create(
             }
         }
         _ => {}
+    }
+    if let Ctl::Button(b) = ctl
+        && b.toggle
+    {
+        set_checked(hwnd, false);
     }
     Ok(hwnd)
 }
@@ -1360,9 +1464,12 @@ impl CtlState {
             }
             (_, WM_SETFOCUS) => {
                 super::window::focus_changed(hwnd);
+                if is_input(hwnd) {
+                    invalidate_ring(self);
+                }
                 None
             }
-            (Data::Button(_), WM_KILLFOCUS) => {
+            (Data::Button(_) | Data::Edit(_), WM_KILLFOCUS) => {
                 invalidate_ring(self);
                 None
             }
@@ -1395,6 +1502,9 @@ impl CtlState {
                 Some(LRESULT(0))
             }
             (Data::Edit(_) | Data::List(_), WM_NCPAINT) => {
+                if is_input(hwnd) {
+                    return None;
+                }
                 // Scroll bars and the native frame first, then the 1 px token frame over it.
                 let r = def(hwnd, msg, wparam, lparam);
                 self.paint_frame();
@@ -1434,7 +1544,7 @@ impl CtlState {
                 }
                 None
             }
-            (Data::Button(_), WM_UPDATEUISTATE) => {
+            (Data::Button(_) | Data::Edit(_), WM_UPDATEUISTATE) => {
                 let r = def(hwnd, msg, wparam, lparam);
                 invalidate_ring(self);
                 Some(r)
@@ -1550,6 +1660,7 @@ impl CtlState {
         let enabled = self.enabled();
         let pushed = enabled && send(self.hwnd, BM_GETSTATE, 0, 0).0 & BST_PUSHED != 0;
         let hover = enabled && b.hover.get();
+        let checked = b.checked.get();
         let (_, show_accel) = self.ui_state();
         let container = self.back.get();
         let (fill_color, text_color, border) = match spec.kind {
@@ -1573,7 +1684,7 @@ impl CtlState {
             ButtonKind::Outline | ButtonKind::Destructive => (
                 if pushed {
                     theme::BUTTON_BORDER
-                } else if hover {
+                } else if hover || checked {
                     theme::BUTTON_HOVER
                 } else {
                     theme::BUTTON_BACKGROUND
@@ -1585,7 +1696,7 @@ impl CtlState {
                 } else {
                     theme::PRIMARY_TEXT
                 },
-                Some(if hover {
+                Some(if hover || checked {
                     theme::BORDER_STRONG
                 } else {
                     theme::BUTTON_BORDER
@@ -1599,7 +1710,9 @@ impl CtlState {
                 } else {
                     container
                 },
-                if b.active.get() {
+                if !enabled {
+                    theme::DISABLED_TEXT
+                } else if b.active.get() || checked {
                     theme::SIDEBAR_ITEM_ACTIVE_TEXT
                 } else if b.pending.get() {
                     theme::DISABLED_TEXT
@@ -1609,12 +1722,17 @@ impl CtlState {
                 None,
             ),
         };
+        let text_color = if enabled {
+            b.fore.get().unwrap_or(text_color)
+        } else {
+            theme::FAINT
+        };
         let bs = theme::BUTTON_BORDER_SIZE;
         let dpi = self.dpi.get();
         let radius = dpi::scale(theme::BUTTON_RADIUS, dpi);
         buffered(hdc, area, |hdc| {
             rounded_rect(hdc, area, radius, container, Some(fill_color), border);
-            if spec.kind == ButtonKind::Sidebar && b.active.get() {
+            if spec.kind == ButtonKind::Sidebar && b.active.get() && !spec.toggle {
                 // The accent bar of the active item (DESIGN.md 6): inside the item's left edge.
                 let inset = dpi::scale(theme::SIDEBAR_ACCENT_INSET, dpi);
                 let bar = Rect {
@@ -1647,6 +1765,32 @@ impl CtlState {
                 r: inset,
                 b: inset,
             });
+            if spec.icon_only {
+                if let Some(icon) = spec.icon {
+                    draw_glyph(hdc, icon, self.icon_font.get(), area, text_color);
+                }
+                return;
+            }
+            if spec.toggle && spec.kind == ButtonKind::Sidebar {
+                let icon_px = dpi::scale(theme::ICON_PX, dpi);
+                let check = Rect {
+                    x: area.right() - dpi::scale(theme::TOOLS_CHECK_INSET, dpi) - icon_px,
+                    y: area.y + (area.h - icon_px) / 2,
+                    w: icon_px,
+                    h: icon_px,
+                };
+                if checked {
+                    draw_glyph(
+                        hdc,
+                        theme::glyph::CHECK_MARK,
+                        self.icon_font.get(),
+                        check,
+                        text_color,
+                    );
+                }
+                // Reserve the same space in both states so the caption never jumps.
+                max_bounds.w = (check.x - dpi::scale(theme::ICON_GAP, dpi) - max_bounds.x).max(1);
+            }
             // Sidebar items are one line with an end ellipsis (DESIGN.md 8.7, 11.3); other
             // buttons keep the WinForms word break.
             let mut flags = if spec.kind == ButtonKind::Sidebar {
@@ -1658,7 +1802,12 @@ impl CtlState {
                 flags |= DT_HIDEPREFIX;
             }
             let font = self.font.get();
-            let icon = spec.icon.filter(|_| !self.icon_font.get().is_invalid());
+            let icon = if checked && spec.toggle && spec.kind != ButtonKind::Sidebar {
+                Some(theme::glyph::CHECK_MARK)
+            } else {
+                spec.icon
+            }
+            .filter(|_| !self.icon_font.get().is_invalid());
             let icon_w = if icon.is_some() {
                 dpi::scale(theme::ICON_PX, dpi) + dpi::scale(theme::ICON_GAP, dpi)
             } else {
@@ -2185,6 +2334,11 @@ impl CtlState {
                     Some((LRESULT(0), None))
                 }
             }
+            (Data::Edit(e), WM_COMMAND_ID) if e.spec.single_line => {
+                let changed =
+                    (wparam.0 >> 16) as u32 == windows::Win32::UI::WindowsAndMessaging::EN_CHANGE;
+                Some((LRESULT(0), changed.then_some(CtlEvent::TextChanged)))
+            }
             (Data::List(_), WM_COMMAND_ID) => {
                 let code = (wparam.0 >> 16) as u32;
                 if code == LBN_SELCHANGE || code == LBN_DBLCLK {
@@ -2279,6 +2433,9 @@ pub(crate) fn measure(
     let dc = ScreenDc::new();
     match ctl {
         Ctl::Button(b) => {
+            if b.icon_only {
+                return dpi::scale_size(theme::FIND_BUTTON_SIZE, dpi);
+            }
             // ButtonFlatAdapter.PaintFlatLayout(up: false, check: true): border + 1, padding 1,
             // plus 2 for GrowBorderBy1PxWhenDefault. Sidebar items have neither (see paint).
             let sidebar = b.kind == ButtonKind::Sidebar;
@@ -2306,6 +2463,12 @@ pub(crate) fn measure(
             if b.icon.is_some() {
                 text.w += dpi::scale(theme::ICON_PX, dpi) + dpi::scale(theme::ICON_GAP, dpi);
                 text.h = text.h.max(dpi::scale(theme::ICON_PX, dpi) + inset);
+            }
+            if b.toggle && sidebar {
+                text.w += dpi::scale(
+                    theme::ICON_PX + theme::ICON_GAP + theme::TOOLS_CHECK_INSET,
+                    dpi,
+                ) - padding.r;
             }
             Size {
                 w: (text.w + linear + padding.horizontal()).max(min.w),
@@ -2459,7 +2622,7 @@ pub(crate) fn edit_update_bars(hwnd: HWND) {
     let Data::Edit(e) = &st.data else {
         return;
     };
-    if e.updating_bars.replace(true) {
+    if e.spec.single_line || e.updating_bars.replace(true) {
         return;
     }
     struct Done<'a>(&'a Cell<bool>);
@@ -2543,12 +2706,156 @@ pub fn set_text(hwnd: HWND, text: &str) {
             _ => {}
         }
     }
+    if let Some(st) = state_of(hwnd)
+        && let Data::Button(b) = &st.data
+        && b.spec.borrow().toggle
+    {
+        set_checked(hwnd, b.checked.get());
+        return;
+    }
     let wide = to_wide(text);
     // SAFETY: NUL-terminated buffer valid for the call.
     unsafe {
         let _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
     }
     invalidate(hwnd);
+}
+
+/// Gives the native input its centered text area, keeping its frame in the container.
+pub(crate) fn input_bounds(hwnd: HWND, bounds: Rect) -> Rect {
+    let Some(st) = state_of(hwnd) else {
+        return bounds;
+    };
+    let Data::Edit(e) = &st.data else {
+        return bounds;
+    };
+    if !e.spec.single_line {
+        return bounds;
+    }
+    e.frame.set(Some(bounds));
+    let dc = ScreenDc::new();
+    let height = text_height(dc.0, st.font.get()).min(bounds.h);
+    Rect {
+        x: bounds.x + theme::STROKE,
+        y: bounds.y + (bounds.h - height) / 2,
+        w: (bounds.w - 2 * theme::STROKE).max(0),
+        h: height,
+    }
+}
+
+/// Paints the rounded frames of direct child inputs before the focus ring.
+pub(crate) fn paint_input_frames(parent: HWND, hdc: HDC, background: Color) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GW_CHILD, GW_HWNDNEXT, GetWindow, IsWindowVisible,
+    };
+    // SAFETY: Walks only live direct child HWNDs on their owning UI thread.
+    unsafe {
+        let mut child = GetWindow(parent, GW_CHILD).unwrap_or_default();
+        while !child.is_invalid() {
+            if IsWindowVisible(child).as_bool()
+                && let Some(st) = state_of(child)
+                && let Data::Edit(e) = &st.data
+                && let Some(area) = e.frame.get()
+            {
+                rounded_rect(
+                    hdc,
+                    area,
+                    dpi::scale(theme::INPUT_RADIUS, st.dpi.get()),
+                    background,
+                    Some(e.spec.back),
+                    Some(theme::BORDER),
+                );
+            }
+            child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
+        }
+    }
+}
+
+/// Clicking the painted input padding focuses its native edit, like clicking its text area.
+pub(crate) fn focus_input_frame(parent: HWND, point: LPARAM) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GW_CHILD, GW_HWNDNEXT, GetWindow, IsWindowVisible,
+    };
+    let x = i32::from(point.0 as u16 as i16);
+    let y = i32::from((point.0 >> 16) as u16 as i16);
+    // SAFETY: Enumerates and focuses only live child inputs on their UI thread.
+    unsafe {
+        let mut child = GetWindow(parent, GW_CHILD).unwrap_or_default();
+        while !child.is_invalid() {
+            if IsWindowVisible(child).as_bool()
+                && IsWindowEnabled(child).as_bool()
+                && let Some(st) = state_of(child)
+                && let Data::Edit(e) = &st.data
+                && let Some(area) = e.frame.get()
+                && x >= area.x
+                && x < area.right()
+                && y >= area.y
+                && y < area.bottom()
+            {
+                if let Err(error) = SetFocus(Some(child)) {
+                    win::record(win::Error::from_win("Focus input", error));
+                }
+                return true;
+            }
+            child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
+        }
+    }
+    false
+}
+
+/// Sets a toggle's state and accessible name without emitting a click.
+pub fn set_checked(hwnd: HWND, checked: bool) {
+    let Some(st) = state_of(hwnd) else { return };
+    let Data::Button(b) = &st.data else { return };
+    let spec = b.spec.borrow();
+    if !spec.toggle {
+        return;
+    }
+    b.checked.set(checked);
+    let name = to_wide(&format!(
+        "{}, {}",
+        spec.text,
+        if checked { "on" } else { "off" }
+    ));
+    // SAFETY: The NUL-terminated accessible name lives through the call.
+    if let Err(error) = unsafe { SetWindowTextW(hwnd, PCWSTR(name.as_ptr())) } {
+        win::record(win::Error::from_win("Set toggle name", error));
+    }
+    invalidate(hwnd);
+}
+
+/// Reads a toggle's current state.
+pub fn is_checked(hwnd: HWND) -> bool {
+    state_of(hwnd).is_some_and(|st| matches!(&st.data, Data::Button(b) if b.checked.get()))
+}
+
+/// Toggles a button before its click is delivered; returns its new state when applicable.
+pub(crate) fn toggle_click(hwnd: HWND) -> Option<bool> {
+    let st = state_of(hwnd)?;
+    let Data::Button(b) = &st.data else {
+        return None;
+    };
+    if !b.spec.borrow().toggle {
+        return None;
+    }
+    let checked = !b.checked.get();
+    set_checked(hwnd, checked);
+    Some(checked)
+}
+
+/// Overrides button text and icon color; disabled controls still use FAINT.
+pub fn set_button_fore(hwnd: HWND, fore: Option<Color>) {
+    if let Some(st) = state_of(hwnd)
+        && let Data::Button(b) = &st.data
+    {
+        b.fore.set(fore);
+        invalidate(hwnd);
+    }
+}
+
+/// Whether this control is an editable kit input.
+pub(crate) fn is_input(hwnd: HWND) -> bool {
+    state_of(hwnd).is_some_and(|st| matches!(&st.data, Data::Edit(e) if e.spec.single_line))
 }
 
 /// Returns the window text of a control.

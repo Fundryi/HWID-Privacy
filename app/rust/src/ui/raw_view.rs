@@ -100,6 +100,7 @@ fn show_report(owner: HWND, report: String) -> win::Result<()> {
     spec.back = theme::OLD_VIEW_BACKGROUND;
     // DESIGN.md 11.5: a minimum (C# has none) and the work-area clamp of every form.
     spec.min = Some(theme::OLD_VIEW_MIN_SIZE);
+    spec.find_keys = true;
     // C# parity: WordWrap is left at its default (true), so there is no horizontal scroll bar;
     // BorderStyle stays the Fixed3D default. The well sits inside the window padding and
     // opens with nothing selected (DESIGN.md 4; C# selected the whole report).
@@ -109,7 +110,8 @@ fn show_report(owner: HWND, report: String) -> win::Result<()> {
             theme::OLD_VIEW_TEXT,
             theme::OLD_VIEW_TEXT_BACKGROUND,
         )
-        .word_wrap(),
+        .word_wrap()
+        .keep_selection(),
     );
     window::run_modal(
         owner,
@@ -120,6 +122,9 @@ fn show_report(owner: HWND, report: String) -> win::Result<()> {
                 .padding(theme::OUTPUT_PANEL_PADDING),
         ],
         move |form, event| {
+            if let Event::Key(key) = event {
+                return on_find_key(form, key);
+            }
             if let Event::Created = event {
                 form.edit_set_text(TEXT, &report);
                 form.edit_scroll_to_top(TEXT);
@@ -127,4 +132,9 @@ fn show_report(owner: HWND, report: String) -> win::Result<()> {
             true
         },
     )
+}
+
+// Step 2b installs the shared find component here.
+fn on_find_key(_form: &window::Form, _key: window::FindKey) -> bool {
+    false
 }

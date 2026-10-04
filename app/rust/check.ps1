@@ -279,6 +279,23 @@ try {
     Invoke-Checked cargo @('test', '--locked')
     Invoke-Checked cargo @('build', '--release', '--locked')
     $metadata = (Invoke-Checked cargo @('metadata', '--locked', '--no-deps', '--format-version', '1')) | ConvertFrom-Json
+    $version = ($metadata.packages | Where-Object name -eq 'hwidchecker').version
+    if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Unsupported app version: $version" }
+    $rc = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'app.rc') -Raw
+    $numeric = ($version -replace '\.', ',') + ',0'
+    foreach ($field in @('FILEVERSION', 'PRODUCTVERSION')) {
+        $match = [regex]::Match($rc, "(?m)^\s*$field\s+([0-9,\s]+)$")
+        if (-not $match.Success -or ($match.Groups[1].Value -replace '\s', '') -cne $numeric) {
+            throw "app.rc $field must equal $numeric (Cargo version $version)."
+        }
+    }
+    foreach ($field in @('FileVersion', 'ProductVersion')) {
+        $match = [regex]::Match($rc, ('VALUE\s+"' + $field + '",\s*"([^"\\]+)\\0"'))
+        if (-not $match.Success -or $match.Groups[1].Value -cne $version) {
+            throw "app.rc $field must equal $version (Cargo version)."
+        }
+    }
+    Write-Host "Resource versions match Cargo $version."
     $target = $metadata.target_directory
     if ($env:CARGO_BUILD_TARGET) { $target = Join-Path $target $env:CARGO_BUILD_TARGET }
     $binary = Join-Path $target 'release/HWIDChecker.exe'
