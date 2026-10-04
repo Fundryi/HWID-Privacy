@@ -74,6 +74,10 @@ enum VendorLibrary {
 
 impl VendorLibrary {
     fn load(path: &Path) -> Result<Self> {
+        Self::load_inner(path).map_err(classified)
+    }
+
+    fn load_inner(path: &Path) -> Result<Self> {
         let name = path
             .file_name()
             .and_then(|v| v.to_str())
@@ -109,7 +113,7 @@ impl VendorLibrary {
                 unsafe { GetProcAddress(*module, PCSTR(name.as_ptr().cast())) }
             }
         };
-        address.ok_or_else(|| Error::msg("GetProcAddress", name.to_string_lossy()))
+        address.ok_or_else(|| Error::msg("GetProcAddress", "absent: optional NVIDIA export"))
     }
 }
 
@@ -167,20 +171,204 @@ fn status(op: &'static str, code: i32) -> Result<()> {
         Err(Error {
             op,
             code: code as u32,
-            detail: format!("NVIDIA status {code}"),
+            detail: format!("{}: NVIDIA status {code}", status_class(op, code)),
         })
+    }
+}
+
+fn status_class(op: &str, code: i32) -> &'static str {
+    match (op.starts_with("nvml"), code) {
+        (true, 3) | (false, -3 | -104) => "unsupported",
+        (true, 4) | (false, -137 | -175) => "access-denied",
+        (true, 6 | 9 | 12 | 13) | (false, -6) => "absent",
+        (true, 10) | (false, -120 | -191) => "timeout",
+        _ => "malformed",
+    }
+}
+
+const MAX_GPUS: usize = 256;
+
+/// Adds a value-free failure class without changing the source operation.
+pub fn classified(mut error: Error) -> Error {
+    let detail = error.detail.to_ascii_lowercase();
+    if ![
+        "absent:",
+        "unsupported:",
+        "access-denied:",
+        "timeout:",
+        "malformed:",
+        "ambiguous:",
+        "placeholder:",
+        "implausible:",
+    ]
+    .iter()
+    .any(|class| detail.contains(class))
+    {
+        let class = match error.code {
+            5 => "access-denied",
+            2 | 3 | 126 | 127 => "absent",
+            1460 => "timeout",
+            _ if detail.contains("timed out") || detail.contains("deadline") => "timeout",
+            _ => "malformed",
+        };
+        error.detail = format!("{class}: {}", error.detail);
+    }
+    error
+}
+
+fn repeated(bytes: &[u8]) -> bool {
+    bytes
+        .first()
+        .is_some_and(|first| bytes.iter().all(|b| b == first))
+}
+
+fn pdi_value(value: u64) -> Result<String> {
+    if repeated(&value.to_le_bytes()) {
+        return Err(Error::msg(
+            "nvmlDeviceGetPdi",
+            "implausible: repeated PDI bytes",
+        ));
+    }
+    Ok(format!("{value:016X}"))
+}
+
+fn valid_uuid(value: &str) -> bool {
+    let Some(body) = value.strip_prefix("GPU-") else {
+        return false;
+    };
+    body.len() == 36
+        && body.bytes().enumerate().all(|(i, b)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        })
+        && !repeated(&body.bytes().filter(|b| *b != b'-').collect::<Vec<_>>())
+}
+
+fn parse_driver_text(bytes: &[u8], op: &'static str) -> Result<String> {
+    let end = bytes
+        .iter()
+        .position(|&b| b == 0)
+        .ok_or_else(|| Error::msg(op, "malformed: unterminated driver string"))?;
+    let value = std::str::from_utf8(bytes.get(..end).unwrap_or_default())
+        .map_err(|_| Error::msg(op, "malformed: invalid UTF-8 driver string"))?;
+    if value.chars().any(char::is_control) {
+        return Err(Error::msg(op, "malformed: non-printable driver string"));
+    }
+    if value.trim().is_empty()
+        || (matches!(op, "nvmlDeviceGetSerial" | "nvmlDeviceGetBoardPartNumber")
+            && value.trim().bytes().all(|byte| byte == b'0'))
+    {
+        return Err(Error::msg(
+            op,
+            "placeholder: empty or zero-only driver string",
+        ));
+    }
+    if op == "nvmlDeviceGetUUID" && !valid_uuid(value) {
+        return Err(Error::msg(op, "implausible: invalid GPU UUID"));
+    }
+    if op == "nvmlDeviceGetSerial" && repeated(value.trim().as_bytes()) {
+        return Err(Error::msg(op, "implausible: repeated serial characters"));
+    }
+    Ok(value.to_owned())
+}
+
+/// Rejects uncertain enrichment while keeping every readable identity group.
+fn finish_enumeration(capture: &mut Capture<Gpu>, expected: u32, final_count: Result<u32>) {
+    let mismatch = match final_count {
+        Ok(count) => count != expected || capture.items.len() != expected as usize,
+        Err(error) => {
+            capture.failures.push(("NVML count", error));
+            true
+        }
+    };
+    if mismatch {
+        capture.failures.push((
+            "NVML count",
+            Error::msg("NVML count", "implausible: incomplete or changed GPU count"),
+        ));
+        for gpu in &mut capture.items {
+            gpu.pci_bus = None;
+            gpu.pci_address = None;
+        }
+    }
+    sanitize_identities(capture);
+}
+
+fn sanitize_identities(capture: &mut Capture<Gpu>) {
+    for gpu in &mut capture.items {
+        if gpu
+            .uuid_suffix
+            .as_deref()
+            .is_some_and(|suffix| !valid_uuid(suffix.strip_prefix(':').unwrap_or(suffix).trim()))
+        {
+            gpu.uuid_suffix = None;
+            capture.failures.push((
+                "NVIDIA UUID",
+                Error::msg("NVIDIA UUID", "implausible: invalid GPU UUID"),
+            ));
+        }
+        if gpu.name.trim().is_empty() || gpu.name.chars().any(char::is_control) {
+            gpu.name = "Unknown".to_owned();
+            capture.failures.push((
+                "NVIDIA name",
+                Error::msg("NVIDIA name", "malformed: empty or non-printable GPU name"),
+            ));
+        }
+    }
+    for field in 0..3 {
+        let get = |gpu: &Gpu| {
+            match field {
+                0 => gpu.uuid_suffix.as_deref(),
+                1 => gpu.serial.as_deref(),
+                _ => gpu.pdi.as_deref(),
+            }
+            .map(|v| v.trim().to_ascii_uppercase())
+        };
+        let values: Vec<_> = capture.items.iter().map(get).collect();
+        for (gpu, value) in capture.items.iter_mut().zip(&values) {
+            if value.as_ref().is_some_and(|v| {
+                values
+                    .iter()
+                    .filter(|other| other.as_ref() == Some(v))
+                    .count()
+                    > 1
+            }) {
+                let source = match field {
+                    0 => "NVIDIA UUID",
+                    1 => "NVML serial",
+                    _ => "NVML PDI",
+                };
+                capture.failures.push((
+                    source,
+                    Error::msg(source, "implausible: duplicate identifier across GPUs"),
+                ));
+                match field {
+                    0 => gpu.uuid_suffix = None,
+                    1 => gpu.serial = None,
+                    _ => gpu.pdi = None,
+                }
+            }
+        }
     }
 }
 
 /// Resolves an absolute path in the standard driver's NVSMI installation.
 pub fn standard_path(name: &str) -> Result<PathBuf> {
     if name.is_empty() || name.contains(['/', '\\', ':', '\0']) || name == "." || name == ".." {
-        return Err(Error::msg("NVSMI path", "expected a filename"));
+        return Err(Error::msg("NVSMI path", "malformed: expected a filename"));
     }
     let root = std::env::var_os("ProgramW6432")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .ok_or_else(|| Error::msg("NVSMI path", "ProgramW6432 is missing or not absolute"))?;
+        .ok_or_else(|| {
+            Error::msg(
+                "NVSMI path",
+                "absent: ProgramW6432 is missing or not absolute",
+            )
+        })?;
     Ok(root.join("NVIDIA Corporation").join("NVSMI").join(name))
 }
 
@@ -207,6 +395,16 @@ struct PdiInfo {
 }
 type Pdi = unsafe extern "C" fn(Device, *mut PdiInfo) -> i32;
 
+fn parse_pdi(info: &PdiInfo) -> Result<String> {
+    if info.version != std::mem::size_of::<PdiInfo>() as u32 | (1 << 24) {
+        return Err(Error::msg(
+            "nvmlDeviceGetPdi",
+            "malformed: returned PDI structure version changed",
+        ));
+    }
+    pdi_value(info.value)
+}
+
 fn optional_text(
     library: &VendorLibrary,
     symbol: &CStr,
@@ -226,7 +424,7 @@ fn optional_pdi(library: &VendorLibrary, device: Device) -> Result<String> {
     };
     // SAFETY: info is the aligned, versioned nvmlPdi_v1_t and device is live.
     status("nvmlDeviceGetPdi", unsafe { function(device, &mut info) })?;
-    Ok(format!("{:016X}", info.value))
+    parse_pdi(&info)
 }
 
 fn optional_value<T>(
@@ -237,7 +435,8 @@ fn optional_value<T>(
 ) -> Option<T> {
     match value {
         Ok(value) => Some(value),
-        Err(mut error) => {
+        Err(error) => {
+            let mut error = classified(error);
             // GPU indices are report positions, never captured identity values.
             error.detail.push_str(&format!(" (GPU {index})"));
             capture.failures.push((source, error));
@@ -252,20 +451,7 @@ fn driver_text(function: Text, device: Device, op: &'static str) -> Result<Strin
     status(op, unsafe {
         function(device, bytes.as_mut_ptr().cast(), bytes.len() as u32)
     })?;
-    let end = bytes
-        .iter()
-        .position(|&b| b == 0)
-        .ok_or_else(|| Error::msg(op, "unterminated driver string"))?;
-    let value = std::str::from_utf8(&bytes[..end]).map_err(|e| Error::msg(op, e.to_string()))?;
-    if matches!(op, "nvmlDeviceGetSerial" | "nvmlDeviceGetBoardPartNumber")
-        && value.trim().bytes().all(|byte| byte == b'0')
-    {
-        return Err(Error::msg(op, "placeholder driver string"));
-    }
-    if value.trim().is_empty() {
-        return Err(Error::msg(op, "empty driver string"));
-    }
-    Ok(value.to_owned())
+    parse_driver_text(&bytes, op)
 }
 
 /// Enumerates NVIDIA GPUs using a fully qualified, optional NVML library.
@@ -302,12 +488,17 @@ pub fn nvml(path: &Path) -> Result<Capture<Gpu>> {
     let mut length = 0;
     // SAFETY: The initialized session and writable count output are live.
     status("nvmlDeviceGetCount_v2", unsafe { count(&mut length) })?;
-    if length == 0 || length > 256 {
+    if length == 0 || length as usize > MAX_GPUS {
         return Err(Error::msg(
             "nvmlDeviceGetCount_v2",
-            "no GPUs or invalid GPU count",
+            if length == 0 {
+                "absent: no GPUs"
+            } else {
+                "implausible: invalid GPU count"
+            },
         ));
     }
+    let mut seen_handles = std::collections::HashSet::new();
     for index in 0..length {
         let mut device = std::ptr::null_mut();
         // SAFETY: index is within the returned count; device is writable.
@@ -317,10 +508,13 @@ pub fn nvml(path: &Path) -> Result<Capture<Gpu>> {
         if optional_value(&mut capture, index, "NVML handle", result).is_none() {
             continue;
         }
-        if device.is_null() {
+        if device.is_null() || !seen_handles.insert(device) {
             capture.failures.push((
                 "NVML handle",
-                Error::msg("nvmlDeviceGetHandleByIndex_v2", "null GPU handle"),
+                Error::msg(
+                    "nvmlDeviceGetHandleByIndex_v2",
+                    "implausible: null or duplicate GPU handle",
+                ),
             ));
             continue;
         }
@@ -395,10 +589,10 @@ pub fn nvml(path: &Path) -> Result<Capture<Gpu>> {
             // SAFETY: info matches the published nvmlPciInfo_t layout, including both strings.
             match status("nvmlDeviceGetPciInfo_v3", unsafe { pci(device, &mut info) }) {
                 Ok(()) if info.domain == 0 && info.bus <= 255 && info.device <= 31 => {
-                    gpu.pci_bus = Some(info.bus);
                     let end = info.bus_id.iter().position(|&b| b == 0);
                     let address = end.and_then(|end| {
-                        let bytes: Vec<u8> = info.bus_id[..end].iter().map(|&b| b as u8).collect();
+                        let bytes: Vec<u8> =
+                            info.bus_id.get(..end)?.iter().map(|&b| b as u8).collect();
                         std::str::from_utf8(&bytes)
                             .ok()
                             .and_then(|text| parse_pci_address(text).ok())
@@ -407,11 +601,15 @@ pub fn nvml(path: &Path) -> Result<Capture<Gpu>> {
                         Some(address)
                             if address.bus == info.bus && address.device == info.device =>
                         {
-                            gpu.pci_address = Some(address)
+                            gpu.pci_address = Some(address);
+                            gpu.pci_bus = Some(address.bus);
                         }
                         _ => capture.failures.push((
                             "NVML PCI match",
-                            Error::msg("NVML PCI match", "invalid or inconsistent PCI BDF"),
+                            Error::msg(
+                                "NVML PCI match",
+                                "malformed: invalid or inconsistent PCI BDF",
+                            ),
                         )),
                     }
                 }
@@ -419,7 +617,7 @@ pub fn nvml(path: &Path) -> Result<Capture<Gpu>> {
                     "NVML PCI match",
                     Error::msg(
                         "NVML PCI match",
-                        "nonzero domain or invalid bus; NVAPI match not proven",
+                        "ambiguous: nonzero domain or invalid bus; NVAPI match not proven",
                     ),
                 )),
                 Err(error) => capture.failures.push(("NVML PCI match", error)),
@@ -427,6 +625,11 @@ pub fn nvml(path: &Path) -> Result<Capture<Gpu>> {
         }
         capture.items.push(gpu);
     }
+    let mut final_count = 0;
+    // SAFETY: The session is still initialized and the count output is writable.
+    let count_result =
+        status("nvmlDeviceGetCount_v2", unsafe { count(&mut final_count) }).map(|()| final_count);
+    finish_enumeration(&mut capture, length, count_result);
     if let Err(error) = session.finish() {
         capture.failures.push(("NVML shutdown", error));
     }
@@ -434,12 +637,18 @@ pub fn nvml(path: &Path) -> Result<Capture<Gpu>> {
         for (_, error) in capture.failures {
             record(error);
         }
-        return Err(Error::msg("NVML", "no readable GPU handles"));
+        return Err(Error::msg("NVML", "absent: no readable GPU handles"));
     }
     Ok(capture)
 }
 
 fn parse_smi(text: &str) -> Result<Vec<Gpu>> {
+    if text.len() > 1024 * 1024 {
+        return Err(Error::msg(
+            "nvidia-smi -L",
+            "malformed: output exceeds size cap",
+        ));
+    }
     let mut gpus = Vec::new();
     // C# parity: Hardware/GpuInfo.cs:45-64. MIG/non-GPU lines are ignored,
     // names are trimmed before UUID's trailing ')' is removed (including CRLF).
@@ -447,12 +656,23 @@ fn parse_smi(text: &str) -> Result<Vec<Gpu>> {
         let (header, info) = line
             .split_once(':')
             .ok_or_else(|| Error::msg("nvidia-smi -L", "GPU line has no colon"))?;
-        let index = header[4..]
+        if gpus.len() >= MAX_GPUS {
+            return Err(Error::msg(
+                "nvidia-smi -L",
+                "implausible: GPU count exceeds cap",
+            ));
+        }
+        let index = header
+            .get(4..)
+            .unwrap_or_default()
             .trim()
             .parse::<u32>()
-            .map_err(|e| Error::msg("nvidia-smi -L", e.to_string()))?;
+            .map_err(|_| Error::msg("nvidia-smi -L", "malformed: invalid GPU index"))?;
         if gpus.iter().any(|gpu: &Gpu| gpu.index == index) {
-            return Err(Error::msg("nvidia-smi -L", "duplicate GPU index"));
+            return Err(Error::msg(
+                "nvidia-smi -L",
+                "ambiguous: duplicate GPU index",
+            ));
         }
         let info = info.trim();
         let (name, uuid_suffix) = match info.split_once("(UUID") {
@@ -467,22 +687,36 @@ fn parse_smi(text: &str) -> Result<Vec<Gpu>> {
         });
     }
     if gpus.is_empty() {
-        return Err(Error::msg("nvidia-smi -L", "no GPU lines in output"));
+        return Err(Error::msg(
+            "nvidia-smi -L",
+            "absent: no GPU lines in output",
+        ));
     }
     Ok(gpus)
 }
 
 fn parse_pci_address(text: &str) -> Result<PciAddress> {
-    let invalid = || Error::msg("NVIDIA PCI BDF", "invalid or nonzero-domain PCI address");
-    let parts: Vec<_> = text.split(':').collect();
-    if parts.len() != 3 {
+    let invalid = || {
+        Error::msg(
+            "NVIDIA PCI BDF",
+            "malformed: invalid or nonzero-domain PCI address",
+        )
+    };
+    if text.len() > 32 {
         return Err(invalid());
     }
-    let (device, function) = parts[2].split_once('.').ok_or_else(invalid)?;
+    let mut parts = text.split(':');
+    let domain = parts.next().ok_or_else(invalid)?;
+    let bus = parts.next().ok_or_else(invalid)?;
+    let slot = parts.next().ok_or_else(invalid)?;
+    if parts.next().is_some() {
+        return Err(invalid());
+    }
+    let (device, function) = slot.split_once('.').ok_or_else(invalid)?;
     let hex = |part| u32::from_str_radix(part, 16).map_err(|_| invalid());
-    let domain = hex(parts[0])?;
+    let domain = hex(domain)?;
     let address = PciAddress {
-        bus: hex(parts[1])?,
+        bus: hex(bus)?,
         device: hex(device)?,
         function: hex(function)?,
     };
@@ -500,9 +734,50 @@ fn zero_domain_location(text: &str, address: PciAddress) -> bool {
     text == format!("PCI {suffix}") || text == format!("PCI segment 0 {suffix}")
 }
 
+fn location_address(bytes: &[u8], required: u32, address: PciAddress) -> Result<PciAddress> {
+    let invalid = || {
+        Error::msg(
+            "GPU PCI domain",
+            "malformed: invalid location string size or encoding",
+        )
+    };
+    if required < 2 || !required.is_multiple_of(2) {
+        return Err(invalid());
+    }
+    let bytes = bytes.get(..required as usize).ok_or_else(invalid)?;
+    let words: Vec<_> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
+        .collect();
+    if words.last() != Some(&0) {
+        return Err(invalid());
+    }
+    let location = String::from_utf16(
+        words
+            .get(..words.len().saturating_sub(1))
+            .unwrap_or_default(),
+    )
+    .map_err(|_| invalid())?;
+    if !zero_domain_location(&location, address) {
+        return Err(Error::msg(
+            "GPU PCI domain",
+            "ambiguous: zero domain and exact BDF not proven",
+        ));
+    }
+    Ok(address)
+}
+
 /// Gets PCI BDFs from the exact NVIDIA WMI instance IDs through SetupAPI.
 /// No instance ID or PCI address is embedded in a failure message.
 pub fn adapter_pci_addresses(ids: &[&str]) -> Result<Capture<(usize, PciAddress)>> {
+    if ids.len() > MAX_GPUS {
+        return Err(Error::msg(
+            "WMI PCI match",
+            "implausible: GPU count exceeds cap",
+        ));
+    }
     use windows::Win32::Devices::DeviceAndDriverInstallation::{
         SP_DEVINFO_DATA, SPDRP_ADDRESS, SPDRP_BUSNUMBER, SetupDiGetDevicePropertyW,
         SetupDiGetDeviceRegistryPropertyW, SetupDiOpenDeviceInfoW,
@@ -594,24 +869,7 @@ pub fn adapter_pci_addresses(ids: &[&str]) -> Result<Capture<(usize, PciAddress)
                     "invalid location string type or size",
                 ));
             }
-            let words: Vec<_> = bytes[..required as usize]
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-                .collect();
-            if words.last() != Some(&0) {
-                return Err(Error::msg("GPU PCI domain", "unterminated location string"));
-            }
-            let location = String::from_utf16(&words[..words.len() - 1])
-                .map_err(|_| Error::msg("GPU PCI domain", "malformed location string"))?;
-            if !zero_domain_location(&location, address) {
-                return Err(Error::msg(
-                    "GPU PCI domain",
-                    "zero domain and matching BDF not proven",
-                ));
-            }
-            Ok(address)
+            location_address(&bytes, required, address)
         })();
         match result {
             Ok(address) => capture.items.push((index, address)),
@@ -622,9 +880,21 @@ pub fn adapter_pci_addresses(ids: &[&str]) -> Result<Capture<(usize, PciAddress)
 }
 
 fn pci_buses(text: &str, gpus: &mut [Gpu]) -> Result<()> {
+    if text.len() > 1024 * 1024 {
+        return Err(Error::msg(
+            "nvidia-smi PCI match",
+            "malformed: output exceeds size cap",
+        ));
+    }
     let mut seen = std::collections::HashSet::new();
     let mut buses = Vec::new();
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        if buses.len() >= MAX_GPUS {
+            return Err(Error::msg(
+                "nvidia-smi PCI match",
+                "implausible: GPU count exceeds cap",
+            ));
+        }
         let (index, address) = line
             .split_once(',')
             .ok_or_else(|| Error::msg("nvidia-smi PCI match", "invalid CSV row"))?;
@@ -632,41 +902,29 @@ fn pci_buses(text: &str, gpus: &mut [Gpu]) -> Result<()> {
             .trim()
             .parse::<u32>()
             .map_err(|e| Error::msg("nvidia-smi PCI match", e.to_string()))?;
-        let parts: Vec<_> = address.trim().split(':').collect();
-        if parts.len() != 3 || !seen.insert(index) || !gpus.iter().any(|gpu| gpu.index == index) {
+        if !seen.insert(index) || !gpus.iter().any(|gpu| gpu.index == index) {
             return Err(Error::msg(
                 "nvidia-smi PCI match",
-                "invalid PCI address or GPU index",
+                "ambiguous: invalid PCI address or GPU index",
             ));
         }
-        let domain = u32::from_str_radix(parts[0], 16)
-            .map_err(|e| Error::msg("nvidia-smi PCI match", e.to_string()))?;
-        let bus = u32::from_str_radix(parts[1], 16)
-            .map_err(|e| Error::msg("nvidia-smi PCI match", e.to_string()))?;
-        let (device, function) = parts[2]
-            .split_once('.')
-            .ok_or_else(|| Error::msg("nvidia-smi PCI match", "missing PCI function"))?;
-        let device = u32::from_str_radix(device, 16)
-            .map_err(|e| Error::msg("nvidia-smi PCI match", e.to_string()))?;
-        let function = u32::from_str_radix(function, 16)
-            .map_err(|e| Error::msg("nvidia-smi PCI match", e.to_string()))?;
-        if domain != 0 || bus > 255 || device > 31 || function > 7 {
+        let address = parse_pci_address(address.trim())?;
+        if buses
+            .iter()
+            .any(|(_, prior): &(u32, PciAddress)| prior.bus == address.bus)
+        {
             return Err(Error::msg(
                 "nvidia-smi PCI match",
-                "PCI address cannot be matched to NVAPI",
+                "ambiguous: duplicate PCI bus",
             ));
         }
-        buses.push((
-            index,
-            PciAddress {
-                bus,
-                device,
-                function,
-            },
-        ));
+        buses.push((index, address));
     }
     if seen.len() != gpus.len() {
-        return Err(Error::msg("nvidia-smi PCI match", "incomplete GPU list"));
+        return Err(Error::msg(
+            "nvidia-smi PCI match",
+            "implausible: incomplete GPU list",
+        ));
     }
     for gpu in gpus {
         gpu.pci_address = buses
@@ -684,21 +942,16 @@ pub fn smi(path: &Path, budget: Duration) -> Result<Capture<Gpu>> {
     let deadline = budget;
     let cancel = process::Cancel::new();
     let run = |args: &[&str]| -> Result<String> {
-        let output = process::run(
-            path,
-            args,
-            deadline.saturating_sub(start.elapsed()),
-            &cancel,
-        )
-        .map_err(|e| Error::msg("nvidia-smi", e))?;
+        let remaining = deadline.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            return Err(Error::msg("nvidia-smi", "timeout: shared deadline expired"));
+        }
+        let output = process::run(path, args, remaining, &cancel)
+            .map_err(|e| classified(Error::msg("nvidia-smi", e)))?;
         if output.code != 0 {
             return Err(Error::msg(
                 "nvidia-smi",
-                format!(
-                    "Process exited with code {}. {}",
-                    output.code,
-                    output.stderr.trim()
-                ),
+                format!("absent: process exited with code {}", output.code),
             ));
         }
         Ok(output.stdout)
@@ -707,6 +960,7 @@ pub fn smi(path: &Path, budget: Duration) -> Result<Capture<Gpu>> {
         items: parse_smi(&run(&["-L"])?)?,
         failures: Vec::new(),
     };
+    sanitize_identities(&mut capture);
     match run(&[
         "--query-gpu=index,pci.bus_id",
         "--format=csv,noheader,nounits",
@@ -736,7 +990,7 @@ macro_rules! interface {
         if address.is_null() {
             return Err(Error::msg(
                 "nvapi_QueryInterface",
-                format!("missing interface 0x{:08X}", $id),
+                format!("absent: missing interface 0x{:08X}", $id),
             ));
         }
         // SAFETY: Each numeric ID and C signature matches NVIDIA's published interface table.
@@ -769,16 +1023,23 @@ pub fn boards() -> Result<Capture<Board>> {
         enumerate(handles.as_mut_ptr(), &mut length)
     })?;
     if length > handles.len() as u32 {
-        return Err(Error::msg("NvAPI_EnumPhysicalGPUs", "invalid GPU count"));
+        return Err(Error::msg(
+            "NvAPI_EnumPhysicalGPUs",
+            "implausible: invalid GPU count",
+        ));
     }
     let mut capture = Capture {
         items: Vec::new(),
         failures: Vec::new(),
     };
-    for &handle in &handles[..length as usize] {
+    let mut seen_handles = std::collections::HashSet::new();
+    for &handle in handles.get(..length as usize).unwrap_or_default() {
         let result = (|| {
-            if handle.is_null() {
-                return Err(Error::msg("NvAPI_EnumPhysicalGPUs", "null GPU handle"));
+            if handle.is_null() || !seen_handles.insert(handle) {
+                return Err(Error::msg(
+                    "NvAPI_EnumPhysicalGPUs",
+                    "implausible: null or duplicate GPU handle",
+                ));
             }
             let mut pci_bus = 0;
             let mut info = BoardInfo {
@@ -787,6 +1048,12 @@ pub fn boards() -> Result<Capture<Board>> {
             };
             // SAFETY: The enumerated handle and writable bus output are live.
             status("NvAPI_GPU_GetBusId", unsafe { bus(handle, &mut pci_bus) })?;
+            if pci_bus > 255 {
+                return Err(Error::msg(
+                    "NvAPI_GPU_GetBusId",
+                    "malformed: invalid PCI bus",
+                ));
+            }
             // SAFETY: info is the 20-byte version-1 NV_BOARD_INFO, with sixteen inline bytes.
             if let Err(error) = status("NvAPI_GPU_GetBoardInfo", unsafe {
                 board(handle, &mut info)
@@ -814,13 +1081,19 @@ pub fn boards() -> Result<Capture<Board>> {
 
 /// Formats raw board bytes as C# ASCII, or uppercase hex without separators (AD-13).
 pub fn board_value(bytes: &[u8; 16]) -> Option<String> {
+    if repeated(bytes) {
+        return None;
+    }
     if bytes.iter().all(|&b| b == 0 || (0x20..=0x7e).contains(&b)) {
         // C# parity: Services/Win32/NvApi.cs:119-121. Trim only trailing NULs;
         // reject whitespace and ASCII '0', preserving embedded NULs and spaces.
         let value = String::from_utf8_lossy(bytes)
             .trim_end_matches('\0')
             .to_owned();
-        if value.trim().is_empty() || value.chars().all(|c| c == '0') {
+        if value.trim().is_empty()
+            || value.chars().all(|c| c == '0')
+            || repeated(value.trim().as_bytes())
+        {
             None
         } else {
             Some(value)
@@ -833,6 +1106,298 @@ pub fn board_value(bytes: &[u8; 16]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fabricated_gpu(index: u32) -> Gpu {
+        Gpu {
+            index,
+            name: format!("NVIDIA Test GPU {index}"),
+            uuid_suffix: Some(format!(": GPU-9e521d74-03ba-4c68-a27f-81d639b504c{index}")),
+            pci_bus: Some(index + 1),
+            pci_address: Some(PciAddress {
+                bus: index + 1,
+                device: 0,
+                function: 0,
+            }),
+            serial: Some(format!("03248271963{index}")),
+            pdi: Some(format!("08F47A2196BC3D5{index}")),
+            vbios: Some("94.04.3A.00.71".to_owned()),
+            board_part: Some("900-1G141-2530-000".to_owned()),
+        }
+    }
+
+    #[test]
+    fn nvml_optional_fields_reject_garbage_and_keep_partial_results() {
+        assert_eq!(status_class("NvAPI_Initialize", -6), "absent");
+        assert_eq!(status_class("NvAPI_GPU_GetBoardInfo", -104), "unsupported");
+        assert_eq!(status_class("NvAPI_GPU_GetBoardInfo", -100), "malformed");
+        assert_eq!(
+            status_class("NvAPI_GPU_GetBoardInfo", -175),
+            "access-denied"
+        );
+        assert_eq!(status_class("NvAPI_GPU_GetBoardInfo", -191), "timeout");
+        assert_eq!(std::mem::size_of::<PdiInfo>(), 16);
+        assert_eq!(std::mem::offset_of!(PdiInfo, value), 8);
+        assert_eq!(
+            std::mem::size_of::<PdiInfo>() as u32 | (1 << 24),
+            0x0100_0010
+        );
+        assert_eq!(
+            pdi_value(0x08F4_7A21_96BC_3D50).expect("fabricated PDI"),
+            "08F47A2196BC3D50"
+        );
+        let mut capture = Capture {
+            items: vec![fabricated_gpu(0), fabricated_gpu(1)],
+            failures: Vec::new(),
+        };
+        let malformed_pdi = parse_pdi(&PdiInfo {
+            version: 0,
+            value: 0x08F4_7A21_96BC_3D50,
+        });
+        assert!(optional_value(&mut capture, 0, "NVML PDI", malformed_pdi).is_none());
+        assert!(
+            capture
+                .failures
+                .last()
+                .expect("diagnostic")
+                .1
+                .detail
+                .contains("malformed")
+        );
+        for bytes in [
+            b"\0".as_slice(),
+            b" 000 \0",
+            b"111111\0",
+            b"bad\nserial\0",
+            &[0xff, 0],
+            b"unterminated",
+        ] {
+            let result = parse_driver_text(bytes, "nvmlDeviceGetSerial");
+            capture.items[0].serial = optional_value(&mut capture, 0, "NVML serial", result);
+            assert!(capture.items[0].serial.is_none());
+        }
+        assert_eq!(
+            parse_driver_text(b" 032482719635 \0", "nvmlDeviceGetSerial").expect("serial"),
+            " 032482719635 "
+        );
+        for value in [0, u64::MAX, 0x1111_1111_1111_1111] {
+            let result = pdi_value(value);
+            capture.items[0].pdi = optional_value(&mut capture, 0, "NVML PDI", result);
+            assert!(capture.items[0].pdi.is_none());
+        }
+        for (result, class) in [
+            (
+                Err(Error::msg("GetProcAddress", "absent: export missing")),
+                "absent",
+            ),
+            (
+                status("nvmlDeviceGetBoardPartNumber", 3).map(|()| String::new()),
+                "unsupported",
+            ),
+            (
+                status("nvmlDeviceGetBoardPartNumber", 4).map(|()| String::new()),
+                "access-denied",
+            ),
+        ] {
+            capture.items[0].board_part =
+                optional_value(&mut capture, 0, "NVML board part", result);
+            assert!(capture.items[0].board_part.is_none());
+            assert!(
+                capture
+                    .failures
+                    .last()
+                    .expect("diagnostic")
+                    .1
+                    .detail
+                    .contains(class)
+            );
+        }
+        assert_eq!(capture.items[1].serial.as_deref(), Some("032482719631"));
+        assert!(
+            capture
+                .items
+                .iter()
+                .all(|gpu| gpu.uuid_suffix.is_some() && gpu.vbios.is_some())
+        );
+        assert!(
+            capture
+                .failures
+                .iter()
+                .all(|(_, error)| !error.detail.contains("03248271963"))
+        );
+    }
+
+    #[test]
+    fn nvml_changed_counts_and_duplicate_ids_fail_closed() {
+        for final_count in [
+            Ok(3),
+            Err(Error::msg(
+                "nvmlDeviceGetCount_v2",
+                "timeout: fabricated failure",
+            )),
+        ] {
+            let mut capture = Capture {
+                items: vec![fabricated_gpu(0), fabricated_gpu(1)],
+                failures: Vec::new(),
+            };
+            finish_enumeration(&mut capture, 2, final_count);
+            assert!(
+                capture
+                    .items
+                    .iter()
+                    .all(|gpu| gpu.pci_bus.is_none() && gpu.pci_address.is_none())
+            );
+            assert!(
+                capture
+                    .items
+                    .iter()
+                    .all(|gpu| gpu.serial.is_some() && gpu.uuid_suffix.is_some())
+            );
+            assert!(!capture.failures.is_empty());
+        }
+        // One unreadable handle preserves the other device but forbids a board join.
+        let mut capture = Capture {
+            items: vec![fabricated_gpu(1)],
+            failures: vec![(
+                "NVML handle",
+                Error::msg(
+                    "nvmlDeviceGetHandleByIndex_v2",
+                    "absent: fabricated failure",
+                ),
+            )],
+        };
+        finish_enumeration(&mut capture, 2, Ok(2));
+        assert_eq!(capture.items[0].index, 1);
+        assert!(capture.items[0].pci_bus.is_none());
+        assert!(capture.items[0].serial.is_some());
+        let mut capture = Capture {
+            items: vec![fabricated_gpu(0), fabricated_gpu(1)],
+            failures: Vec::new(),
+        };
+        finish_enumeration(&mut capture, 2, Ok(2));
+        assert!(capture.failures.is_empty());
+        assert!(capture.items.iter().all(|gpu| gpu.pci_bus.is_some()));
+        capture.items[1].uuid_suffix = capture.items[0].uuid_suffix.clone();
+        capture.items[1].serial = capture.items[0].serial.clone();
+        capture.items[1].pdi = capture.items[0].pdi.clone();
+        sanitize_identities(&mut capture);
+        assert!(
+            capture
+                .items
+                .iter()
+                .all(|gpu| gpu.uuid_suffix.is_none() && gpu.serial.is_none() && gpu.pdi.is_none())
+        );
+        assert!(
+            capture
+                .items
+                .iter()
+                .all(|gpu| gpu.vbios.is_some() && gpu.board_part.is_some())
+        );
+        assert_eq!(capture.failures.len(), 6);
+    }
+
+    #[test]
+    fn smi_invalid_uuid_and_capped_lists_preserve_readable_groups() {
+        for uuid in [
+            "wrong",
+            "GPU-00000000-0000-0000-0000-000000000000",
+            "GPU-9e521d74-03ba-4c68-a27f-81d639b504cg",
+        ] {
+            let mut capture = Capture {
+                items: parse_smi(&format!("GPU 0: NVIDIA Test (UUID: {uuid})")).expect("identity"),
+                failures: Vec::new(),
+            };
+            sanitize_identities(&mut capture);
+            assert_eq!(capture.items[0].name, "NVIDIA Test");
+            assert!(capture.items[0].uuid_suffix.is_none());
+            assert!(capture.failures[0].1.detail.contains("implausible"));
+            assert!(!capture.failures[0].1.detail.contains(uuid));
+        }
+        let text: String = (0..=MAX_GPUS)
+            .map(|i| format!("GPU {i}: NVIDIA Test\n"))
+            .collect();
+        assert!(
+            parse_smi(&text)
+                .expect_err("cap")
+                .detail
+                .contains("implausible")
+        );
+        assert!(
+            parse_smi("No devices were found")
+                .expect_err("absent")
+                .detail
+                .contains("absent")
+        );
+        let mut capture = Capture {
+            items: vec![fabricated_gpu(0)],
+            failures: Vec::new(),
+        };
+        capture.items[0].name = "bad\nname".to_owned();
+        sanitize_identities(&mut capture);
+        assert_eq!(capture.items[0].name, "Unknown");
+        assert!(capture.items[0].uuid_suffix.is_some() && capture.items[0].serial.is_some());
+        assert!(capture.failures[0].1.detail.contains("malformed"));
+    }
+
+    #[test]
+    fn pci_location_encoding_and_duplicate_buses_leave_diagnostics() {
+        let address = PciAddress {
+            bus: 1,
+            device: 0,
+            function: 0,
+        };
+        let encode = |s: &str| {
+            s.encode_utf16()
+                .chain([0])
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>()
+        };
+        let bytes = encode("PCI bus 1, device 0, function 0");
+        assert_eq!(
+            location_address(&bytes, bytes.len() as u32, address).expect("location"),
+            address
+        );
+        for bytes in [
+            encode("PCI-Bus 1, Gerät 0, Funktion 0"),
+            encode("unknown"),
+            encode("PCI segment 1 bus 1, device 0, function 0"),
+            vec![0, 0xd8, 0, 0],
+            vec![1],
+            vec![65, 0],
+        ] {
+            let mut capture = Capture {
+                items: Vec::new(),
+                failures: Vec::new(),
+            };
+            assert!(
+                optional_value(
+                    &mut capture,
+                    0,
+                    "WMI PCI match",
+                    location_address(&bytes, bytes.len() as u32, address)
+                )
+                .is_none()
+            );
+            assert_eq!(capture.failures.len(), 1);
+        }
+        assert!(location_address(&bytes, u32::MAX, address).is_err());
+        let mut gpus = [fabricated_gpu(0), fabricated_gpu(1)];
+        let before: Vec<_> = gpus
+            .iter()
+            .map(|gpu| (gpu.name.clone(), gpu.uuid_suffix.clone(), gpu.pci_address))
+            .collect();
+        assert!(
+            pci_buses("0, 0000:01:00.0\n1, 0000:01:01.0", &mut gpus)
+                .expect_err("duplicate bus")
+                .detail
+                .contains("ambiguous")
+        );
+        assert_eq!(
+            gpus.iter()
+                .map(|gpu| (gpu.name.clone(), gpu.uuid_suffix.clone(), gpu.pci_address))
+                .collect::<Vec<_>>(),
+            before
+        );
+    }
 
     #[test]
     fn nvidia_smi_parser_keeps_csharp_crlf_and_uuid_delimiters() {
@@ -925,6 +1490,8 @@ mod tests {
         assert_eq!(board_value(&[b'0'; 16]), None);
         assert_eq!(board_value(b"000000\0\0\0\0\0\0\0\0\0\0"), None);
         assert_eq!(board_value(&[b' '; 16]), None);
+        assert_eq!(board_value(&[0xff; 16]), None);
+        assert_eq!(board_value(&[b'1'; 16]), None);
         assert_eq!(
             board_value(b"042571983612\0\0\0\0"),
             Some("042571983612".to_owned())
