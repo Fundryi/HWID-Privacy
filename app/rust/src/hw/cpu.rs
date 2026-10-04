@@ -83,7 +83,12 @@ fn append_sockets(smbios: &firmware::Smbios, out: &mut Out) {
             ("Socket Asset Tag (SMBIOS)", true, &socket.asset),
         ] {
             // Type-4 part numbers describe the processor model; asset tags are per-unit.
-            super::bios::write_metadata_field(out, label, identity, value);
+            if identity {
+                let values: Vec<_> = sockets.iter().map(|other| &other.asset).collect();
+                super::bios::write_unique_metadata_field(out, label, value, &values);
+            } else {
+                super::bios::write_metadata_field(out, label, false, value);
+            }
         }
     }
 }
@@ -220,6 +225,64 @@ fn write_cpuid(
 mod tests {
     use super::*;
     use serde::Deserialize;
+
+    #[test]
+    fn duplicate_socket_assets_and_old_versions_preserve_legacy_output() {
+        let record = firmware::Structure {
+            kind: 4,
+            handle: 0x0418,
+            formatted: vec![0; 0x23],
+            strings: ["CPU1", "Intel(R) Corporation", "CPU-INV-2481"]
+                .map(String::from)
+                .to_vec(),
+        };
+        let mut table = firmware::Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record.clone(), record],
+        };
+        for (index, record) in table.structures.iter_mut().enumerate() {
+            record.handle += index as u16;
+            record.formatted[4] = 1;
+            record.formatted[7] = 2;
+            record.formatted[0x21] = 3;
+        }
+        let mut out = Out::new();
+        out.info("Legacy", "kept");
+        append_sockets(&table, &mut out);
+        let section = out.finish();
+        assert!(section.body.starts_with("Legacy: kept\r\n"));
+        assert!(section.body.contains("CPU Socket #2 (SMBIOS)\r\n"));
+        assert!(!section.body.contains("Socket Asset Tag (SMBIOS):"));
+        assert!(
+            section
+                .failures
+                .iter()
+                .any(|failure| failure.contains("implausible"))
+        );
+        assert!(
+            section
+                .failures
+                .iter()
+                .all(|failure| !failure.contains("CPU-INV-2481"))
+        );
+        table.major = 2;
+        table.minor = 2;
+        for record in &mut table.structures {
+            record.formatted.truncate(0x20);
+        }
+        let mut out = Out::new();
+        append_sockets(&table, &mut out);
+        let old = out.finish();
+        assert!(old.body.contains("Socket Designation (SMBIOS): CPU1\r\n"));
+        assert!(!old.body.contains("Part Number"));
+        assert!(!old.body.contains("Unavailable"));
+        assert!(
+            old.failures
+                .iter()
+                .any(|failure| failure.contains("unsupported"))
+        );
+    }
 
     #[test]
     fn socket_rendering_uses_printable_socket_count_and_keeps_model_context_unmarked() {

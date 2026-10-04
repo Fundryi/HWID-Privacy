@@ -294,7 +294,14 @@ pub(super) fn metadata_record_has_values(
         };
         out.fallback_failed(
             &source,
-            &win::Error::msg("SMBIOS metadata", "record has no printable fields"),
+            &win::Error::msg(
+                "SMBIOS metadata",
+                if fields.iter().any(|field| field.is_err()) {
+                    "malformed: record has no printable fields; field decoding failed"
+                } else {
+                    "absent or placeholder: record has no printable fields"
+                },
+            ),
         );
     }
     printable
@@ -319,8 +326,62 @@ pub(super) fn write_metadata_field(
             out.fallback_failed(label, error)
                 .info(label, &format!("Unavailable ({error})"));
         }
-        _ => {}
+        Ok(Some(_)) => {
+            out.fallback_failed(
+                label,
+                &win::Error::msg(
+                    "SMBIOS metadata",
+                    "placeholder or malformed: optional field omitted",
+                ),
+            );
+        }
+        Ok(None) => {
+            out.fallback_failed(
+                label,
+                &win::Error::msg(
+                    "SMBIOS metadata",
+                    "absent or unsupported: optional field omitted",
+                ),
+            );
+        }
     }
+}
+
+pub(super) fn write_unique_metadata_field(
+    out: &mut Out,
+    label: &str,
+    value: &win::Result<Option<String>>,
+    values: &[&win::Result<Option<String>>],
+) {
+    if let Ok(Some(text)) = value
+        && text.chars().all(|character| text.starts_with(character))
+    {
+        out.fallback_failed(
+            label,
+            &win::Error::msg(
+                "SMBIOS identity",
+                "implausible: repeated-character identity",
+            ),
+        );
+        return;
+    }
+    if let Ok(Some(text)) = value
+        && values
+            .iter()
+            .filter(|other| matches!(other, Ok(Some(other)) if other == text && useful_new_value(other)))
+            .count()
+            > 1
+    {
+        out.fallback_failed(
+            label,
+            &win::Error::msg(
+                "SMBIOS identity",
+                "implausible: same identity on distinct records",
+            ),
+        );
+        return;
+    }
+    write_metadata_field(out, label, true, value);
 }
 
 /// Filters only optional new firmware fields; legacy values remain byte-identical.

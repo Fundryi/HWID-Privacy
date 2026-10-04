@@ -43,7 +43,21 @@ fn append_power_supplies(smbios: &Smbios, out: &mut Out) {
             ("Serial (SMBIOS)", true, &supply.serial),
             ("Asset Tag (SMBIOS)", true, &supply.asset),
         ] {
-            super::bios::write_metadata_field(out, label, identity, value);
+            if identity {
+                let values: Vec<_> = supplies
+                    .iter()
+                    .map(|other| {
+                        if label == "Serial (SMBIOS)" {
+                            &other.serial
+                        } else {
+                            &other.asset
+                        }
+                    })
+                    .collect();
+                super::bios::write_unique_metadata_field(out, label, value, &values);
+            } else {
+                super::bios::write_metadata_field(out, label, false, value);
+            }
         }
     }
 }
@@ -150,6 +164,63 @@ fn decode_chassis_type(value: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_psu_identities_and_oem_assets_keep_legacy_and_context() {
+        let record = Structure {
+            kind: 39,
+            handle: 0x3908,
+            formatted: vec![0; 12],
+            strings: [
+                "Delta Electronics",
+                "PSU2408G7192",
+                "To Be Filled By O.E.M.",
+            ]
+            .map(String::from)
+            .to_vec(),
+        };
+        let mut table = Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record.clone(), record],
+        };
+        for record in &mut table.structures {
+            record.formatted[7..10].copy_from_slice(&[1, 2, 3]);
+        }
+        let mut out = Out::new();
+        out.info("Legacy", "kept");
+        append_power_supplies(&table, &mut out);
+        let section = out.finish();
+        assert!(section.body.starts_with("Legacy: kept\r\n"));
+        assert!(section.body.contains("Power Supply #2 (SMBIOS)\r\n"));
+        assert_eq!(
+            section
+                .body
+                .matches("Manufacturer (SMBIOS): Delta Electronics\r\n")
+                .count(),
+            2
+        );
+        assert!(!section.body.contains("Serial (SMBIOS):"));
+        assert!(!section.body.contains("Asset Tag (SMBIOS):"));
+        assert!(
+            section
+                .failures
+                .iter()
+                .any(|failure| failure.contains("implausible"))
+        );
+        assert!(
+            section
+                .failures
+                .iter()
+                .any(|failure| failure.contains("placeholder"))
+        );
+        assert!(
+            section
+                .failures
+                .iter()
+                .all(|failure| !failure.contains("PSU2408G7192"))
+        );
+    }
 
     #[test]
     fn power_supply_rendering_counts_only_printable_records_and_marks_unit_values() {

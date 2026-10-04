@@ -12,7 +12,13 @@ pub fn device_version() -> Result<Option<(u8, u8)>> {
     std::thread::Builder::new()
         .name("tbs-device-info".into())
         .spawn(move || {
-            let _ = sender.send(read_device_version());
+            let result = super::catch_panic(read_device_version).unwrap_or_else(|_| {
+                Err(Error::msg(
+                    "Tbsi_GetDeviceInfo",
+                    "malformed: query worker panicked",
+                ))
+            });
+            let _ = sender.send(result);
         })
         .map_err(|_| Error::msg("Tbsi_GetDeviceInfo", "unable to start query worker"))?;
     receiver
@@ -53,21 +59,63 @@ fn read_device_version() -> Result<Option<(u8, u8)>> {
             (&mut info as *mut TPM_DEVICE_INFO).cast(),
         )
     };
+    decode_device_version(status, info.tpmVersion)
+    // The SDK reserves interface type and implementation revision.
+}
+
+fn decode_device_version(status: u32, version: u32) -> Result<Option<(u8, u8)>> {
     match status {
-        TBS_SUCCESS => match info.tpmVersion {
+        TBS_SUCCESS => match version {
             TPM_VERSION_12 => Ok(Some((1, 2))),
             TPM_VERSION_20 => Ok(Some((2, 0))),
             _ => Err(Error::msg(
                 "Tbsi_GetDeviceInfo",
-                "unsupported TPM version result",
+                "unsupported: TPM version result",
             )),
         },
         0x8028_400F => Ok(None), // TBS_E_TPM_NOT_FOUND; distinct from query failure.
         code => Err(Error {
             op: "Tbsi_GetDeviceInfo",
             code,
-            detail: "device information query failed".into(),
+            detail: match code {
+                5 | 0x8028_4012 => "access-denied: device information query",
+                127 => "unsupported: API absent",
+                126 => "absent: system DLL",
+                1460 => "timeout: device information query",
+                _ => "unavailable: device information query failed",
+            }
+            .into(),
         }),
     }
-    // The SDK reserves interface type and implementation revision; do not interpret them.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_info_failures_and_tpm12_are_independent_of_firmware() {
+        assert_eq!(
+            decode_device_version(0, TPM_VERSION_12).unwrap(),
+            Some((1, 2))
+        );
+        assert_eq!(
+            decode_device_version(0, TPM_VERSION_20).unwrap(),
+            Some((2, 0))
+        );
+        assert_eq!(decode_device_version(0x8028_400F, u32::MAX).unwrap(), None);
+        for (status, class) in [
+            (5, "access-denied"),
+            (0x8028_4012, "access-denied"),
+            (127, "unsupported"),
+            (126, "absent"),
+            (1460, "timeout"),
+            (0x8028_4002, "unavailable"),
+        ] {
+            let error = decode_device_version(status, 0).unwrap_err();
+            assert_eq!(error.code, status);
+            assert!(error.detail.contains(class));
+        }
+        assert!(decode_device_version(0, u32::MAX).is_err());
+    }
 }

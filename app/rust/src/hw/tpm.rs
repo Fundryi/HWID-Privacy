@@ -188,6 +188,10 @@ fn render_firmware(
             out.info("TPM Spec Version (TBS)", &format!("{major}.{minor}"));
         }
         Ok(None) => {
+            out.fallback_failed(
+                "TBS",
+                &Error::msg("Tbsi_GetDeviceInfo", "absent: TPM not found"),
+            );
             out.info("TPM Spec Version (TBS)", "Not found");
         }
         Err(error) => {
@@ -484,6 +488,57 @@ fn render_ek(out: &mut Out, fields: &[(String, String)]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tbs_failures_keep_legacy_and_tpm12_firmware_byte_identical() {
+        let mut record = firmware::Structure {
+            kind: 43,
+            handle: 0x4318,
+            formatted: vec![0; 0x1B],
+            strings: vec!["Discrete TPM".into()],
+        };
+        record.formatted[4..10].copy_from_slice(&[b'I', b'F', b'X', 0, 1, 2]);
+        record.formatted[0x12] = 1;
+        let table = firmware::Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record],
+        };
+        let mut baseline = Out::new();
+        baseline.info("Legacy", "kept");
+        render_firmware(
+            firmware::tpm_devices(&table),
+            &Ok(Some((1, 2))),
+            &mut baseline,
+        );
+        let baseline = baseline.finish();
+        let prefix = baseline
+            .body
+            .strip_suffix("TPM Spec Version (TBS): 1.2\r\n")
+            .unwrap();
+        for code in [5, 127, 126, 1460, 0x8028_4002] {
+            let mut out = Out::new();
+            out.info("Legacy", "kept");
+            render_firmware(
+                firmware::tpm_devices(&table),
+                &Err(Error {
+                    op: "Tbsi_GetDeviceInfo",
+                    code,
+                    detail: "unavailable: fabricated failure".into(),
+                }),
+                &mut out,
+            );
+            let failed = out.finish();
+            assert!(failed.body.starts_with(prefix));
+            assert!(failed.body.contains("TPM Spec Version (SMBIOS): 1.2\r\n"));
+            assert!(
+                failed
+                    .body
+                    .contains("TPM Spec Version (TBS): Unavailable (")
+            );
+            assert_eq!(failed.failures.len(), 1);
+        }
+    }
 
     #[test]
     fn firmware_rendering_merges_words_decodes_bits_and_keeps_cross_check_observational() {

@@ -214,6 +214,7 @@ pub fn portable_batteries(table: &Smbios) -> Vec<PortableBattery> {
                 }
             } else {
                 string(6)
+                    .and_then(|value| value.map(|value| battery_date_string(&value)).transpose())
             };
             PortableBattery {
                 name: string(8),
@@ -236,14 +237,46 @@ fn battery_string(record: &Structure, offset: usize) -> Result<Option<String>> {
         .strings
         .get(usize::from(index) - 1)
         .ok_or_else(|| Error::msg("SMBIOS battery", "string index outside string table"))?;
-    if value.chars().any(char::is_control) {
-        return Err(Error::msg("SMBIOS battery", "control character in string"));
+    if value.contains('?') || value.chars().any(char::is_control) {
+        return Err(Error::msg(
+            "SMBIOS battery",
+            "malformed: control or unverified ASCII replacement in string",
+        ));
+    }
+    if matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "unknown"
+            | "none"
+            | "n/a"
+            | "default string"
+            | "to be filled by o.e.m."
+            | "to be filled by oem"
+    ) {
+        return Err(Error::msg(
+            "SMBIOS battery",
+            "placeholder: battery field omitted",
+        ));
+    }
+    if offset == 7
+        && !value.is_empty()
+        && value.chars().all(|character| value.starts_with(character))
+    {
+        return Err(Error::msg(
+            "SMBIOS battery",
+            "implausible: repeated-character serial",
+        ));
     }
     Ok((!value.is_empty()).then(|| value.clone()))
 }
 
 /// Checks the calendar date used by battery IOCTL and SBDS encodings.
 pub fn battery_date(year: u16, month: u8, day: u8) -> Result<String> {
+    // SAFETY: GetLocalTime returns initialized calendar storage and has no inputs.
+    let today = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    battery_date_at(year, month, day, (today.wYear, today.wMonth, today.wDay))
+}
+
+fn battery_date_at(year: u16, month: u8, day: u8, today: (u16, u16, u16)) -> Result<String> {
     let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
     let days = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
@@ -255,7 +288,36 @@ pub fn battery_date(year: u16, month: u8, day: u8) -> Result<String> {
     if year == 0 || day == 0 || day > days {
         return Err(Error::msg("battery date", "malformed calendar date"));
     }
+    if (year, u16::from(month), u16::from(day)) > today {
+        return Err(Error::msg(
+            "battery date",
+            "implausible future manufacture date",
+        ));
+    }
     Ok(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+fn battery_date_string(value: &str) -> Result<String> {
+    let value = value.trim();
+    let parts: Vec<_> = value.split(['-', '/']).collect();
+    let parsed = match parts.as_slice() {
+        [year, month, day] if year.len() == 4 => year
+            .parse::<u16>()
+            .ok()
+            .zip(month.parse::<u8>().ok())
+            .zip(day.parse::<u8>().ok())
+            .map(|((year, month), day)| (year, month, day)),
+        [month, day, year] if year.len() == 4 => year
+            .parse::<u16>()
+            .ok()
+            .zip(month.parse::<u8>().ok())
+            .zip(day.parse::<u8>().ok())
+            .map(|((year, month), day)| (year, month, day)),
+        _ => None,
+    }
+    .ok_or_else(|| Error::msg("SMBIOS battery date", "implausible unknown date encoding"))?;
+    battery_date(parsed.0, parsed.1, parsed.2)?;
+    Ok(value.to_owned())
 }
 
 /// Per-socket context from type 4, separate from the legacy processor identity.
@@ -340,7 +402,7 @@ pub fn tpm_devices(table: &Smbios) -> Vec<TpmDevice> {
                 .zip(record.byte(9))
                 .ok_or_else(|| metadata_error("truncated TPM specification version"))
                 .and_then(|version| {
-                    if version.0 == 0 {
+                    if !matches!(version, (1, 2) | (2, 0)) {
                         Err(metadata_error("invalid TPM specification version"))
                     } else {
                         Ok(version)
@@ -366,14 +428,20 @@ fn tpm_vendor(record: &Structure) -> Result<Option<String>> {
         .get(4..8)
         .ok_or_else(|| metadata_error("truncated TPM vendor ID"))?;
     let end = bytes.iter().position(|byte| *byte == 0).unwrap_or(4);
-    if bytes[..end]
+    let vendor = bytes
+        .get(..end)
+        .ok_or_else(|| metadata_error("malformed TPM vendor bounds"))?;
+    let padding = bytes
+        .get(end..)
+        .ok_or_else(|| metadata_error("malformed TPM padding bounds"))?;
+    if vendor
         .iter()
         .any(|byte| !byte.is_ascii_graphic() && *byte != b' ')
-        || bytes[end..].iter().any(|byte| *byte != 0)
+        || padding.iter().any(|byte| *byte != 0)
     {
         return Err(metadata_error("malformed TPM vendor ID"));
     }
-    let value: String = bytes[..end].iter().copied().map(char::from).collect();
+    let value: String = vendor.iter().copied().map(char::from).collect();
     Ok((!value.trim().is_empty()).then(|| value.trim().to_owned()))
 }
 
@@ -391,18 +459,37 @@ pub fn firmware_components(table: &Smbios) -> Vec<FirmwareComponent> {
         .structures
         .iter()
         .filter(|record| record.kind == 45)
-        .map(|record| FirmwareComponent {
-            handle: record.handle,
-            name: metadata_string(record, 4),
-            version: metadata_string(record, 5),
-            id: metadata_string(record, 7),
-            date: metadata_string(record, 9),
+        .map(|record| {
+            // Association handles are context only; never guess a target device.
+            if let Some(count) = record.byte(0x17).filter(|count| *count != 0) {
+                let end = 0x18 + usize::from(count) * 2;
+                if record.formatted.get(0x18..end).is_none() {
+                    record_association_failure(
+                        "malformed: truncated component association handles",
+                    );
+                } else {
+                    record_association_failure(
+                        "unsupported: component handles not joined to devices",
+                    );
+                }
+            }
+            FirmwareComponent {
+                handle: record.handle,
+                name: metadata_string(record, 4),
+                version: metadata_string(record, 5),
+                id: metadata_string(record, 7),
+                date: metadata_string(record, 9),
+            }
         })
         .collect()
 }
 
+fn record_association_failure(detail: &'static str) {
+    record(Error::msg("SMBIOS type 45 associations", detail));
+}
+
 fn metadata_error(detail: &'static str) -> Error {
-    Error::msg("SMBIOS metadata", detail)
+    Error::msg("SMBIOS metadata", format!("malformed: {detail}"))
 }
 
 fn metadata_string(record: &Structure, offset: usize) -> Result<Option<String>> {
@@ -416,8 +503,10 @@ fn metadata_string(record: &Structure, offset: usize) -> Result<Option<String>> 
         .strings
         .get(usize::from(index) - 1)
         .ok_or_else(|| metadata_error("string index outside string table"))?;
-    if value.chars().any(char::is_control) {
-        return Err(metadata_error("control character in string"));
+    if value.contains('?') || value.chars().any(char::is_control) {
+        return Err(metadata_error(
+            "control or unverified ASCII replacement in string",
+        ));
     }
     Ok((!value.trim().is_empty()).then(|| value.trim().to_owned()))
 }
@@ -425,6 +514,61 @@ fn metadata_string(record: &Structure, offset: usize) -> Result<Option<String>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn battery_future_dates_and_component_associations_leave_siblings_intact() {
+        assert!(
+            battery_date_at(2026, 10, 5, (2026, 10, 4))
+                .unwrap_err()
+                .detail
+                .contains("implausible")
+        );
+        assert!(battery_date_at(2026, 4, 31, (2026, 10, 4)).is_err());
+        assert_eq!(
+            battery_date_at(2024, 2, 29, (2026, 10, 4)).unwrap(),
+            "2024-02-29"
+        );
+        assert!(battery_date_string("not-a-date").is_err());
+        let mut record = Structure {
+            kind: 45,
+            handle: 0x4518,
+            formatted: vec![0; 0x1C],
+            strings: vec!["System Firmware".into()],
+        };
+        record.formatted[4] = 1;
+        record.formatted[0x17] = 2;
+        record.formatted[0x18..].copy_from_slice(&[0x01, 0x04, 0x01, 0x39]);
+        let mut table = Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record],
+        };
+        for end in [0x1C, 0x19] {
+            table.structures[0].formatted.truncate(end);
+            let component = firmware_components(&table).remove(0);
+            assert_eq!(component.name.unwrap().as_deref(), Some("System Firmware"));
+            assert!(component.version.unwrap().is_none());
+            assert!(component.id.unwrap().is_none());
+        }
+        let failures = super::super::take_recorded();
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.op == "SMBIOS type 45 associations"
+                    && failure.detail.contains("malformed"))
+        );
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.op == "SMBIOS type 45 associations"
+                    && failure.detail.contains("unsupported"))
+        );
+        assert!(
+            failures
+                .iter()
+                .all(|failure| !failure.detail.contains("System Firmware"))
+        );
+    }
 
     const ZERO_STRINGS: &str = include_str!("../../tests/fixtures/phase1-smbios/zero-strings.hex");
     const TRUNCATED: &str = include_str!("../../tests/fixtures/phase1-smbios/truncated-last.hex");
@@ -740,7 +884,7 @@ mod tests {
             (2000, 2, 29, true),
             (2100, 2, 29, false),
             (1980, 1, 1, true),
-            (2107, 12, 31, true),
+            (2107, 12, 31, false),
             (2024, 0, 1, false),
             (2024, 13, 1, false),
             (2024, 4, 31, false),
