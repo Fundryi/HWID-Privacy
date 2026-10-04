@@ -42,7 +42,4 @@
     </EmbeddedResource>
   </ItemGroup>
 
-  <Target Name="PostPublish" AfterTargets="Publish">
-    <Copy SourceFiles="$(OutputPath)\win-x64\publish\HWIDChecker.exe" DestinationFolder="../.." />
-  </Target>
 </Project>
