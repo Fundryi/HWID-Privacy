@@ -154,7 +154,10 @@ fn capacity_bytes(record: &Structure) -> Option<u64> {
 
 fn wmi_modules() -> Result<Vec<RamModule>, win::Error> {
     // C# parity: Hardware/RamInfo.cs:66-79. Preserve WMI order and untrimmed values.
-    let rows = wmi::query(wmi::Namespace::Cimv2, "SELECT * FROM Win32_PhysicalMemory")?;
+    let rows = wmi::query(
+        wmi::Namespace::Cimv2,
+        "SELECT DeviceLocator, Manufacturer, PartNumber, Capacity, SerialNumber FROM Win32_PhysicalMemory",
+    )?;
     let mut modules = Vec::with_capacity(rows.len());
     for row in rows {
         let capacity = if row.str("Capacity").is_none() {

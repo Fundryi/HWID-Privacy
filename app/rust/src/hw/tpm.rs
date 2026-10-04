@@ -80,10 +80,14 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> win::Result<()> {
 fn wmi_info() -> win::Result<Info> {
     // C# parity: Hardware/TpmInfo.cs:84-94. First object only; existence means
     // present. IsActivated is queried but never changes the visible status.
-    let row = wmi::query(wmi::Namespace::MicrosoftTpm, "SELECT * FROM Win32_Tpm")?
-        .into_iter()
-        .next()
-        .ok_or_else(|| Error::msg("Win32_Tpm", "no TPM object returned"))?;
+    // The WMI wrapper retains __PATH/__RELPATH for method calls after projection.
+    let row = wmi::query(
+        wmi::Namespace::MicrosoftTpm,
+        "SELECT ManufacturerIdTxt, ManufacturerId, ManufacturerVersion, SpecVersion, IsEnabled_InitialValue, IsActivated_InitialValue FROM Win32_Tpm",
+    )?
+    .into_iter()
+    .next()
+    .ok_or_else(|| Error::msg("Win32_Tpm", "no TPM object returned"))?;
     let path = row
         .str("__PATH")
         .filter(|value| !value.is_empty())

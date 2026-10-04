@@ -149,7 +149,7 @@ fn wmi_product_keys() -> win::Result<Vec<Option<String>>> {
     // C# parity: Hardware/SystemInfo.cs:25-37. Preserve WMI row order and empty keys.
     let rows = wmi::query(
         wmi::Namespace::Cimv2,
-        "SELECT * FROM SoftwareLicensingService",
+        "SELECT OA3xOriginalProductKey FROM SoftwareLicensingService",
     )?;
     if rows.is_empty() {
         return Err(win::Error::msg(

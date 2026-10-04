@@ -569,8 +569,11 @@ mod tests {
                         ["SMBIOSBIOSVersion", "SerialNumber"].as_slice(),
                     )
                 };
-                let rows = wmi::query(wmi::Namespace::Cimv2, &format!("SELECT * FROM {class}"))
-                    .expect("unaffected live WMI query");
+                let rows = wmi::query(
+                    wmi::Namespace::Cimv2,
+                    &format!("SELECT {} FROM {class}", names.join(", ")),
+                )
+                .expect("unaffected live WMI query");
                 let row = rows.last().expect("unaffected live query has data");
                 for name in names {
                     let value = row.str(name).unwrap_or_default();

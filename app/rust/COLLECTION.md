@@ -167,6 +167,10 @@ SKU: DESK-Z690-ATX
 
 [Provider](src/hw/bios.rs), [firmware](src/win/firmware.rs), [WMI](src/win/wmi.rs).
 
+**WQL projection (WP-A6).** Both production queries already select only needed properties; the live-capture helper now does too. Source priority, independent query failures, last-row behavior, and report text are unchanged.
+
+**WP-A6 verification (2026-10-04).** Elevated section body byte-identical to the supplied baseline; five-run median 5 → 5 ms on this dev machine. Cross-OEM and failed-query paths were not exercised.
+
 ```text
 Manufacturer: American Megatrends Inc.
 Vendor: ASUSTeK COMPUTER INC.
@@ -211,6 +215,10 @@ Accepted OEM labels (case-insensitive, trimmed): `serial`, `serial number`, `ser
 
 [Provider](src/hw/system.rs), [registry](src/win/registry.rs), [firmware](src/win/firmware.rs), [time](src/win/time.rs).
 
+**WQL projection (WP-A6).** The licensing fallback selects only `OA3xOriginalProductKey`; all rows remain in provider order, including null/empty keys. MSDM priority, Product ID fallback, identifier marking, and per-item error text are unchanged.
+
+**WP-A6 verification (2026-10-04).** Elevated section body byte-identical to the supplied baseline; licensing WMI fallback exercised with MSDM absent. Five-run median 85 → 8 ms on this dev machine. Multiple-row licensing and access-denied/malformed fallback paths were not exercised.
+
 ```text
 Windows Product Key: 9QH4V-2WJ7R-K6D8M-P3X5Y-TNFBC
 Serial Number (Product ID): 00330-80000-00000-AB719
@@ -238,6 +246,10 @@ Install Date: 2024-03-19 14:27:36
 ## RAM MODULES
 
 [Provider](src/hw/ram.rs), [firmware](src/win/firmware.rs).
+
+**WQL projection (WP-A6).** The incomplete-SMBIOS fallback selects only `DeviceLocator`, `Manufacturer`, `PartNumber`, `Capacity`, and `SerialNumber`. Inventory/order, unique-match overlays, null-capacity handling, UTF-16 table widths, and serial marking are unchanged.
+
+**WP-A6 verification (2026-10-04).** Elevated section body byte-identical to the supplied baseline; five-run median 0 → 0 ms on this dev machine. Complete SMBIOS won, so the narrowed WMI fallback remains untested on real hardware.
 
 ```text
 DeviceLocator   Manufacturer PartNumber     Capacity SerialNumber
@@ -293,6 +305,10 @@ CPUID Signature (decoded): Family 6, Model 151, Stepping 2
 ## TPM MODULES
 
 [Provider](src/hw/tpm.rs), [TPM helper](src/win/tpm.rs).
+
+**WQL projection (WP-A6).** `Win32_Tpm` selects `ManufacturerIdTxt`, `ManufacturerId`, `ManufacturerVersion`, `SpecVersion`, `IsEnabled_InitialValue`, and `IsActivated_InitialValue`. The WMI wrapper retains `__PATH`/`__RELPATH` for both method calls; first-object behavior, initial-state fallbacks, nonzero method errors, independent EK collection, and identifier marking are unchanged.
+
+**WP-A6 verification (2026-10-04).** Elevated section body byte-identical to the supplied baseline; WMI status and native EK sources retained with no method/object-path diagnostics. Five-run median 279 → 310 ms on this dev machine; no TPM speed gain established. Absent/disabled TPM, initial-state and PowerShell fallbacks, nonzero method codes, TPM 1.2, and a second TPM implementation were not exercised.
 
 ```text
 TPM: ENABLED
