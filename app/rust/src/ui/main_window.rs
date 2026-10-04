@@ -43,6 +43,8 @@ const TOOLS_DIVIDER: u16 = 18;
 const CONTENT_PANE: u16 = 19;
 const STARTUP_UPDATES: u16 = 26;
 const COMPARE_EXPORTS: u16 = 27;
+const COMPARE_NOW: u16 = 29;
+const COMPARE_PAIR: u16 = 30;
 const REFRESH: u16 = 20;
 const EXPORT: u16 = 21;
 const CLEAN_DEVICES: u16 = 22;
@@ -90,6 +92,8 @@ struct State {
     layout_dpi: Cell<u32>,
     settings: RefCell<settings::Settings>,
     mask: Cell<bool>,
+    loading: Cell<bool>,
+    comparing: Cell<Option<u16>>,
 }
 
 enum Msg {
@@ -202,7 +206,7 @@ fn on_click(form: &Form, state: &State, id: u16) {
         }
         EXPORT => export(form, state),
         COPY => form.edit_copy_all(CONTENT),
-        COMPARE_EXPORTS => compare_exports(form),
+        COMPARE_EXPORTS | COMPARE_NOW => compare_exports(form, state, id),
         // The frozen dialogs report their own errors; a panic in one reaches the kit's handler
         // boundary (AD-42) instead of C#'s `Error opening ...` boxes.
         CLEAN_DEVICES => clean_devices::show(form.hwnd()),
@@ -228,8 +232,42 @@ fn on_click(form: &Form, state: &State, id: u16) {
 }
 
 // Step 2d owns the picker, worker and modal result flow.
-fn compare_exports(form: &Form) {
-    super::compare::show(form, COMPARE_EXPORTS);
+fn compare_exports(form: &Form, state: &State, button: u16) {
+    if state.comparing.get().is_some() || (button == COMPARE_NOW && state.loading.get()) {
+        return;
+    }
+    // Snapshot before opening the picker; release the borrow before its nested message pump.
+    let current = (button == COMPARE_NOW).then(|| state.sections.borrow().clone());
+    super::compare::show_with(
+        form,
+        current,
+        |busy| {
+            state.comparing.set(busy.then_some(button));
+            compare_buttons(form, state);
+        },
+        || state.mask.get(),
+    );
+}
+
+fn compare_buttons(form: &Form, state: &State) {
+    for (id, caption) in [
+        (COMPARE_NOW, "Compare now"),
+        (COMPARE_EXPORTS, "Compare files"),
+    ] {
+        let text = if state.comparing.get() == Some(id) {
+            "Comparing..."
+        } else if state.comparing.get().is_none() && id == COMPARE_NOW && state.loading.get() {
+            "Loading..."
+        } else {
+            caption
+        };
+        set_button_text(
+            form,
+            id,
+            state.comparing.get().is_none() && (id != COMPARE_NOW || !state.loading.get()),
+            text,
+        );
+    }
 }
 
 // Step 2c owns these two hooks; the trunk never checks on start.
@@ -298,6 +336,8 @@ fn begin_load(form: &Form, state: &State) -> u64 {
     let load = state.load.get() + 1;
     state.load.set(load);
     state.collected.set(0);
+    state.loading.set(true);
+    compare_buttons(form, state);
     // C# parity: SectionedViewForm.cs:506-527 (placeholders from GetAvailableSections, sidebar
     // rebuilt, first section shown and highlighted).
     *state.sections.borrow_mut() = hw::PROVIDERS
@@ -348,6 +388,8 @@ fn spawn_load(form: &Form, state: &State, load: u64, refresh: bool) {
 }
 
 fn finish_load(form: &Form, state: &State, refresh: bool, result: Result<Vec<Section>, String>) {
+    state.loading.set(false);
+    compare_buttons(form, state);
     match result {
         Ok(fresh) => {
             for section in state.sections.borrow_mut().iter_mut() {
@@ -518,12 +560,11 @@ fn export(form: &Form, state: &State) {
         write_export(sections, state.mask.get())
     };
     match result {
-        Ok((path, json)) => msgbox::show(
+        Ok(path) => msgbox::show(
             form.hwnd(),
             &format!(
-                "Export completed successfully!\nSaved to: {}\nJSON: {}",
-                path.display(),
-                json.display()
+                "Export completed successfully!\nSaved to: {}",
+                path.display()
             ),
             "Export",
             Buttons::Ok,
@@ -540,31 +581,23 @@ fn export(form: &Form, state: &State) {
 }
 
 /// Writes the export next to the exe (UTF-8 without BOM, same-second files overwritten).
-fn write_export(sections: &[Section], masked: bool) -> win::Result<(PathBuf, PathBuf)> {
+fn write_export(sections: &[Section], masked: bool) -> win::Result<PathBuf> {
     // C# parity: FileExportService.cs:18-31 with AppDomain.BaseDirectory.
     let exe = std::env::current_exe().map_err(|e| io_error("Locate executable folder", e))?;
     let folder = exe
         .parent()
         .ok_or_else(|| win::Error::msg("Locate executable folder", "no parent folder"))?;
-    // One clock snapshot names both files and timestamps their contents. The legacy
-    // export_stamp helper takes two snapshots and keeps its public contract unchanged.
+    // One clock snapshot keeps the date and time consistent across midnight.
     // SAFETY: GetLocalTime has no caller-owned pointers and cannot fail.
     let now = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
     let date = format!("{:02}.{:02}.{:04}", now.wDay, now.wMonth, now.wYear);
     let time = format!("{:02};{:02};{:02}", now.wHour, now.wMinute, now.wSecond);
-    let exported = format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-        now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond
-    );
     let suffix = if masked { "-MASKED" } else { "" };
     let stem = format!("HWID-EXPORT-{date}-{time}{suffix}");
     let path = folder.join(format!("{stem}.txt"));
-    let json = folder.join(format!("{stem}.json"));
     std::fs::write(&path, report::export_text(sections))
         .map_err(|e| io_error("Write export file", e))?;
-    std::fs::write(&json, report::export_json(sections, &exported, masked)?)
-        .map_err(|e| io_error("Write export file", e))?;
-    Ok((path, json))
+    Ok(path)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -719,9 +752,20 @@ fn responsive(form: &Form, state: &State, client: Size) {
                 }
             }
         }
-        for id in [STARTUP_UPDATES, COMPARE_EXPORTS] {
+        for id in [STARTUP_UPDATES, COMPARE_PAIR] {
             if let Some(row) = t.find_mut(id) {
                 row.size.w = item_w;
+            }
+        }
+        let gap = s(theme::TOOLS_SPLIT_GAP);
+        let left = (item_w - gap) / 2;
+        if let Some(pair) = t.find_mut(COMPARE_PAIR) {
+            for child in pair.children_mut() {
+                child.size.w = if child.id == COMPARE_NOW {
+                    left
+                } else {
+                    item_w - gap - left
+                };
             }
         }
     });
@@ -804,11 +848,54 @@ fn tools_block(item_w: i32) -> Node {
     };
     let mut toggle = row(
         STARTUP_UPDATES,
-        ButtonSpec::sidebar("Startup Update Check")
+        ButtonSpec::sidebar("Auto Update")
             .icon(glyph::SYNC)
             .toggle(),
     );
     toggle.margin.b = theme::TOOLS_ROW_GAP;
+    let half = (item_w - theme::TOOLS_SPLIT_GAP) / 2;
+    let pair = Node::flow(
+        FlowDir::LeftToRight,
+        false,
+        [
+            (COMPARE_NOW, "Compare now"),
+            (COMPARE_EXPORTS, "Compare files"),
+        ]
+        .into_iter()
+        .map(|(id, caption)| {
+            let mut spec = ButtonSpec::outline(caption);
+            spec.single_line = true;
+            Node::leaf(id, Ctl::Button(spec))
+                .size(Size {
+                    w: if id == COMPARE_NOW {
+                        half
+                    } else {
+                        item_w - theme::TOOLS_SPLIT_GAP - half
+                    },
+                    h: theme::TOOLS_ROW_HEIGHT,
+                })
+                .padding(super::layout::Pad {
+                    l: theme::COMPARE_PAIR_PADDING,
+                    r: theme::COMPARE_PAIR_PADDING,
+                    ..theme::NO_PAD
+                })
+                .margin(super::layout::Pad {
+                    r: if id == COMPARE_NOW {
+                        theme::TOOLS_SPLIT_GAP
+                    } else {
+                        0
+                    },
+                    ..theme::NO_PAD
+                })
+        })
+        .collect(),
+    )
+    .id(COMPARE_PAIR)
+    .size(Size {
+        w: item_w,
+        h: theme::TOOLS_ROW_HEIGHT,
+    })
+    .margin(theme::TOOLS_ROW_MARGIN);
     // Empty painted panel: stroke height is restored to a device pixel in responsive().
     let divider = Node::panel(vec![])
         .id(TOOLS_DIVIDER)
@@ -816,22 +903,11 @@ fn tools_block(item_w: i32) -> Node {
         .anchor(Anchor(Anchor::LEFT.0 | Anchor::RIGHT.0))
         .margin(theme::TOOLS_DIVIDER_MARGIN)
         .back(theme::BORDER);
-    Node::flow(
-        FlowDir::TopDown,
-        false,
-        vec![
-            divider,
-            toggle,
-            row(
-                COMPARE_EXPORTS,
-                ButtonSpec::sidebar("Compare Exports").icon(glyph::SWITCH),
-            ),
-        ],
-    )
-    .id(TOOLS)
-    .fill()
-    .auto_size()
-    .margin(theme::NO_PAD)
+    Node::flow(FlowDir::TopDown, false, vec![divider, toggle, pair])
+        .id(TOOLS)
+        .fill()
+        .auto_size()
+        .margin(theme::NO_PAD)
 }
 
 fn content() -> Node {
@@ -1432,7 +1508,7 @@ mod live {
         pump_while(Duration::from_secs(150), || loading(&form));
         pump_for(300);
         trunk_tools_check(&form);
-        mask_json_check(&form, &log);
+        mask_export_check(&form, &log);
         let real = dpi::window_dpi(form.hwnd());
         // C8's longest idle caption must still fit before the behavior lands in step 2c.
         form.set_text(UPDATES, "Update available");
@@ -1452,8 +1528,8 @@ mod live {
             ("1920x1080 custom 137 DPI", 1920, 1080, 137),
         ];
         let mut rows = vec![
-            "| Setup | Work area (px) | Default outer | Start | Restored outer | Client | Tier | 14 visible | Scrollbar | Elided | Footer rows |".to_owned(),
-            "|---|---|---|---|---|---|---|---|---|---|---|".to_owned(),
+            "| Setup | Work area (px) | Default outer | Start | Restored outer | Client | Tier | 14 visible | Scrollbar | Elided | Compare need/width | Footer rows |".to_owned(),
+            "|---|---|---|---|---|---|---|---|---|---|---|---|".to_owned(),
         ];
         let mut fit_failures = Vec::new();
         let measure_state = |form: &Form, dpi: u32| -> (String, bool, bool, usize, usize) {
@@ -1482,7 +1558,7 @@ mod live {
             let font = dpi::Font::new(theme::SECTION_BUTTON_FONT, dpi).unwrap();
             (0..hw::PROVIDERS.len())
                 .map(section_id)
-                .chain([STARTUP_UPDATES, COMPARE_EXPORTS])
+                .chain([STARTUP_UPDATES])
                 .filter(|&id| {
                     let (w, spec) = form
                         .with_tree(|t| {
@@ -1504,6 +1580,39 @@ mod live {
                     need.w > w
                 })
                 .count()
+        };
+        let compare_fit = |form: &Form| -> String {
+            let font = dpi::Font::new(theme::BUTTON_FONT, form.dpi()).unwrap();
+            [COMPARE_NOW, COMPARE_EXPORTS]
+                .into_iter()
+                .map(|id| {
+                    let (ctl, padding, width) = form
+                        .with_tree(|t| {
+                            let node = t.find(id).unwrap();
+                            let Kind::Leaf(ctl) = &node.kind else {
+                                unreachable!()
+                            };
+                            (ctl.clone(), node.padding, node.bounds.w)
+                        })
+                        .unwrap();
+                    let need = super::super::controls::measure(
+                        &ctl,
+                        font.handle(),
+                        padding,
+                        Size::default(),
+                        Size::default(),
+                        form.dpi(),
+                    )
+                    .w;
+                    assert!(
+                        need <= width,
+                        "compare caption at {} DPI: {need} > {width}",
+                        form.dpi()
+                    );
+                    format!("{need}/{width}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
         };
         for (name, w, h, dpi) in setups {
             let taskbar = dpi::scale(48, dpi);
@@ -1537,6 +1646,7 @@ mod live {
             let c = form.client_size();
             let (tier, visible, scroll, _, rows_n) = measure_state(&form, dpi);
             let el = elided(&form);
+            let pair = compare_fit(&form);
             if name != "1366x768 @125" && (!visible || scroll || el != 0 || rows_n != 1) {
                 fit_failures.push(format!(
                     "{name}: visible={visible}, scroll={scroll}, elided={el}, footer={rows_n}"
@@ -1545,7 +1655,7 @@ mod live {
             let tag = name.replace(' ', "-").replace('@', "at");
             shot_dir(form.hwnd(), OUT, &format!("{tag}-restored"));
             rows.push(format!(
-                "| {name} | {}x{} | {}x{} | {} | {}x{} | {}x{} | {tier} | {visible} | {scroll} | {el} | {rows_n} |",
+                "| {name} | {}x{} | {}x{} | {} | {}x{} | {}x{} | {tier} | {visible} | {scroll} | {el} | {pair} | {rows_n} |",
                 w,
                 h - taskbar,
                 outer.w,
@@ -1580,12 +1690,13 @@ mod live {
                 let c = form.client_size();
                 let (tier, visible, scroll, _, rows_n) = measure_state(&form, dpi);
                 let el = elided(&form);
+                let pair = compare_fit(&form);
                 if name != "1366x768 @125" && (!visible || scroll || el != 0 || rows_n != 1) {
                     fit_failures.push(format!("{name} maximized: visible={visible}, scroll={scroll}, elided={el}, footer={rows_n}"));
                 }
                 shot_dir(form.hwnd(), OUT, &format!("{tag}-maximized"));
                 rows.push(format!(
-                    "| {name} (maximized) | {}x{} | - | maximized | - | {}x{} | {tier} | {visible} | {scroll} | {el} | {rows_n} |",
+                    "| {name} (maximized) | {}x{} | - | maximized | - | {}x{} | {tier} | {visible} | {scroll} | {el} | {pair} | {rows_n} |",
                     w,
                     h - taskbar,
                     c.w,
@@ -1621,6 +1732,7 @@ mod live {
         let c = form.client_size();
         let (tier, visible, scroll, _, rows_n) = measure_state(&form, 96);
         let el = elided(&form);
+        let pair = compare_fit(&form);
         if !visible || scroll || el != 0 || rows_n != 1 {
             fit_failures.push(format!(
                 "minimum: visible={visible}, scroll={scroll}, elided={el}, footer={rows_n}"
@@ -1628,7 +1740,7 @@ mod live {
         }
         shot_dir(form.hwnd(), OUT, "minimum-96");
         rows.push(format!(
-            "| minimum @100 (2560x1392) | 2560x1392 | 900x750 | normal | {}x{} | {}x{} | {tier} | {visible} | {scroll} | {el} | {rows_n} |",
+            "| minimum @100 (2560x1392) | 2560x1392 | 900x750 | normal | {}x{} | {}x{} | {tier} | {visible} | {scroll} | {el} | {pair} | {rows_n} |",
             r.right - r.left,
             r.bottom - r.top,
             c.w,
@@ -1709,14 +1821,14 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
         msgbox::testing::review_keyboard();
     }
 
-    fn mask_json_check(form: &Form, log: &Mutex<Vec<String>>) {
+    fn mask_export_check(form: &Form, log: &Mutex<Vec<String>>) {
         use windows::Win32::UI::Controls::{EM_GETFIRSTVISIBLELINE, EM_LINESCROLL};
         use windows::Win32::UI::Input::KeyboardAndMouse::{VK_RETURN, VK_SPACE};
         use windows::Win32::UI::WindowsAndMessaging::{MSG, WM_KEYUP};
 
         assert!(!form.is_checked(MASK_IDS));
         assert_eq!(text_of(form.control(MASK_IDS).unwrap()), "Mask IDs, off");
-        let export = |masked: bool| -> serde_json::Value {
+        let export = |masked: bool| -> String {
             take(log);
             let mut expected = String::new();
             for (index, provider) in hw::PROVIDERS.iter().enumerate() {
@@ -1738,47 +1850,22 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
                     .find_map(|line| line.strip_prefix("Saved to: "))
                     .unwrap(),
             );
-            let json = PathBuf::from(
-                body.lines()
-                    .find_map(|line| line.strip_prefix("JSON: "))
-                    .unwrap(),
-            );
-            assert_eq!(txt.with_extension("json"), json);
-            assert_eq!(std::fs::read(&txt).unwrap(), expected.as_bytes());
-            let bytes = std::fs::read(&json).unwrap();
+            assert!(!body.contains("JSON: "));
+            assert!(!txt.with_extension("json").exists());
+            let bytes = std::fs::read(&txt).unwrap();
+            assert_eq!(bytes, expected.as_bytes());
             assert!(!bytes.starts_with(&[0xef, 0xbb, 0xbf]));
-            assert!(
-                !String::from_utf8(bytes.clone())
+            assert!(!expected.replace("\r\n", "").contains('\n'));
+            assert_eq!(
+                txt.file_stem()
                     .unwrap()
-                    .replace("\r\n", "")
-                    .contains('\n')
+                    .to_string_lossy()
+                    .ends_with("-MASKED"),
+                masked
             );
-            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(value["masked"], masked);
-            assert_eq!(
-                value["sections"].as_array().unwrap().len(),
-                hw::PROVIDERS.len()
-            );
-            let stamp = value["exported"].as_str().unwrap();
-            assert_eq!(stamp.len(), 19);
-            let suffix = if masked { "-MASKED" } else { "" };
-            assert_eq!(
-                txt.file_name().unwrap().to_string_lossy(),
-                format!(
-                    "HWID-EXPORT-{}.{}.{}-{};{};{}{suffix}.txt",
-                    &stamp[8..10],
-                    &stamp[5..7],
-                    &stamp[..4],
-                    &stamp[11..13],
-                    &stamp[14..16],
-                    &stamp[17..19]
-                )
-            );
-            for path in [txt, json] {
-                std::fs::copy(&path, Path::new(GOLDEN).join(path.file_name().unwrap())).unwrap();
-                std::fs::remove_file(path).unwrap();
-            }
-            value
+            std::fs::copy(&txt, Path::new(GOLDEN).join(txt.file_name().unwrap())).unwrap();
+            std::fs::remove_file(txt).unwrap();
+            expected
         };
         let original = export(false);
         form.click(FIRST_SECTION);
@@ -1844,36 +1931,8 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
             form.text(CONTENT)
         );
         let masked = export(true);
-        for (index, provider) in hw::PROVIDERS.iter().enumerate() {
-            let before = &original["sections"][index];
-            let section = Section {
-                title: provider.title,
-                body: before["lines"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|line| line.as_str().unwrap())
-                    .collect::<Vec<_>>()
-                    .join("\r\n"),
-                ids: serde_json::from_value(before["ids"].clone()).unwrap(),
-                ..Default::default()
-            };
-            let expected = report::masked(&section);
-            assert_eq!(
-                masked["sections"][index]["ids"],
-                serde_json::json!(expected.ids)
-            );
-            assert_eq!(
-                masked["sections"][index]["lines"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|line| line.as_str().unwrap())
-                    .collect::<Vec<_>>()
-                    .join("\r\n"),
-                expected.body
-            );
-        }
+        assert_ne!(original, masked);
+        assert!(masked.contains("XXXX"));
         form.click(REFRESH);
         pump_while(Duration::from_secs(150), || loading(form));
         assert!(!loading(form));
@@ -1882,11 +1941,13 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
         form.click(OLD_VIEW);
         let raw = std::fs::read_to_string(Path::new(GOLDEN).join("rust-oldview.txt")).unwrap();
         assert!(raw.contains("XXXX"), "fresh Old View is masked");
-        let disk_ids = original["sections"][0]["ids"].as_array().unwrap();
-        let serial = disk_ids
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .find(|id| id.len() > 8 && id.chars().all(|c| c.is_ascii_alphanumeric()))
+        let serial = original
+            .lines()
+            .find_map(|line| {
+                line.trim_start_matches([' ', '│', '├', '└', '─'])
+                    .strip_prefix("Serial: ")
+            })
+            .filter(|id| id.len() > 8 && id.chars().all(|c| c.is_ascii_alphanumeric()))
             .unwrap();
         assert!(
             !raw.contains(serial),
@@ -1896,7 +1957,7 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
         form.focus(MASK_IDS);
         bmps_to_png();
         println!(
-            "RESULT C1/C3: off restores exact body; Enter/Space/click, accessible names, scroll preservation, both real exports, ISO/filename match, 14 sections, CRLF/no BOM, provider-ID masking, refresh persistence and fresh masked Old View passed"
+            "RESULT C1 Export: off restores exact body; Enter/Space/click, accessible names, scroll preservation, plain/masked text-only exports, CRLF/no BOM, refresh persistence and fresh masked Old View passed"
         );
     }
 
@@ -1904,11 +1965,9 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
     fn trunk_tools_check(form: &Form) {
         use windows::Win32::UI::Input::KeyboardAndMouse::{VK_RETURN, VK_SPACE};
         use windows::Win32::UI::WindowsAndMessaging::{MSG, WM_KEYDOWN, WM_KEYUP};
-        let path = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("HWIDChecker.settings.json");
+        let path = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap())
+            .join("HWIDChecker")
+            .join("settings.json");
         let previous = std::fs::read(&path).ok();
         let initial = form.is_checked(STARTUP_UPDATES);
         let toggle = form.control(STARTUP_UPDATES).unwrap();
@@ -1923,10 +1982,7 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
         assert_eq!(form.is_checked(STARTUP_UPDATES), !initial);
         assert_eq!(
             text_of(toggle),
-            format!(
-                "Startup Update Check, {}",
-                if initial { "off" } else { "on" }
-            )
+            format!("Auto Update, {}", if initial { "off" } else { "on" })
         );
         assert_eq!(
             settings::Settings::load().check_updates_on_start(),
@@ -1939,19 +1995,19 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
         }
         assert_eq!(form.is_checked(STARTUP_UPDATES), initial);
         assert_eq!(settings::Settings::load().check_updates_on_start(), initial);
-        let windows = own_windows().len();
-        form.click(COMPARE_EXPORTS);
-        assert_eq!(
-            own_windows().len(),
-            windows,
-            "Compare scaffold opens nothing"
-        );
+        for (id, caption) in [
+            (COMPARE_NOW, "Compare now"),
+            (COMPARE_EXPORTS, "Compare files"),
+        ] {
+            assert!(form.is_enabled(id));
+            assert_eq!(text_of(form.control(id).unwrap()), caption);
+        }
         match previous {
             Some(bytes) => std::fs::write(&path, bytes).unwrap(),
             None => std::fs::remove_file(&path).unwrap(),
         }
         println!(
-            "RESULT tools: Enter/Space toggle, accessible name, persisted reload, Compare no-op passed"
+            "RESULT tools: Enter/Space toggle, accessible names, persisted reload, Compare pair ready"
         );
     }
 
@@ -2141,7 +2197,8 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
                 HWND::default(),
                 "Trunk picker check",
                 &[
-                    ("HWID exports (*.txt;*.json)", "*.txt;*.json"),
+                    ("Text exports (*.txt)", "*.txt"),
+                    ("Older JSON exports (*.json)", "*.json"),
                     ("All files (*.*)", "*.*")
                 ],
                 Path::new(GOLDEN)

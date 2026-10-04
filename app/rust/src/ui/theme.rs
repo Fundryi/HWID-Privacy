@@ -460,10 +460,18 @@ pub const SECTION_BUTTON_PADDING: Pad = pad(12, 0, 0, 0);
 pub const TOOLS_ROW_HEIGHT: i32 = 28;
 /// Gap between the two tools rows.
 pub const TOOLS_ROW_GAP: i32 = 2;
+/// Gap between the two compare outline actions (C2b).
+pub const TOOLS_SPLIT_GAP: i32 = 4;
+/// Minimum horizontal text inset for the compare pair.
+pub const COMPARE_PAIR_PADDING: i32 = 8;
 /// Divider inset and gaps; its stroke stays one device pixel.
 pub const TOOLS_DIVIDER_MARGIN: Pad = pad(12, 8, 12, 8);
-/// CheckMark right inset.
+/// Legacy sidebar trailing-check inset (kept for public API compatibility).
 pub const TOOLS_CHECK_INSET: i32 = 12;
+/// Size of the check/X badge on the sidebar toggle's leading icon.
+pub const TOOLS_BADGE_PX: i32 = 8;
+/// Badge extends this far beyond the icon's lower-right corner, into its existing gap.
+pub const TOOLS_BADGE_OFFSET: i32 = 2;
 /// Tools use the section item inset.
 pub const TOOLS_ROW_PADDING: Pad = SECTION_BUTTON_PADDING;
 /// Tools row outer margins match the section items, without a bottom gap.
@@ -523,6 +531,20 @@ pub const COMPARE_MIN_SIZE: Size = size(640, 400);
 pub const COMPARE_LABEL_WIDTH: i32 = 56;
 /// Compare header's file-name row height.
 pub const COMPARE_FILE_HEIGHT: i32 = 20;
+/// C2c table metrics; strokes remain device pixels.
+pub const COMPARE_ROW_HEIGHT: i32 = 24;
+pub const COMPARE_HEADER_HEIGHT: i32 = 24;
+pub const COMPARE_FILTER_HEIGHT: i32 = 28;
+pub const COMPARE_STATUS_WIDTH: i32 = 88;
+pub const COMPARE_FIELD_WIDTH: i32 = 200;
+pub const COMPARE_FIELD_MIN_WIDTH: i32 = 140;
+pub const COMPARE_VALUE_MIN_WIDTH: i32 = 150;
+pub const COMPARE_CELL_PADDING: i32 = 8;
+pub const COMPARE_VERDICT_BAR: i32 = 2;
+pub const COMPARE_SECTION_INSET: i32 = 8;
+pub const COMPARE_DEVICE_INSET: i32 = 24;
+pub const COMPARE_TEXT_INSET: i32 = 32;
+pub const COMPARE_FIELD_INSET: i32 = 48;
 /// Sidebar section button margin (tier A: gap 4).
 pub const SECTION_BUTTON_MARGIN: Pad = pad(12, 0, 12, 4);
 /// Width of the accent bar on the active sidebar item.
@@ -598,7 +620,7 @@ pub const FOOTER_BUTTON_MIN: Size = size(120, 34);
 pub const FOOTER_BUTTON_MARGIN: Pad = pad(0, 0, 8, 0);
 /// Gap between wrapped footer rows.
 pub const FOOTER_ROW_GAP: i32 = 8;
-/// Inner margin (left and right) of every multi-line text well.
+/// Parent-painted inner padding on all four sides of every well and checked list.
 pub const EDIT_INNER_MARGIN: i32 = 10;
 /// Loading indicator diameter.
 pub const SPINNER_SIZE: i32 = 32;

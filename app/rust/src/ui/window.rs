@@ -672,7 +672,12 @@ impl FormState {
                     let font = self.font(ctl.font());
                     let icon = self.icon_font_of(ctl);
                     let hwnd = controls::create(parent, child, back, font, icon, self.dpi.get())?;
-                    if matches!(ctl, controls::Ctl::Edit(_) | controls::Ctl::CheckedList(_)) {
+                    if matches!(
+                        ctl,
+                        controls::Ctl::Edit(_)
+                            | controls::Ctl::CheckedList(_)
+                            | controls::Ctl::Table(_)
+                    ) {
                         dark_scrollbars(hwnd);
                     }
                     self.hwnds.borrow_mut().insert(child.id, hwnd);
@@ -768,6 +773,12 @@ impl FormState {
                     }
                 }
                 let _ = EndDeferWindowPos(hdwp);
+                if group.iter().any(|(_, _, new, old)| new != old) {
+                    // Frames belong to the parent; moving only the inset HWND leaves their
+                    // old pixels behind. Repaint them in the existing buffered paint pass.
+                    let _ =
+                        windows::Win32::Graphics::Gdi::InvalidateRect(Some(parent), None, false);
+                }
             }
         }
         for (h, show, content, page, pos) in scrolls {
@@ -1679,7 +1690,7 @@ impl Form {
             state.destroy();
             return Err(e);
         }
-        let outer = match spec.size {
+        let mut outer = match spec.size {
             WindowSize::Client(s) => {
                 match dpi::outer_for_client(dpi::scale_size(s, dpi), style, ex, dpi) {
                     Ok(size) => size,
@@ -1697,6 +1708,20 @@ impl Form {
                 }
             }
         };
+        // Compare measures every value at this window's actual DPI before its first layout.
+        // Keep the requested height and let the existing work-area/maximize rules size it.
+        if let Some(width) = state
+            .hwnds
+            .borrow()
+            .values()
+            .filter_map(|hwnd| controls::table_window_width(*hwnd))
+            .max()
+        {
+            match dpi::outer_for_client(Size { w: width, h: 0 }, style, ex, dpi) {
+                Ok(size) => outer.w = outer.w.max(size.w),
+                Err(error) => win::record(error),
+            }
+        }
         let (work_w, work_h) = (work.right - work.left, work.bottom - work.top);
         // AD-38 decides from the unclamped size; the restored window is then clamped to the
         // work area so it never hangs over the screen (DESIGN.md 11.1).
@@ -1920,6 +1945,11 @@ impl Form {
     /// Replaces the items of a checked list (`(text, checked)`).
     pub fn list_set_items(&self, id: u16, items: &[(String, bool)]) {
         self.with_control(id, |h| controls::list_set_items(h, items));
+    }
+
+    /// Rebuilds compare rows while preserving the selected logical row and scroll position.
+    pub(crate) fn table_refresh(&self, id: u16) {
+        self.with_control(id, controls::table_refresh);
     }
 
     /// Check states of a checked list.
@@ -2299,6 +2329,11 @@ pub(super) fn pre_translate(msg: &MSG) -> bool {
             if let Some(h) = state.hwnd_of(id) {
                 controls::edit_copy_all(h);
             }
+            return true;
+        }
+        // Table activation must run before the form consumes Enter as a default-button key.
+        // SAFETY: Reads the focused child on this UI thread.
+        if controls::table_key(unsafe { GetFocus() }, vk) {
             return true;
         }
         if vk == VK_RETURN.0 {

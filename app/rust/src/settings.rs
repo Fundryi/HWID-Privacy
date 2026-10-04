@@ -1,4 +1,4 @@
-//! Portable preferences beside the executable; unknown JSON keys survive a save.
+//! Per-user preferences in LocalAppData; unknown JSON keys survive a save.
 
 use crate::win::{self, Error, hash::io_error};
 use serde_json::{Map, Value};
@@ -14,9 +14,19 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Loads portable settings, recording read/parse errors and falling back to defaults.
+    /// Migrates legacy settings and loads preferences, recording failures and using defaults.
     pub fn load() -> Self {
-        let loaded = settings_path().and_then(|path| Self::read(&path));
+        let loaded = settings_path().and_then(|path| {
+            let migration = std::env::current_exe()
+                .map_err(|e| io_error("Locate legacy settings", e))
+                .and_then(|exe| {
+                    migrate_settings(&exe.with_file_name("HWIDChecker.settings.json"), &path)
+                });
+            if let Err(error) = migration {
+                win::record(error);
+            }
+            Self::read(&path)
+        });
         loaded.unwrap_or_else(|error| {
             win::record(error);
             Self::default()
@@ -65,11 +75,29 @@ impl Settings {
 }
 
 fn settings_path() -> win::Result<PathBuf> {
-    let exe = std::env::current_exe().map_err(|e| io_error("Locate settings folder", e))?;
-    let folder = exe
-        .parent()
-        .ok_or_else(|| Error::msg("Locate settings folder", "no parent folder"))?;
-    Ok(folder.join("HWIDChecker.settings.json"))
+    let local = std::env::var_os("LOCALAPPDATA")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| Error::msg("Locate settings folder", "LOCALAPPDATA is missing or empty"))?;
+    let folder = PathBuf::from(local).join("HWIDChecker");
+    fs::create_dir_all(&folder).map_err(|e| io_error("Create settings folder", e))?;
+    Ok(folder.join("settings.json"))
+}
+
+fn migrate_settings(old: &Path, new: &Path) -> win::Result<()> {
+    if new
+        .try_exists()
+        .map_err(|e| io_error("Check settings migration", e))?
+    {
+        return Ok(());
+    }
+    let bytes = match fs::read(old) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(io_error("Read legacy settings", error)),
+    };
+    // Publish a complete byte-for-byte copy before deleting the only legacy copy.
+    atomic_write(new, &bytes)?;
+    fs::remove_file(old).map_err(|e| io_error("Remove migrated legacy settings", e))
 }
 
 struct PendingFile {
@@ -176,7 +204,22 @@ mod tests {
             1,
             "temporary writes cleaned up"
         );
+        // Migration must preserve the original on failure and never replace newer settings.
+        let legacy = dir.join("HWIDChecker.settings.json");
+        fs::write(&legacy, &bytes).unwrap();
+        migrate_settings(&legacy, &path).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"{}");
+        assert_eq!(fs::read(&legacy).unwrap(), bytes);
+        fs::remove_file(&path).unwrap();
+        assert!(migrate_settings(&legacy, &dir.join("missing/settings.json")).is_err());
+        assert_eq!(fs::read(&legacy).unwrap(), bytes);
+        migrate_settings(&legacy, &path).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert!(!legacy.exists());
+        assert!(Settings::read(&path).unwrap().check_updates_on_start());
+        migrate_settings(&legacy, &path).unwrap();
         fs::remove_file(path).unwrap();
+        migrate_settings(&legacy, &dir.join("absent.json")).unwrap();
         fs::remove_dir(dir).unwrap();
     }
 }

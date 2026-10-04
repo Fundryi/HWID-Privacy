@@ -35,6 +35,9 @@
 //! OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 //! SOFTWARE.
 
+mod clipboard;
+mod table;
+
 use super::dpi;
 use super::layout::{Kind, Node, Pad, Rect, Size};
 use super::theme::{self, Color, FontSpec};
@@ -42,9 +45,11 @@ use crate::win::{
     self,
     wide::{from_wide, to_wide},
 };
+pub(crate) use clipboard::copy_text;
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
+pub(crate) use table::{table_key, table_refresh, table_window_width};
 use windows::{
     Win32::{
         Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
@@ -54,7 +59,7 @@ use windows::{
             DRAW_TEXT_FORMAT, DRAWTEXTPARAMS, DT_BOTTOM, DT_CALCRECT, DT_CENTER, DT_EDITCONTROL,
             DT_END_ELLIPSIS, DT_HIDEPREFIX, DT_LEFT, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE,
             DT_VCENTER, DT_WORDBREAK, DeleteObject, DrawFocusRect, DrawFrameControl, DrawTextExW,
-            EndPaint, FillRect, GetDC, GetTextMetricsW, GetWindowDC, HBRUSH, HDC, HFONT, HGDIOBJ,
+            EndPaint, FillRect, GetDC, GetTextMetricsW, HBRUSH, HDC, HFONT, HGDIOBJ,
             InvalidateRect, MapWindowPoints, PAINTSTRUCT, ReleaseDC, SelectObject, SetBkColor,
             SetBkMode, SetDIBitsToDevice, SetTextColor, TEXTMETRICW, TRANSPARENT,
         },
@@ -84,10 +89,10 @@ use windows::{
                 SM_CXVSCROLL, SendMessageW, SetCursor, SetPropW, SetWindowTextW, UISF_HIDEACCEL,
                 UISF_HIDEFOCUS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR, WM_CTLCOLOREDIT,
                 WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_ERASEBKGND, WM_GETDLGCODE,
-                WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCPAINT,
-                WM_PAINT, WM_QUERYUISTATE, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW,
-                WM_SIZE, WM_TIMER, WM_UPDATEUISTATE, WM_VKEYTOITEM, WS_BORDER, WS_CHILD,
-                WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_HSCROLL, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT,
+                WM_QUERYUISTATE, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW,
+                WM_SHOWWINDOW, WM_SIZE, WM_TIMER, WM_UPDATEUISTATE, WM_VKEYTOITEM, WS_CHILD,
+                WS_CLIPSIBLINGS, WS_HSCROLL, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -149,6 +154,8 @@ pub struct ButtonSpec {
     pub toggle: bool,
     /// Draws only the icon; text remains the accessible name.
     pub icon_only: bool,
+    /// One centered, clipped line using the node padding without the WinForms image inset.
+    pub single_line: bool,
 }
 
 impl ButtonSpec {
@@ -161,6 +168,7 @@ impl ButtonSpec {
             icon: None,
             toggle: false,
             icon_only: false,
+            single_line: false,
         }
     }
 
@@ -258,15 +266,6 @@ impl LabelSpec {
     }
 }
 
-/// `TextBox.BorderStyle`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EditBorder {
-    /// `BorderStyle.Fixed3D` (WinForms default, `WS_EX_CLIENTEDGE`).
-    Fixed3D,
-    /// `BorderStyle.FixedSingle` (`WS_BORDER`).
-    FixedSingle,
-}
-
 /// A read-only multiline `TextBox` with both scroll bars.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EditSpec {
@@ -276,8 +275,6 @@ pub struct EditSpec {
     pub fore: Color,
     /// `BackColor`.
     pub back: Color,
-    /// `BorderStyle`.
-    pub border: EditBorder,
     /// `WordWrap` (true hides the horizontal scroll bar, like WinForms).
     pub word_wrap: bool,
     /// Editable single-line input instead of a read-only data well.
@@ -289,24 +286,17 @@ pub struct EditSpec {
 }
 
 impl EditSpec {
-    /// Read-only, `ScrollBars.Both`, `WordWrap = false`, `BorderStyle.Fixed3D`.
+    /// Read-only, `ScrollBars.Both`, `WordWrap = false`, with a parent-painted frame.
     pub fn new(font: FontSpec, fore: Color, back: Color) -> Self {
         Self {
             font,
             fore,
             back,
-            border: EditBorder::Fixed3D,
             word_wrap: false,
             single_line: false,
             keep_selection: false,
             cue: String::new(),
         }
-    }
-
-    /// Sets `BorderStyle`.
-    pub fn border(mut self, border: EditBorder) -> Self {
-        self.border = border;
-        self
     }
 
     /// Sets `WordWrap = true`.
@@ -363,6 +353,8 @@ pub enum Ctl {
     Edit(EditSpec),
     /// Checked list box.
     CheckedList(ListSpec),
+    /// Compare result rows in a native list, with a parent-painted column strip.
+    Table(Rc<RefCell<super::compare::table::Table>>),
     /// `ProgressBar` with `ProgressBarStyle.Continuous`, range 0 to 100.
     Progress,
     /// The loading indicator (`DESIGN.md` 8.9): a ring with a turning arc, drawn by the form's
@@ -380,6 +372,7 @@ impl Ctl {
             Ctl::Label(l) => l.font,
             Ctl::Edit(e) => e.font,
             Ctl::CheckedList(l) => l.font,
+            Ctl::Table(_) => theme::CONTENT_FONT,
             Ctl::Progress | Ctl::Spinner | Ctl::AppIcon => theme::DEFAULT_FONT,
         }
     }
@@ -408,6 +401,7 @@ impl Ctl {
             ),
             Ctl::Edit(_) => (theme::DEFAULT_MARGIN, theme::TEXT_BOX_DEFAULT_SIZE),
             Ctl::CheckedList(_) => (theme::DEFAULT_MARGIN, theme::LIST_BOX_DEFAULT_SIZE),
+            Ctl::Table(_) => (theme::NO_PAD, theme::LIST_BOX_DEFAULT_SIZE),
             Ctl::Progress => (theme::DEFAULT_MARGIN, theme::PROGRESS_BAR_DEFAULT_SIZE),
             Ctl::Spinner => (
                 theme::NO_PAD,
@@ -987,7 +981,16 @@ fn ring_rect(hwnd: HWND, dpi: u32) -> Option<Rect> {
     let offset = dpi::scale(theme::FOCUS_RING_OFFSET, dpi);
     let area = state_of(hwnd)
         .and_then(|st| match &st.data {
-            Data::Edit(e) => e.frame.get(),
+            Data::Edit(e) if e.spec.single_line => e.frame.get(),
+            Data::Edit(_) | Data::List(_) => rect_in_parent(hwnd).map(|area| {
+                let inset = theme::STROKE + dpi::scale(theme::EDIT_INNER_MARGIN, dpi);
+                area.deflate(Pad {
+                    l: -inset,
+                    t: -inset,
+                    r: -inset,
+                    b: -inset,
+                })
+            }),
             _ => None,
         })
         .or_else(|| rect_in_parent(hwnd))?;
@@ -1092,6 +1095,7 @@ struct ButtonData {
     pending: Cell<bool>,
     checked: Cell<bool>,
     fore: Cell<Option<Color>>,
+    badge_font: RefCell<Option<dpi::Font>>,
 }
 
 struct EditData {
@@ -1132,6 +1136,7 @@ enum Data {
     Label(RefCell<LabelSpec>),
     Edit(EditData),
     List(ListData),
+    Table(table::TableData),
     Progress(ProgressData),
     Spinner(SpinnerData),
     AppIcon,
@@ -1223,6 +1228,14 @@ pub(crate) fn create(
                 pending: Cell::new(false),
                 checked: Cell::new(false),
                 fore: Cell::new(None),
+                badge_font: RefCell::new(if b.toggle && b.kind == ButtonKind::Sidebar {
+                    Some(dpi::Font::new(
+                        theme::icon_font(theme::TOOLS_BADGE_PX),
+                        dpi,
+                    )?)
+                } else {
+                    None
+                }),
             }),
         ),
         Ctl::Label(l) => (
@@ -1243,18 +1256,9 @@ pub(crate) fn create(
             if !e.word_wrap {
                 style |= WS_HSCROLL | WINDOW_STYLE(ES_AUTOHSCROLL as u32);
             }
-            let ex = if e.single_line {
+            if e.single_line {
                 style = base | WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32);
-                WINDOW_EX_STYLE(0)
-            } else {
-                match e.border {
-                    EditBorder::Fixed3D => WS_EX_CLIENTEDGE,
-                    EditBorder::FixedSingle => {
-                        style |= WS_BORDER;
-                        WINDOW_EX_STYLE(0)
-                    }
-                }
-            };
+            }
             if e.keep_selection {
                 style |= WINDOW_STYLE(ES_NOHIDESEL as u32);
             }
@@ -1262,7 +1266,7 @@ pub(crate) fn create(
                 WC_EDITW,
                 "",
                 style,
-                ex,
+                WINDOW_EX_STYLE(0),
                 Data::Edit(EditData {
                     spec: e.clone(),
                     brush: Brush::new(e.back),
@@ -1284,7 +1288,7 @@ pub(crate) fn create(
                         | LBS_NOINTEGRALHEIGHT
                         | LBS_WANTKEYBOARDINPUT) as u32,
                 ),
-            WS_EX_CLIENTEDGE,
+            WINDOW_EX_STYLE(0),
             Data::List(ListData {
                 spec: l.clone(),
                 brush: Brush::new(l.back),
@@ -1301,6 +1305,22 @@ pub(crate) fn create(
                 pos: Cell::new(0),
                 marquee: Cell::new(false),
             }),
+        ),
+        Ctl::Table(model) => (
+            WC_LISTBOXW,
+            "",
+            base | WS_TABSTOP
+                | WS_VSCROLL
+                | WS_HSCROLL
+                | WINDOW_STYLE(
+                    (LBS_OWNERDRAWFIXED
+                        | LBS_HASSTRINGS
+                        | LBS_NOTIFY
+                        | LBS_NOINTEGRALHEIGHT
+                        | LBS_WANTKEYBOARDINPUT) as u32,
+                ),
+            WINDOW_EX_STYLE(0),
+            Data::Table(table::TableData::new(model.clone(), dpi)?),
         ),
         Ctl::Spinner => (
             WC_STATICW,
@@ -1396,7 +1416,7 @@ pub(crate) fn create(
             edit_set_margins(hwnd, dpi);
             edit_update_bars(hwnd);
         }
-        Ctl::CheckedList(_) => {
+        Ctl::CheckedList(_) | Ctl::Table(_) => {
             if let Some(st) = state_of(hwnd) {
                 st.update_item_height();
             }
@@ -1515,14 +1535,10 @@ impl CtlState {
                 self.paint_app_icon();
                 Some(LRESULT(0))
             }
-            (Data::Edit(_) | Data::List(_), WM_NCPAINT) => {
-                if is_input(hwnd) {
-                    return None;
-                }
-                // Scroll bars and the native frame first, then the 1 px token frame over it.
-                let r = def(hwnd, msg, wparam, lparam);
-                self.paint_frame();
-                Some(r)
+            (Data::Edit(_) | Data::List(_) | Data::Table(_), WM_SHOWWINDOW) => {
+                // Showing/hiding the inset HWND does not invalidate its parent-owned frame.
+                invalidate_ring(self);
+                None
             }
             (Data::Button(b), WM_MOUSEMOVE) => {
                 if !b.hover.get() {
@@ -1588,6 +1604,29 @@ impl CtlState {
                 Some(r)
             }
             (Data::Edit(_), WM_CHAR) if wparam.0 == 1 => Some(LRESULT(0)),
+            (Data::Table(t), WM_LBUTTONDOWN) => {
+                let result = def(hwnd, msg, wparam, lparam);
+                t.click(self, lparam);
+                Some(result)
+            }
+            (Data::Table(_), WM_CHAR) if wparam.0 == 13 || wparam.0 == 32 || wparam.0 == 3 => {
+                Some(LRESULT(0))
+            }
+            (Data::Table(t), WM_SIZE) => {
+                let result = def(hwnd, msg, wparam, lparam);
+                t.resize(self);
+                Some(result)
+            }
+            (Data::Table(_), windows::Win32::UI::WindowsAndMessaging::WM_HSCROLL) => {
+                let result = def(hwnd, msg, wparam, lparam);
+                // The native list scrolls its rows; the parent owns the matching title strip.
+                // SAFETY: This live list's parent is owned by the same UI thread.
+                if let Ok(parent) = unsafe { GetParent(hwnd) } {
+                    invalidate(parent);
+                }
+                invalidate(hwnd);
+                Some(result)
+            }
             (Data::List(l), WM_LBUTTONDOWN) => {
                 l.kill_next_select.set(false);
                 None
@@ -1606,53 +1645,6 @@ impl CtlState {
     fn enabled(&self) -> bool {
         // SAFETY: Reads window state of our own control.
         unsafe { IsWindowEnabled(self.hwnd).as_bool() }
-    }
-
-    /// The 1 px token frame over the native non-client border of a text box or list; the inner
-    /// pixel of a `WS_EX_CLIENTEDGE` frame takes the box's back color.
-    fn paint_frame(&self) {
-        let back = match &self.data {
-            Data::Edit(e) => e.spec.back,
-            Data::List(l) => l.spec.back,
-            _ => return,
-        };
-        let mut rc = RECT::default();
-        let mut origin = POINT::default();
-        // SAFETY: Writable RECT and POINT of our own window.
-        let known = unsafe {
-            GetWindowRect(self.hwnd, &mut rc).is_ok()
-                && ClientToScreen(self.hwnd, &mut origin).as_bool()
-        };
-        if !known {
-            return;
-        }
-        // The native frame width (1 px for WS_BORDER, SM_CXEDGE for WS_EX_CLIENTEDGE, which
-        // scales with DPI) is the distance from the window edge to the client origin.
-        let width = origin.x - rc.left;
-        let outer = Rect {
-            x: 0,
-            y: 0,
-            w: rc.right - rc.left,
-            h: rc.bottom - rc.top,
-        };
-        // SAFETY: The window DC of our own control, released below.
-        let hdc = unsafe { GetWindowDC(Some(self.hwnd)) };
-        if hdc.is_invalid() {
-            return;
-        }
-        for i in 0..width {
-            let ring = outer.deflate(Pad {
-                l: i,
-                t: i,
-                r: i,
-                b: i,
-            });
-            frame(hdc, ring, if i == 0 { theme::BORDER } else { back });
-        }
-        // SAFETY: Releases the DC obtained above.
-        unsafe {
-            ReleaseDC(Some(self.hwnd), hdc);
-        }
     }
 
     /// Sends a control event to the form (`window.rs` turns it into `Event`).
@@ -1768,7 +1760,7 @@ impl CtlState {
             // A sidebar item has no border and no WinForms image inset: its padding is the
             // whole inset, so the caption gets the full width (DESIGN.md 11.3).
             let pad = self.padding.get();
-            let inset = if spec.kind == ButtonKind::Sidebar {
+            let inset = if spec.kind == ButtonKind::Sidebar || spec.single_line {
                 0
             } else {
                 bs + 2 + TEXT_IMAGE_INSET
@@ -1785,35 +1777,20 @@ impl CtlState {
                 }
                 return;
             }
-            if spec.toggle && spec.kind == ButtonKind::Sidebar {
-                let icon_px = dpi::scale(theme::ICON_PX, dpi);
-                let check = Rect {
-                    x: area.right() - dpi::scale(theme::TOOLS_CHECK_INSET, dpi) - icon_px,
-                    y: area.y + (area.h - icon_px) / 2,
-                    w: icon_px,
-                    h: icon_px,
-                };
-                if checked {
-                    draw_glyph(
-                        hdc,
-                        theme::glyph::CHECK_MARK,
-                        self.icon_font.get(),
-                        check,
-                        text_color,
-                    );
-                }
-                // Reserve the same space in both states so the caption never jumps.
-                max_bounds.w = (check.x - dpi::scale(theme::ICON_GAP, dpi) - max_bounds.x).max(1);
-            }
             // Sidebar items are one line with an end ellipsis (DESIGN.md 8.7, 11.3); other
             // buttons keep the WinForms word break.
             let mut flags = if spec.kind == ButtonKind::Sidebar {
                 align_flags(spec.align) | DT_SINGLELINE | DT_END_ELLIPSIS
+            } else if spec.single_line {
+                align_flags(spec.align) | DT_SINGLELINE
             } else {
                 align_flags(spec.align) | DT_WORDBREAK | DT_EDITCONTROL
             };
             if !show_accel {
                 flags |= DT_HIDEPREFIX;
+            }
+            if spec.toggle {
+                flags |= DT_NOPREFIX;
             }
             let font = self.font.get();
             let icon = if checked && spec.toggle && spec.kind != ButtonKind::Sidebar {
@@ -1850,13 +1827,40 @@ impl CtlState {
                     h: icon_px,
                 };
                 draw_glyph(hdc, glyph, self.icon_font.get(), icon_rect, text_color);
+                if let Some(font) = b.badge_font.borrow().as_ref() {
+                    let size = dpi::scale(theme::TOOLS_BADGE_PX, dpi);
+                    let offset = dpi::scale(theme::TOOLS_BADGE_OFFSET, dpi);
+                    let badge = Rect {
+                        x: icon_rect.right() - size + offset,
+                        y: icon_rect.bottom() - size + offset,
+                        w: size,
+                        h: size,
+                    };
+                    // Clear the underlying sync stroke so the small state glyph stays legible.
+                    fill(hdc, badge, fill_color);
+                    draw_glyph(
+                        hdc,
+                        if checked {
+                            theme::glyph::CHECK_MARK
+                        } else {
+                            theme::glyph::CANCEL
+                        },
+                        font.handle(),
+                        badge,
+                        text_color,
+                    );
+                }
                 max_bounds.x = block.x + icon_w;
                 max_bounds.w = (block.right() - max_bounds.x).max(1);
             } else {
                 max_bounds.x = block.x;
                 max_bounds.w = block.w;
             }
-            let text_bounds = align_in(size, max_bounds, Align::MiddleLeft);
+            let text_bounds = if spec.single_line {
+                max_bounds
+            } else {
+                align_in(size, max_bounds, Align::MiddleLeft)
+            };
             draw_text(hdc, &spec.text, font, text_bounds, text_color, flags);
         });
     }
@@ -2181,6 +2185,15 @@ impl CtlState {
     }
 
     fn update_item_height(&self) {
+        if matches!(self.data, Data::Table(_)) {
+            send(
+                self.hwnd,
+                LB_SETITEMHEIGHT,
+                0,
+                dpi::scale(theme::COMPARE_ROW_HEIGHT, self.dpi.get()) as isize,
+            );
+            return;
+        }
         let Data::List(_) = &self.data else {
             return;
         };
@@ -2319,6 +2332,16 @@ impl CtlState {
                 self.draw_list_item(l, dis);
                 Some((LRESULT(1), None))
             }
+            (Data::Table(t), WM_DRAWITEM) => {
+                // SAFETY: DRAWITEMSTRUCT is valid for this reflected draw message.
+                t.draw(self, unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) });
+                Some((LRESULT(1), None))
+            }
+            (Data::Table(t), WM_CTLCOLORLISTBOX) => {
+                Some((LRESULT(t.brush.handle().0 as isize), None))
+            }
+            (Data::Table(_), WM_COMMAND_ID) => Some((LRESULT(0), None)),
+            (Data::Table(_), WM_VKEYTOITEM) => Some((LRESULT(-1), None)),
             (Data::Edit(e), WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT) => {
                 let hdc = HDC(wparam.0 as *mut core::ffi::c_void);
                 // SAFETY: The DC belongs to the control for this message.
@@ -2453,14 +2476,29 @@ pub(crate) fn measure(
             // ButtonFlatAdapter.PaintFlatLayout(up: false, check: true): border + 1, padding 1,
             // plus 2 for GrowBorderBy1PxWhenDefault. Sidebar items have neither (see paint).
             let sidebar = b.kind == ButtonKind::Sidebar;
-            let linear = if sidebar {
+            let linear = if sidebar || b.single_line {
                 0
             } else {
                 (theme::BUTTON_BORDER_SIZE + 1) * 2 + 2 + 2
             };
-            let inset = if sidebar { 0 } else { TEXT_IMAGE_INSET * 2 };
+            let inset = if sidebar || b.single_line {
+                0
+            } else {
+                TEXT_IMAGE_INSET * 2
+            };
             // Prefix processing hides `&` with or without cues, so the width is the same.
-            let flags = align_flags(b.align) | DT_EDITCONTROL | DT_HIDEPREFIX;
+            let flags = align_flags(b.align)
+                | if b.toggle {
+                    DT_NOPREFIX
+                } else {
+                    DRAW_TEXT_FORMAT(0)
+                }
+                | DT_HIDEPREFIX
+                | if b.single_line {
+                    DT_SINGLELINE
+                } else {
+                    DT_EDITCONTROL
+                };
             let avail = Size {
                 w: proposed.w.saturating_sub(linear + inset),
                 h: proposed.h.saturating_sub(linear + inset),
@@ -2474,7 +2512,7 @@ pub(crate) fn measure(
                     h: text.h + inset,
                 }
             };
-            if b.icon.is_some() {
+            if b.icon.is_some() || (b.toggle && !sidebar) {
                 text.w += dpi::scale(theme::ICON_PX, dpi) + dpi::scale(theme::ICON_GAP, dpi);
                 text.h = text.h.max(dpi::scale(theme::ICON_PX, dpi) + inset);
             }
@@ -2560,6 +2598,17 @@ pub(crate) fn apply_dpi(hwnd: HWND, font: HFONT, icon_font: HFONT, padding: Pad,
         st.icon_font.set(icon_font);
         st.padding.set(padding);
         st.dpi.set(dpi);
+        if let Data::Table(t) = &st.data {
+            t.apply_dpi(dpi);
+        }
+        if let Data::Button(b) = &st.data
+            && b.badge_font.borrow().is_some()
+        {
+            match dpi::Font::new(theme::icon_font(theme::TOOLS_BADGE_PX), dpi) {
+                Ok(font) => *b.badge_font.borrow_mut() = Some(font),
+                Err(error) => win::record(error),
+            }
+        }
         // The form invalidates after the DPI layout; avoid drawing halfway through re-fonting.
         // (The edit subclass re-applies its margins and scroll bars on WM_SETFONT.)
         send(hwnd, WM_SETFONT, font.0 as usize, 0);
@@ -2592,11 +2641,15 @@ pub fn spinner_animates(hwnd: HWND) -> bool {
     })
 }
 
-/// Inner left and right margins of a text well (`EM_SETMARGINS`, DESIGN.md 4).
+/// Inputs keep native side margins; wells get all four margins from their parent.
 fn edit_set_margins(hwnd: HWND, dpi: u32) {
     use windows::Win32::UI::Controls::EM_SETMARGINS;
     use windows::Win32::UI::WindowsAndMessaging::{EC_LEFTMARGIN, EC_RIGHTMARGIN};
-    let m = dpi::scale(theme::EDIT_INNER_MARGIN, dpi) as usize;
+    let m = if is_input(hwnd) {
+        dpi::scale(theme::EDIT_INNER_MARGIN, dpi) as usize
+    } else {
+        0
+    };
     send(
         hwnd,
         EM_SETMARGINS,
@@ -2671,8 +2724,7 @@ pub(crate) fn edit_update_bars(hwnd: HWND) {
     let line_h = (tm.tmHeight + tm.tmExternalLeading).max(1);
     let lines = send(hwnd, EM_GETLINECOUNT, 0, 0).0 as i32;
     let text_h = lines * line_h;
-    let margins = 2 * dpi::scale(theme::EDIT_INNER_MARGIN, dpi);
-    let text_w = e.longest.get() + margins + 2;
+    let text_w = e.longest.get() + 2;
     let bar_w = dpi::metric(SM_CXVSCROLL, dpi);
     let bar_h = dpi::metric(SM_CYHSCROLL, dpi);
     let horizontal_possible = !e.spec.word_wrap;
@@ -2735,17 +2787,25 @@ pub fn set_text(hwnd: HWND, text: &str) {
     invalidate(hwnd);
 }
 
-/// Gives the native input its centered text area, keeping its frame in the container.
+/// Insets wells/lists for the parent frame and centers a single-line input's text area.
 pub(crate) fn input_bounds(hwnd: HWND, bounds: Rect) -> Rect {
     let Some(st) = state_of(hwnd) else {
         return bounds;
     };
-    let Data::Edit(e) = &st.data else {
-        return bounds;
+    let e = match &st.data {
+        Data::Table(t) => return t.bounds(&st, bounds),
+        Data::Edit(e) if e.spec.single_line => e,
+        Data::Edit(_) | Data::List(_) => {
+            let inset = theme::STROKE + dpi::scale(theme::EDIT_INNER_MARGIN, st.dpi.get());
+            return bounds.deflate(Pad {
+                l: inset,
+                t: inset,
+                r: inset,
+                b: inset,
+            });
+        }
+        _ => return bounds,
     };
-    if !e.spec.single_line {
-        return bounds;
-    }
     e.frame.set(Some(bounds));
     let dc = ScreenDc::new();
     let height = text_height(dc.0, st.font.get()).min(bounds.h);
@@ -2757,7 +2817,7 @@ pub(crate) fn input_bounds(hwnd: HWND, bounds: Rect) -> Rect {
     }
 }
 
-/// Paints the rounded frames of direct child inputs before the focus ring.
+/// Paints direct child input, well and list frames in the container's paint buffer.
 pub(crate) fn paint_input_frames(parent: HWND, hdc: HDC, background: Color) {
     use windows::Win32::UI::WindowsAndMessaging::{
         GW_CHILD, GW_HWNDNEXT, GetWindow, IsWindowVisible,
@@ -2768,17 +2828,83 @@ pub(crate) fn paint_input_frames(parent: HWND, hdc: HDC, background: Color) {
         while !child.is_invalid() {
             if IsWindowVisible(child).as_bool()
                 && let Some(st) = state_of(child)
-                && let Data::Edit(e) = &st.data
-                && let Some(area) = e.frame.get()
             {
-                rounded_rect(
-                    hdc,
-                    area,
-                    dpi::scale(theme::INPUT_RADIUS, st.dpi.get()),
-                    background,
-                    Some(e.spec.back),
-                    Some(theme::BORDER),
-                );
+                match &st.data {
+                    Data::Table(t) => t.paint_frame(&st, hdc),
+                    Data::Edit(e) if e.spec.single_line => {
+                        if let Some(area) = e.frame.get() {
+                            rounded_rect(
+                                hdc,
+                                area,
+                                dpi::scale(theme::INPUT_RADIUS, st.dpi.get()),
+                                background,
+                                Some(e.spec.back),
+                                Some(theme::BORDER),
+                            );
+                        }
+                    }
+                    Data::Edit(_) | Data::List(_) => {
+                        if let Some(area) = rect_in_parent(child) {
+                            // Include the native scroll bars, but never paint over the child.
+                            let padding = dpi::scale(theme::EDIT_INNER_MARGIN, st.dpi.get());
+                            let inset = padding + theme::STROKE;
+                            let outer = area.deflate(Pad {
+                                l: -inset,
+                                t: -inset,
+                                r: -inset,
+                                b: -inset,
+                            });
+                            let back = match &st.data {
+                                Data::Edit(e) => e.spec.back,
+                                Data::List(l) => l.spec.back,
+                                _ => unreachable!(),
+                            };
+                            // Only the four gaps are filled; native text and bars own `area`.
+                            fill(
+                                hdc,
+                                Rect {
+                                    x: outer.x,
+                                    y: outer.y,
+                                    w: outer.w,
+                                    h: inset,
+                                },
+                                back,
+                            );
+                            fill(
+                                hdc,
+                                Rect {
+                                    x: outer.x,
+                                    y: area.bottom(),
+                                    w: outer.w,
+                                    h: inset,
+                                },
+                                back,
+                            );
+                            fill(
+                                hdc,
+                                Rect {
+                                    x: outer.x,
+                                    y: area.y,
+                                    w: inset,
+                                    h: area.h,
+                                },
+                                back,
+                            );
+                            fill(
+                                hdc,
+                                Rect {
+                                    x: area.right(),
+                                    y: area.y,
+                                    w: inset,
+                                    h: area.h,
+                                },
+                                back,
+                            );
+                            frame(hdc, outer, theme::BORDER);
+                        }
+                    }
+                    _ => {}
+                }
             }
             child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
         }

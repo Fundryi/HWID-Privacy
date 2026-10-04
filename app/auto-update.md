@@ -8,6 +8,8 @@ This URL must stay unchanged. Checks use a cache-busting query and compare SHA-2
 
 ## Rust client
 
+The sidebar **Auto Update** toggle enables only a startup check and an `Update available` footer notice; installation still needs confirmation. Its leading Sync icon has a check badge when on and an X badge when off. The `check_updates_on_start` setting defaults to false and is saved in `%LOCALAPPDATA%\HWIDChecker\settings.json` (the directory is created as needed). If that file is absent on startup, the app copies the legacy `HWIDChecker.settings.json` beside the exe to the new location before deleting the old file. Existing new settings take precedence; migration failures are recorded without crashing. Unknown JSON keys survive saves.
+
 The Updates button runs `app/rust/src/update.rs` on a worker. `win/http.rs` downloads through WinHTTP with a 100-second budget and a 256 MiB limit, reports progress, and checks Content-Length when supplied. The checked bytes are retained for installation, avoiding a second download.
 
 After confirmation, installation rechecks size and hash and validates a Windows x64 PE. It renames the running image to a unique `.old-` sibling, writes the new exe at the original path, and starts it directly. The old process exits only after process creation succeeds. Write/restart failures attempt to restore the original exe; rollback failures are reported. Startup cleans up old image siblings. Paths containing `%` are refused. Debug builds treat update installation as a dry run unless the process has `HWID_ALLOW_DESTRUCTIVE=1`.

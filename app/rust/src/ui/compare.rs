@@ -1,14 +1,19 @@
-//! C2: two native pickers, background parsing and a modal comparison well.
+//! C2/C2b flows with the C2c modal compare table.
 
-use super::controls::{ButtonSpec, Ctl, EditSpec, LabelSpec};
-use super::layout::{Anchor, Node, Track};
+pub(crate) mod table;
+pub(crate) mod text;
+
+use super::controls::{self, ButtonSpec, Ctl, LabelSpec};
+use super::layout::{Anchor, Node, Pad, Size, Track};
 use super::msgbox::{self, Buttons, Icon};
 use super::theme;
 use super::window::{self, Event, FindKey, Form, FormSpec, WindowSize};
 use crate::report::compare::{self, Comparison, ReadError};
+use crate::report::{self, Section};
 use crate::win;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::mpsc::{self, TryRecvError};
 use windows::Win32::Foundation::HWND;
 
@@ -19,13 +24,54 @@ const BEFORE_NAME: u16 = 4;
 const AFTER_LABEL: u16 = 5;
 const AFTER_NAME: u16 = 6;
 const SUMMARY: u16 = 7;
+const FILTER: u16 = 8;
+const ALL: u16 = 9;
+const LEGEND: u16 = 10;
 const TITLE: &str = "Compare Exports";
+
+struct Collected {
+    comparison: Comparison,
+    ids: Vec<String>,
+    table: table::Table,
+}
 
 /// Selects exports, keeps the main window usable while parsing, then shows the comparison.
 pub fn show(form: &Form, button: u16) {
     if !form.is_enabled(button) {
         return;
     }
+    show_with(
+        form,
+        None,
+        |busy| {
+            form.set_text(
+                button,
+                if busy {
+                    "Comparing..."
+                } else {
+                    "Compare files"
+                },
+            );
+            form.set_enabled(button, !busy);
+        },
+        || false,
+    );
+}
+
+/// Shares the picker/worker flow while the caller owns the pair's loading and busy states.
+pub(crate) fn show_with(
+    form: &Form,
+    current: Option<Vec<Section>>,
+    busy: impl Fn(bool),
+    masked: impl Fn() -> bool,
+) {
+    let live = current.is_some();
+    let current = current.map(|sections| {
+        let mut export = compare::from_sections(&sections, false);
+        // A live snapshot always contains the original provider values, even X-like IDs.
+        export.masked = false;
+        export
+    });
     let folder = match std::env::current_exe() {
         Ok(exe) => exe.parent().unwrap_or(Path::new(".")).to_path_buf(),
         Err(error) => {
@@ -34,33 +80,58 @@ pub fn show(form: &Form, button: u16) {
         }
     };
     let filters = [
-        ("HWID exports (*.txt;*.json)", "*.txt;*.json"),
+        ("Text exports (*.txt)", "*.txt"),
+        ("Older JSON exports (*.json)", "*.json"),
         ("All files (*.*)", "*.*"),
     ];
-    let Some(before) =
-        win::dialog::open_file(form.hwnd(), "Select the BEFORE export", &filters, &folder)
-    else {
-        return;
-    };
-    let Some(after) = win::dialog::open_file(
+    let Some(before) = win::dialog::open_file(
         form.hwnd(),
-        "Select the AFTER export",
+        if live {
+            "Select the export to compare with the current system"
+        } else {
+            "Select the BEFORE export"
+        },
         &filters,
-        before.parent().unwrap_or(&folder),
+        &folder,
     ) else {
         return;
     };
-    form.set_text(button, "Comparing...");
-    form.set_enabled(button, false);
-    let result = collect(form, before.clone(), after.clone());
+    let after = if live {
+        PathBuf::from("Current system")
+    } else {
+        let Some(after) = win::dialog::open_file(
+            form.hwnd(),
+            "Select the AFTER export",
+            &filters,
+            before.parent().unwrap_or(&folder),
+        ) else {
+            return;
+        };
+        after
+    };
+    busy(true);
+    let result = collect(form, before.clone(), after.clone(), current);
     if !form.is_alive() {
         return;
     }
-    form.set_text(button, TITLE);
-    form.set_enabled(button, true);
+    busy(false);
     match result {
-        Some(Ok(result)) => {
-            if let Err(error) = show_result(form.hwnd(), &before, &after, result) {
+        Some(Ok(Collected {
+            comparison: mut result,
+            ids,
+            mut table,
+        })) => {
+            if masked() {
+                table.mask(&ids);
+                // ponytail: text exports carry no IDs, so text-only before-values stay visible.
+                result.text = report::masked(&Section {
+                    body: result.text,
+                    ids,
+                    ..Section::default()
+                })
+                .body;
+            }
+            if let Err(error) = show_result(form.hwnd(), &before, &after, result, table, live) {
                 window::show_error(msgbox::active_window(), &error.to_string(), "Compare Error");
             }
         }
@@ -82,7 +153,12 @@ pub fn show(form: &Form, button: u16) {
     }
 }
 
-fn collect(form: &Form, before: PathBuf, after: PathBuf) -> Option<Result<Comparison, ReadError>> {
+fn collect(
+    form: &Form,
+    before: PathBuf,
+    after: PathBuf,
+    current: Option<compare::Export>,
+) -> Option<Result<Collected, ReadError>> {
     let poster = form.poster()?;
     let (tx, rx) = mpsc::channel();
     let spawned = std::thread::Builder::new()
@@ -90,8 +166,41 @@ fn collect(form: &Form, before: PathBuf, after: PathBuf) -> Option<Result<Compar
         .spawn(move || {
             let result = win::catch_panic(|| {
                 let left = compare::read(&before)?;
-                let right = compare::read(&after)?;
-                Ok(compare::compare(&left, &right, &before, &after))
+                let live = current.is_some();
+                let right = match current {
+                    Some(export) => export,
+                    None => compare::read(&after)?,
+                };
+                if right.is_empty() {
+                    return Err(ReadError::Empty(format!(
+                        "No hardware values found in: {}",
+                        after.display()
+                    )));
+                }
+                if left.masked != right.masked {
+                    let path = if left.masked { &before } else { &after };
+                    let name = path
+                        .file_name()
+                        .unwrap_or(path.as_os_str())
+                        .to_string_lossy();
+                    let reason = if live {
+                        "It cannot be compared with the current system."
+                    } else {
+                        "A masked export can only be compared with another masked export."
+                    };
+                    return Err(ReadError::Empty(format!(
+                        "{name} is masked (Mask IDs was on when it was exported). {reason}"
+                    )));
+                }
+                let ids = left.ids().iter().chain(right.ids()).cloned().collect();
+                let mut result = compare::compare(&left, &right, &before, &after);
+                text::format(&mut result, &left, &right, &before, &after);
+                let table = table::Table::new(&result, &left, &right);
+                Ok(Collected {
+                    comparison: result,
+                    ids,
+                    table,
+                })
             })
             .unwrap_or_else(|error| Err(ReadError::Read(error)));
             if tx.send(result).is_ok() {
@@ -122,20 +231,55 @@ fn collect(form: &Form, before: PathBuf, after: PathBuf) -> Option<Result<Compar
     result.into_inner()
 }
 
-fn show_result(owner: HWND, before: &Path, after: &Path, result: Comparison) -> win::Result<()> {
-    let (spec, nodes) = parts(before, after, &result.summary);
+fn show_result(
+    owner: HWND,
+    before: &Path,
+    after: &Path,
+    result: Comparison,
+    table: table::Table,
+    live: bool,
+) -> win::Result<()> {
+    let table = Rc::new(RefCell::new(table));
+    let (mut spec, nodes) = parts(before, after, &result.summary, table.clone());
+    if live {
+        spec.title = "Compare with Current".to_owned();
+    }
     window::run_modal(owner, spec, nodes, move |form, event| {
-        handle(form, event, &result.text)
+        handle(form, event, &result.text, &table)
     })
 }
 
-fn handle(form: &Form, event: Event, text: &str) -> bool {
+fn handle(form: &Form, event: Event, text: &str, table: &RefCell<table::Table>) -> bool {
     match event {
         Event::Created => {
-            form.edit_set_text(TEXT, text);
-            form.edit_scroll_to_top(TEXT);
+            form.set_checked(FILTER, true);
+            form.set_checked(ALL, false);
+            form.set_button_fore(ALL, Some(theme::SECONDARY));
+            form.table_refresh(TEXT);
         }
-        Event::Click(COPY) => form.edit_copy_all(TEXT),
+        Event::Toggled(id, _) if id == FILTER || id == ALL => {
+            table.borrow_mut().all = id == ALL;
+            form.set_checked(FILTER, id == FILTER);
+            form.set_checked(ALL, id == ALL);
+            form.set_button_fore(
+                FILTER,
+                Some(if id == FILTER {
+                    theme::TEXT
+                } else {
+                    theme::SECONDARY
+                }),
+            );
+            form.set_button_fore(
+                ALL,
+                Some(if id == ALL {
+                    theme::TEXT
+                } else {
+                    theme::SECONDARY
+                }),
+            );
+            form.table_refresh(TEXT);
+        }
+        Event::Click(COPY) => controls::copy_text(form.hwnd(), text),
         Event::Key(FindKey::Escape { .. }) => form.close(),
         Event::Key(_) => return false,
         _ => {}
@@ -143,7 +287,12 @@ fn handle(form: &Form, event: Event, text: &str) -> bool {
     true
 }
 
-fn parts(before: &Path, after: &Path, summary: &str) -> (FormSpec, Vec<Node>) {
+fn parts(
+    before: &Path,
+    after: &Path,
+    summary: &str,
+    table: Rc<RefCell<table::Table>>,
+) -> (FormSpec, Vec<Node>) {
     let mut spec = FormSpec::new(
         TITLE,
         WindowSize::Outer {
@@ -186,12 +335,79 @@ fn parts(before: &Path, after: &Path, summary: &str) -> (FormSpec, Vec<Node>) {
             .cell(1, row),
         );
     }
-    rows.push(
+    let mut filters = Vec::new();
+    for (col, id, caption) in [(0, FILTER, "IDs & changes"), (2, ALL, "All")] {
+        let mut button = ButtonSpec::outline(caption).toggle();
+        button.single_line = true;
+        filters.push(
+            Node::leaf(id, Ctl::Button(button))
+                .auto_size()
+                .fill()
+                .min(Size {
+                    w: 96,
+                    h: theme::COMPARE_FILTER_HEIGHT,
+                })
+                .padding(Pad {
+                    l: theme::COMPARE_CELL_PADDING,
+                    r: theme::COMPARE_CELL_PADDING,
+                    ..theme::NO_PAD
+                })
+                .margin(theme::NO_PAD)
+                .cell(col, 0),
+        );
+    }
+    let counts = table.borrow().counts;
+    for (i, (text, color)) in table::legend(counts)
+        .into_iter()
+        .zip([
+            if counts == [0; 2] {
+                theme::FAINT
+            } else {
+                theme::DANGER
+            },
+            theme::FAINT,
+            theme::SUCCESS,
+        ])
+        .enumerate()
+    {
+        filters.push(
+            Node::leaf(
+                LEGEND + i as u16,
+                Ctl::Label(LabelSpec::new(&text, theme::SECTION_META_FONT, color)),
+            )
+            .auto_size()
+            .fill()
+            .margin(theme::NO_PAD)
+            .cell(4 + i, 0),
+        );
+    }
+    filters.push(
         Node::leaf(
             SUMMARY,
             Ctl::Label(LabelSpec::new(summary, theme::SECTION_META_FONT, theme::FAINT).ellipsis()),
         )
         .fill()
+        .margin(theme::NO_PAD)
+        .cell(8, 0),
+    );
+    rows.push(
+        Node::table(
+            vec![
+                Track::AutoSize,
+                Track::Absolute(4),
+                Track::AutoSize,
+                Track::Absolute(12),
+                Track::AutoSize,
+                Track::AutoSize,
+                Track::AutoSize,
+                Track::Absolute(12),
+                Track::Percent(100.0),
+            ],
+            vec![Track::Absolute(theme::COMPARE_FILTER_HEIGHT)],
+            filters,
+        )
+        .fill()
+        .auto_size()
         .margin(theme::NO_PAD)
         .cell(0, 2)
         .span(2),
@@ -204,7 +420,7 @@ fn parts(before: &Path, after: &Path, summary: &str) -> (FormSpec, Vec<Node>) {
         vec![
             Track::Absolute(theme::COMPARE_FILE_HEIGHT),
             Track::Absolute(theme::COMPARE_FILE_HEIGHT),
-            Track::Absolute(theme::SECTION_META_HEIGHT),
+            Track::Absolute(theme::COMPARE_FILTER_HEIGHT),
         ],
         rows,
     )
@@ -234,13 +450,10 @@ fn parts(before: &Path, after: &Path, summary: &str) -> (FormSpec, Vec<Node>) {
     .padding(theme::HEADER_PADDING)
     .margin(theme::HEADER_MARGIN)
     .cell(0, 0);
-    let well = Node::leaf(
-        TEXT,
-        Ctl::Edit(EditSpec::new(theme::CONTENT_FONT, theme::TEXT, theme::CARD)),
-    )
-    .fill()
-    .margin(theme::NO_PAD)
-    .cell(0, 1);
+    let well = Node::leaf(TEXT, Ctl::Table(table))
+        .fill()
+        .margin(theme::NO_PAD)
+        .cell(0, 1);
     let panel = Node::table(
         vec![Track::Percent(100.0)],
         vec![Track::AutoSize, Track::Percent(100.0)],
