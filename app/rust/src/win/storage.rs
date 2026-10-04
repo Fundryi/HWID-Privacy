@@ -30,6 +30,21 @@ pub struct Identifier {
     pub decoded: String,
 }
 
+/// Full VPD reply alongside the unchanged legacy-selected identifier.
+pub struct StorageIdentifiers {
+    pub selected: Option<Identifier>,
+    pub descriptors: IdentifyOutcome<Vec<StorageIdentifier>>,
+}
+
+/// One checked STORAGE_IDENTIFIER; SDK Type is STORAGE_IDENTIFIER_TYPE.
+#[derive(Debug, PartialEq, Eq)]
+pub struct StorageIdentifier {
+    pub code_set: u32,
+    pub identifier_type: u32,
+    pub association: u32,
+    pub value: Vec<u8>,
+}
+
 /// Disk identity and GPT partition identities in legacy display notation.
 #[derive(Debug, PartialEq, Eq)]
 pub struct DiskLayout {
@@ -146,8 +161,9 @@ pub fn volume(letter: char) -> Result<Option<Volume>> {
 }
 
 /// Reads the selected VPD identifier through the shared device/IOCTL helpers.
-pub fn physical_identifier(index: u32) -> Result<Option<Identifier>> {
-    bounded("StorageDeviceIdProperty", move || {
+pub fn physical_identifier(index: u32) -> Result<StorageIdentifiers> {
+    let started = Instant::now();
+    let data = bounded("StorageDeviceIdProperty", move || {
         // C# parity: Services/Win32/StorageDeviceIdQuery.cs:202-211 (read access).
         let handle = ioctl::open_device(&format!(r"\\.\PHYSICALDRIVE{index}"), GENERIC_READ.0)?;
         // Include the SDK AdditionalParameters tail, with zero-initialized padding.
@@ -156,13 +172,51 @@ pub fn physical_identifier(index: u32) -> Result<Option<Identifier>> {
         query[offset..offset + 4].copy_from_slice(&StorageDeviceIdProperty.0.to_le_bytes());
         let offset = offset_of!(STORAGE_PROPERTY_QUERY, QueryType);
         query[offset..offset + 4].copy_from_slice(&PropertyStandardQuery.0.to_le_bytes());
-        parse_descriptor(&ioctl::device_io_control(
-            &handle,
-            IOCTL_STORAGE_QUERY_PROPERTY,
-            &query,
-            4096,
-        )?)
-    })
+        ioctl::device_io_control(&handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, 4096)
+    });
+    let returned = data.as_ref().ok().map(Vec::len);
+    let result = data.and_then(|data| {
+        // Do not change the compatibility selector's ranking, decoding or stops.
+        let selected = parse_descriptor(&data)?;
+        let descriptors = parse_identifier_list(&data);
+        storage_diagnostic(
+            index,
+            None,
+            &descriptors.as_ref().map_or_else(
+                |_| "StorageDeviceIdProperty descriptor list".into(),
+                |ids| {
+                    format!(
+                        "StorageDeviceIdProperty descriptor list count={}",
+                        ids.len()
+                    )
+                },
+            ),
+            returned,
+            started,
+            descriptors.as_ref().err(),
+            if matches!(&descriptors, Ok(ids) if ids.is_empty()) {
+                "empty"
+            } else {
+                "ok"
+            },
+        );
+        Ok(StorageIdentifiers {
+            selected,
+            descriptors: identify_outcome(descriptors.map(|ids| (!ids.is_empty()).then_some(ids))),
+        })
+    });
+    if let Err(error) = &result {
+        storage_diagnostic(
+            index,
+            None,
+            "StorageDeviceIdProperty",
+            returned,
+            started,
+            Some(error),
+            "ok",
+        );
+    }
+    result
 }
 
 /// Independently collected controller and namespace identities, never Windows Serial.
@@ -171,6 +225,8 @@ pub struct NvmeIdentity {
     pub controller_serial: IdentifyOutcome<String>,
     /// Identify Namespace binary identities in their original byte order.
     pub namespace: IdentifyOutcome<NvmeNamespace>,
+    /// CNS 3 descriptors, independent of controller and CNS 0 results.
+    pub namespace_descriptors: IdentifyOutcome<NvmeNamespaceDescriptors>,
 }
 
 /// A protocol field group, retaining empty and bus-gated results separately.
@@ -188,6 +244,17 @@ pub struct NvmeNamespace {
     pub eui64: Option<String>,
     /// Uppercase NGUID, without separators.
     pub nguid: Option<String>,
+}
+
+/// Namespace Identification Descriptor List identities in protocol byte order.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct NvmeNamespaceDescriptors {
+    pub eui64: Option<String>,
+    pub nguid: Option<String>,
+    /// RFC 4122 byte order, unlike a Windows mixed-endian GUID.
+    pub uuid: Option<String>,
+    /// Command set context, not an identity value.
+    pub csi: Option<u8>,
 }
 
 /// ATA fields are independent: malformed text cannot hide a valid WWN or model.
@@ -501,18 +568,40 @@ pub fn physical_nvme_identity(index: u32) -> Result<NvmeIdentity> {
         return Ok(NvmeIdentity {
             controller_serial: IdentifyOutcome::NotAttempted { bus },
             namespace: IdentifyOutcome::NotAttempted { bus },
+            namespace_descriptors: IdentifyOutcome::NotAttempted { bus },
         });
     }
     // Separate bounded calls retain a successful identity if the other query fails
     // or times out. Keep SubValue=0; multi-namespace association is unverified.
-    let controller_serial = nvme_identify(index, true, parse_nvme_serial);
-    let namespace = nvme_identify(index, false, |data| {
+    let controller_serial = nvme_identify(index, 1, parse_nvme_serial);
+    let namespace = nvme_identify(index, 0, |data| {
         let namespace = parse_nvme_namespace(data)?;
         Ok((namespace.eui64.is_some() || namespace.nguid.is_some()).then_some(namespace))
+    });
+    let namespace_descriptors = nvme_identify(index, 3, |data| {
+        let ids = parse_nvme_namespace_descriptors(data)?;
+        if let IdentifyOutcome::Ok(namespace) = &namespace {
+            for (fixed, descriptor) in [
+                (&namespace.eui64, &ids.eui64),
+                (&namespace.nguid, &ids.nguid),
+            ] {
+                if matches!((fixed, descriptor), (Some(a), Some(b)) if a != b) {
+                    return Err(Error::msg(
+                        "NVMe Identify",
+                        "invalid namespace identity association",
+                    ));
+                }
+            }
+        }
+        Ok(
+            (ids.eui64.is_some() || ids.nguid.is_some() || ids.uuid.is_some() || ids.csi.is_some())
+                .then_some(ids),
+        )
     });
     Ok(NvmeIdentity {
         controller_serial,
         namespace,
+        namespace_descriptors,
     })
 }
 
@@ -521,7 +610,7 @@ const PROTOCOL_START: usize = offset_of!(STORAGE_PROTOCOL_DATA_DESCRIPTOR, Proto
 
 fn nvme_identify<T>(
     index: u32,
-    controller: bool,
+    cns: u32,
     parse: impl FnOnce(&[u8]) -> Result<Option<T>>,
 ) -> IdentifyOutcome<T> {
     let started = Instant::now();
@@ -530,7 +619,7 @@ fn nvme_identify<T>(
         // STORAGE_PROPERTY_QUERY.AdditionalParameters starts at byte 8, not
         // sizeof(STORAGE_PROPERTY_QUERY): the SDK includes a one-byte tail.
         let mut query = [0u8; PROTOCOL_START + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>()];
-        let property = if controller {
+        let property = if cns == 1 {
             StorageAdapterProtocolSpecificProperty
         } else {
             StorageDeviceProtocolSpecificProperty
@@ -540,7 +629,9 @@ fn nvme_identify<T>(
             (4, PropertyStandardQuery.0 as u32),
             (8, ProtocolTypeNvme.0 as u32),
             (12, NVMeDataTypeIdentify.0 as u32),
-            (16, u32::from(controller)), // CNS: controller=1, namespace=0.
+            (16, cns), // Controller=1, namespace=0, namespace descriptor list=3.
+            // Keep SubValue=0: use this physical-device property driver's default.
+            // Never substitute a universal NSID 1; multi-namespace remains unverified.
             (24, size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32),
             (28, NVME_IDENTIFY_SIZE as u32),
         ] {
@@ -558,10 +649,10 @@ fn nvme_identify<T>(
     storage_diagnostic(
         index,
         Some(BusTypeNvme.0 as u32),
-        if controller {
-            "StorageAdapterProtocolSpecificProperty CNS=1 SubValue=0"
-        } else {
-            "StorageDeviceProtocolSpecificProperty CNS=0 SubValue=0"
+        match cns {
+            1 => "StorageAdapterProtocolSpecificProperty CNS=1 SubValue=0",
+            3 => "StorageDeviceProtocolSpecificProperty CNS=3 SubValue=0",
+            _ => "StorageDeviceProtocolSpecificProperty CNS=0 SubValue=0",
         },
         returned,
         started,
@@ -687,6 +778,84 @@ fn parse_nvme_namespace(payload: &[u8]) -> Result<NvmeNamespace> {
     })
 }
 
+fn parse_nvme_namespace_descriptors(payload: &[u8]) -> Result<NvmeNamespaceDescriptors> {
+    if payload.len() != NVME_IDENTIFY_SIZE {
+        return Err(Error::msg(
+            "NVMe Identify",
+            "invalid namespace descriptor list size",
+        ));
+    }
+    let mut ids = NvmeNamespaceDescriptors::default();
+    let mut seen = [false; 5];
+    let mut offset = 0;
+    while offset < payload.len() {
+        let header = payload.get(offset..offset + 4).ok_or_else(|| {
+            Error::msg(
+                "NVMe Identify",
+                "invalid truncated namespace descriptor header",
+            )
+        })?;
+        let kind = header[0] as usize;
+        let length = header[1] as usize;
+        if length == 0 {
+            if payload[offset..].iter().any(|&b| b != 0) {
+                return Err(Error::msg(
+                    "NVMe Identify",
+                    "invalid namespace descriptor terminator",
+                ));
+            }
+            break;
+        }
+        if kind == 0 || header[2..].iter().any(|&b| b != 0) {
+            return Err(Error::msg(
+                "NVMe Identify",
+                "invalid namespace descriptor header",
+            ));
+        }
+        let end = offset + 4 + length;
+        let value = payload
+            .get(offset + 4..end)
+            .ok_or_else(|| Error::msg("NVMe Identify", "invalid truncated namespace identifier"))?;
+        if kind < seen.len() {
+            let expected = match kind {
+                1 => 8,
+                2 | 3 => 16,
+                4 => 1,
+                _ => unreachable!(),
+            };
+            if length != expected || seen[kind] {
+                return Err(Error::msg(
+                    "NVMe Identify",
+                    "invalid namespace identifier length or duplicate type",
+                ));
+            }
+            seen[kind] = true;
+            let hex = || value.iter().map(|b| format!("{b:02X}")).collect::<String>();
+            let nonzero = value.iter().any(|&b| b != 0);
+            match kind {
+                1 => ids.eui64 = nonzero.then(hex),
+                2 => ids.nguid = nonzero.then(hex),
+                3 if nonzero => {
+                    let hex = hex();
+                    ids.uuid = Some(format!(
+                        "{}-{}-{}-{}-{}",
+                        &hex[..8],
+                        &hex[8..12],
+                        &hex[12..16],
+                        &hex[16..20],
+                        &hex[20..]
+                    ));
+                }
+                4 => ids.csi = Some(value[0]),
+                _ => {}
+            }
+        }
+        // Unknown nonzero types are length-checked and skipped for future specs.
+        offset = end;
+    }
+    Ok(ids)
+}
+
 /// Reads GPT/MBR identity through the shared device/IOCTL helpers.
 pub fn physical_layout(index: u32) -> Result<Option<DiskLayout>> {
     bounded("IOCTL_DISK_GET_DRIVE_LAYOUT_EX", move || {
@@ -804,6 +973,76 @@ fn parse_descriptor(data: &[u8]) -> Result<Option<Identifier>> {
             decoded,
         }
     }))
+}
+
+fn parse_identifier_list(data: &[u8]) -> Result<Vec<StorageIdentifier>> {
+    const HEADER: usize = offset_of!(STORAGE_DEVICE_ID_DESCRIPTOR, Identifiers);
+    const PAYLOAD: usize = offset_of!(STORAGE_IDENTIFIER, Identifier);
+    let size = dword(data, offset_of!(STORAGE_DEVICE_ID_DESCRIPTOR, Size))? as usize;
+    if size < HEADER || size > data.len() {
+        return Err(Error::msg(
+            "storage descriptor",
+            "invalid descriptor list size",
+        ));
+    }
+    let data = &data[..size];
+    let count = dword(
+        data,
+        offset_of!(STORAGE_DEVICE_ID_DESCRIPTOR, NumberOfIdentifiers),
+    )? as usize;
+    if count > (size - HEADER) / PAYLOAD || count == 0 && size != HEADER {
+        return Err(Error::msg(
+            "storage descriptor",
+            "identifier count inconsistent with buffer",
+        ));
+    }
+    let mut ids = Vec::with_capacity(count);
+    let mut offset = HEADER;
+    for i in 0..count {
+        let header = data
+            .get(offset..offset + PAYLOAD)
+            .ok_or_else(|| Error::msg("storage descriptor", "truncated identifier list header"))?;
+        let length = word(header, offset_of!(STORAGE_IDENTIFIER, IdentifierSize))? as usize;
+        let next = word(header, offset_of!(STORAGE_IDENTIFIER, NextOffset))? as usize;
+        let span = PAYLOAD + length;
+        let end = offset + span;
+        let value = data.get(offset + PAYLOAD..end).ok_or_else(|| {
+            Error::msg(
+                "storage descriptor",
+                "identifier size exceeds descriptor list",
+            )
+        })?;
+        if i + 1 < count {
+            if next < span || offset + next + PAYLOAD > size {
+                return Err(Error::msg(
+                    "storage descriptor",
+                    "invalid next identifier list offset or count",
+                ));
+            }
+        } else {
+            // Drivers may put the final aligned record size in NextOffset. Accept
+            // at most 7 bytes of terminal alignment slack, never another record.
+            let padding = &data[end..];
+            if padding.len() >= 8
+                || padding.iter().any(|&b| b != 0)
+                || next != 0
+                    && (next < span || next > span.next_multiple_of(8) || offset + next < size)
+            {
+                return Err(Error::msg(
+                    "storage descriptor",
+                    "invalid terminal identifier offset or count",
+                ));
+            }
+        }
+        ids.push(StorageIdentifier {
+            code_set: dword(header, offset_of!(STORAGE_IDENTIFIER, CodeSet))?,
+            identifier_type: dword(header, offset_of!(STORAGE_IDENTIFIER, Type))?,
+            association: dword(header, offset_of!(STORAGE_IDENTIFIER, Association))?,
+            value: value.to_vec(),
+        });
+        offset += next;
+    }
+    Ok(ids)
 }
 
 fn parse_layout(data: &[u8]) -> Result<Option<DiskLayout>> {
@@ -925,6 +1164,146 @@ fn guid_text(bytes: [u8; 16]) -> String {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn full_storage_identifier_list_checks_count_offsets_and_metadata() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/wp-01/storage.json")).unwrap();
+        for case in fixture["descriptors"].as_array().unwrap() {
+            let data = fixture_bytes(case);
+            let rejects = case["error"] == true
+                || matches!(
+                    case["name"].as_str(),
+                    Some(
+                        "count-chain-short-zero-next-keeps-best"
+                            | "count-reached-last-next-nonzero"
+                    )
+                );
+            assert_eq!(
+                parse_identifier_list(&data).is_err(),
+                rejects,
+                "{}",
+                case["name"]
+            );
+            for end in 0..data.len() {
+                assert!(
+                    parse_identifier_list(&data[..end]).is_err(),
+                    "{} prefix {end}",
+                    case["name"]
+                );
+            }
+        }
+        let data = fixture_bytes(&fixture["descriptors"][0]);
+        let ids = parse_identifier_list(&data).unwrap();
+        assert_eq!(ids.len(), 3);
+        assert_eq!(
+            (ids[0].code_set, ids[0].identifier_type, ids[0].association),
+            (1, 2, 0)
+        );
+        assert_eq!(
+            (ids[1].code_set, ids[1].identifier_type, ids[1].association),
+            (2, 8, 1)
+        );
+        assert_eq!(ids[1].value, b"NVME-S9Z3NX0W713842\0");
+        let mut invalid = data.clone();
+        // A count that ends before another real descriptor cannot silently truncate.
+        invalid[8..12].copy_from_slice(&2u32.to_le_bytes());
+        assert!(parse_identifier_list(&invalid).is_err());
+        let mut terminal = fixture_bytes(&fixture["descriptors"][15]);
+        for next in [1u16, 35, 41, u16::MAX] {
+            terminal[22..24].copy_from_slice(&next.to_le_bytes());
+            assert!(parse_identifier_list(&terminal).is_err());
+        }
+        // A final aligned size may extend just beyond Size; no next entry is read.
+        terminal[4..8].copy_from_slice(&48u32.to_le_bytes());
+        terminal[22..24].copy_from_slice(&40u16.to_le_bytes());
+        assert_eq!(parse_identifier_list(&terminal[..48]).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn nvme_namespace_descriptor_types_lengths_uuid_order_and_terminator() {
+        let mut data = vec![0; NVME_IDENTIFY_SIZE];
+        let mut offset = 0;
+        for (kind, value) in [
+            (1, vec![0x00, 0x25, 0x38, 0xC8, 0x6B, 0x14, 0x79, 0xA2]),
+            (
+                2,
+                vec![
+                    0x6E, 0x84, 0x93, 0xF1, 0x72, 0xB5, 0x4C, 0xA0, 0x91, 0xD8, 0xE2, 0x60, 0x3F,
+                    0x7A, 0x4B, 0x65,
+                ],
+            ),
+            (
+                3,
+                vec![
+                    0xD1, 0x97, 0xA2, 0x34, 0x51, 0xC8, 0x4E, 0x62, 0x9B, 0x17, 0xA0, 0x64, 0x32,
+                    0xDF, 0x87, 0x90,
+                ],
+            ),
+            (4, vec![0]),
+            (0x80, vec![0x12, 0x34]), // Bounded future type, not a known identity.
+        ] {
+            data[offset] = kind;
+            data[offset + 1] = value.len() as u8;
+            data[offset + 4..offset + 4 + value.len()].copy_from_slice(&value);
+            offset += 4 + value.len();
+        }
+        let ids = parse_nvme_namespace_descriptors(&data).unwrap();
+        assert_eq!(ids.eui64.as_deref(), Some("002538C86B1479A2"));
+        assert_eq!(
+            ids.nguid.as_deref(),
+            Some("6E8493F172B54CA091D8E2603F7A4B65")
+        );
+        assert_eq!(
+            ids.uuid.as_deref(),
+            Some("D197A234-51C8-4E62-9B17-A06432DF8790")
+        );
+        assert_eq!(ids.csi, Some(0));
+        for end in 0..data.len() {
+            assert!(parse_nvme_namespace_descriptors(&data[..end]).is_err());
+        }
+        for (at, value) in [
+            (1, 7),
+            (13, 15),
+            (33, 15),
+            (53, 2),
+            (2, 1),
+            (0, 0),
+            (offset, 1),
+            (offset + 4, 1),
+        ] {
+            let mut invalid = data.clone();
+            invalid[at] = value;
+            assert!(
+                parse_nvme_namespace_descriptors(&invalid).is_err(),
+                "offset {at}"
+            );
+        }
+        let mut duplicate = data.clone();
+        duplicate[offset..offset + 12].copy_from_slice(&data[..12]);
+        assert!(parse_nvme_namespace_descriptors(&duplicate).is_err());
+        let mut truncated_value = vec![0; NVME_IDENTIFY_SIZE];
+        // A run of 15-byte future descriptors leaves only seven payload bytes.
+        for at in (0..4092).step_by(19) {
+            truncated_value[at] = 0x80;
+            truncated_value[at + 1] = 15;
+        }
+        truncated_value[4085] = 3;
+        truncated_value[4086] = 16;
+        assert!(parse_nvme_namespace_descriptors(&truncated_value).is_err());
+        assert_eq!(
+            parse_nvme_namespace_descriptors(&vec![0; NVME_IDENTIFY_SIZE]).unwrap(),
+            NvmeNamespaceDescriptors::default()
+        );
+        let mut zero_uuid = vec![0; NVME_IDENTIFY_SIZE];
+        zero_uuid[..2].copy_from_slice(&[3, 16]);
+        assert!(
+            parse_nvme_namespace_descriptors(&zero_uuid)
+                .unwrap()
+                .uuid
+                .is_none()
+        );
+    }
 
     fn ata_fixture() -> [u8; ATA_IDENTIFY_SIZE] {
         let mut data = [0; ATA_IDENTIFY_SIZE];

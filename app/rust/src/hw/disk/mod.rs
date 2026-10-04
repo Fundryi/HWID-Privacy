@@ -13,7 +13,9 @@ use crate::{
         wmi::{self, Namespace},
     },
 };
-use formatting::{convert_unique_id_to_hex, nonempty, render_disks};
+use formatting::{
+    add_storage_identifiers, convert_unique_id_to_hex, identity_displayed, nonempty, render_disks,
+};
 #[cfg(test)]
 use sources::unique_ids_wmi;
 use sources::{PhysicalDiskIds, logical_drives, physical_disk_ids_wmi, unique_ids_powershell};
@@ -121,6 +123,8 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             .and_then(|v| trim_net(&v).parse::<i32>().ok())
             .filter(|&n| n >= 0);
         if let Some(index) = index {
+            let mut storage_descriptors = Vec::new();
+            let mut namespace_descriptor_ids = Vec::new();
             match storage::physical_nvme_identity(index as u32) {
                 Ok(identity) => {
                     match identity.controller_serial {
@@ -168,6 +172,33 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                             ));
                         }
                     }
+                    match identity.namespace_descriptors {
+                        storage::IdentifyOutcome::Ok(ids) => {
+                            // CNS 0 keeps priority; CNS 3 only supplies absent fields.
+                            for (label, value) in [
+                                ("NVMe Namespace EUI-64", ids.eui64),
+                                ("NVMe Namespace NGUID", ids.nguid),
+                                ("NVMe Namespace UUID", ids.uuid),
+                            ] {
+                                if let Some(value) = value
+                                    && !disk.nvme_ids.iter().any(|(old, _)| *old == label)
+                                {
+                                    namespace_descriptor_ids.push((label, value));
+                                }
+                            }
+                        }
+                        storage::IdentifyOutcome::Empty
+                        | storage::IdentifyOutcome::NotAttempted { .. } => {}
+                        storage::IdentifyOutcome::Failed(error) => {
+                            out.fallback_failed(
+                                &format!("{} NVMe Namespace Descriptor List", disk.device_id),
+                                &error,
+                            );
+                            disk.failures.push(format!(
+                                "    NVMe Namespace Descriptor List: Unavailable ({error})"
+                            ));
+                        }
+                    }
                     if !disk.nvme_ids.is_empty() {
                         sources.push("native (NVMe Identify)");
                     }
@@ -182,9 +213,11 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                     .push(("Adapter Serial".into(), serial.clone(), true));
             }
             match storage::physical_identifier(index as u32) {
-                Ok(Some(id)) => {
+                Ok(ids) => {
                     sources.push("native (storage)");
-                    if !id.hex.is_empty() {
+                    if let Some(id) = ids.selected
+                        && !id.hex.is_empty()
+                    {
                         disk.details.push(("UniqueId (IOCTL)".into(), id.hex, true));
                         disk.details.push((
                             "UniqueId (IOCTL) decoded".into(),
@@ -192,9 +225,19 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                             !id.decoded.is_empty(),
                         ));
                     }
-                }
-                Ok(None) => {
-                    sources.push("native (storage)");
+                    match ids.descriptors {
+                        storage::IdentifyOutcome::Ok(ids) => storage_descriptors = ids,
+                        storage::IdentifyOutcome::Failed(error) => {
+                            out.fallback_failed(
+                                &format!("{} Storage Identifiers", disk.device_id),
+                                &error,
+                            );
+                            disk.failures
+                                .push(format!("    Storage Identifiers: Unavailable ({error})"));
+                        }
+                        storage::IdentifyOutcome::Empty
+                        | storage::IdentifyOutcome::NotAttempted { .. } => {}
+                    }
                 }
                 Err(error) => disk_error(out, &mut disk, "UniqueId (IOCTL)", &error),
             }
@@ -225,6 +268,14 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                 }
                 Err(error) => disk_error(out, &mut disk, "Partition Style", &error),
             }
+            // Compare against every existing identity before adding descriptor lines.
+            for (label, value) in namespace_descriptor_ids {
+                if !identity_displayed(&disk, &value) {
+                    disk.nvme_ids.push((label, value));
+                    sources.push("native (NVMe Identify)");
+                }
+            }
+            add_storage_identifiers(out, &mut disk, &storage_descriptors);
         } else {
             disk_error(
                 out,
