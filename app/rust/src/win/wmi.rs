@@ -166,6 +166,58 @@ pub fn call_method(_ns: Namespace, _object_path: &str, _method: &str) -> Result<
     })
 }
 
+/// Calls an input-aware method on a thread-local connection; preserves input CIM types.
+/// The caller must bound its wait (the underlying COM method is synchronous).
+pub fn call_method_with_inputs(
+    ns: Namespace,
+    class: &str,
+    object_path: &str,
+    method: &str,
+    inputs: &[(&str, Variant)],
+) -> Result<Row> {
+    with_connection(ns, |connection| {
+        // GetMethod requires a class definition, not the instance object.
+        let signature = connection
+            .get_object(class)
+            .and_then(|class| class.get_method(method))
+            .map_err(|e| wmi_error("WMI method signature", e))?
+            .ok_or_else(|| Error::msg("WMI method signature", "no input parameters"))?;
+        let parameters = signature
+            .spawn_instance()
+            .map_err(|e| wmi_error("WMI method inputs", e))?;
+        for (name, value) in inputs {
+            parameters
+                .put_property(name, value.clone())
+                .map_err(|e| wmi_error("WMI method input", e))?;
+        }
+        let output = connection
+            .exec_method(object_path, method, Some(&parameters))
+            .map_err(|e| wmi_error("WMI ExecMethod", e))?
+            .ok_or_else(|| Error::msg("WMI ExecMethod", "no output parameters"))?;
+        // Some native providers expose a void method with output parameters even
+        // when their documentation shows uint32. On the dev machine this monitor
+        // method has only BlockContent/BlockType; CIM synthesizes ReturnValue = 0.
+        // COM failure is propagated, and an explicit ReturnValue is checked.
+        if output
+            .list_properties()
+            .map_err(|e| wmi_error("WMI GetNames", e))?
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case("ReturnValue"))
+        {
+            let value = output
+                .get_property("ReturnValue")
+                .map_err(|e| wmi_error("WMI ReturnValue", e))?;
+            check_return_value(&value, method)?;
+        }
+        Row::from_object(output, false)
+    })
+    .map_err(|mut error| {
+        // Conversion errors from input-aware methods must never echo supplied IDs.
+        error.detail = "input-aware WMI method failed".into();
+        error
+    })
+}
+
 fn check_return_value(value: &Variant, method: &str) -> Result<()> {
     let code = unsigned(value)
         .and_then(|n| u32::try_from(n).ok())
@@ -360,6 +412,24 @@ impl Row {
                 .iter()
                 .map(|v| match v {
                     Variant::UI2(n) => Some(*n),
+                    _ => None,
+                })
+                .collect(),
+            _ => None,
+        }
+    }
+
+    /// Reads only a CIM UInt8 array; never coerces integers, strings or mixed arrays.
+    pub fn u8_array(&self, name: &str) -> Option<Vec<u8>> {
+        let (name, value) = self.property(name)?;
+        if self.array_types.get(name) != Some(&"System.Byte[]") {
+            return None;
+        }
+        match value {
+            Variant::Array(values) => values
+                .iter()
+                .map(|v| match v {
+                    Variant::UI1(n) => Some(*n),
                     _ => None,
                 })
                 .collect(),
@@ -654,6 +724,17 @@ mod tests {
             None
         );
         assert_eq!(scalar(Variant::Null).u16_array("Value"), None);
+        let mut bytes = scalar(Variant::Array(vec![Variant::UI1(0), Variant::UI1(255)]));
+        bytes.array_types.insert("Value".into(), "System.Byte[]");
+        assert_eq!(bytes.u8_array("value"), Some(vec![0, 255]));
+        bytes._values[0].1 = Variant::Array(vec![]);
+        assert_eq!(bytes.u8_array("Value"), Some(vec![]));
+        bytes.array_types.insert("Value".into(), "System.UInt16[]");
+        assert_eq!(bytes.u8_array("Value"), None);
+        bytes.array_types.insert("Value".into(), "System.Byte[]");
+        bytes._values[0].1 = Variant::Array(vec![Variant::UI1(1), Variant::UI2(2)]);
+        assert_eq!(bytes.u8_array("Value"), None);
+        assert_eq!(scalar(Variant::Array(vec![])).u8_array("Value"), None);
     }
 
     #[test]

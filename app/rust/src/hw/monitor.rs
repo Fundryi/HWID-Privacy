@@ -5,11 +5,28 @@ use crate::{
     report::Out,
     win::{self, edid, registry, wmi},
 };
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread,
+    time::{Duration, Instant},
+};
 
 const ENUM_ROOT: &str = r"SYSTEM\CurrentControlSet\Enum";
 const NO_MONITORS: &str =
     "No monitors detected. Please ensure your display drivers are properly installed.";
 type Details = Vec<(&'static str, String)>;
+const EXTENSION_BUDGET: Duration = Duration::from_secs(2);
+const MAX_EXTENSIONS: u8 = 32;
+static EXTENSION_WORKER: AtomicBool = AtomicBool::new(false);
+
+#[derive(Default)]
+struct Extensions {
+    blocks: Vec<(u8, edid::Extension)>,
+    failures: Vec<win::Error>,
+}
 
 /// Collects this hardware section through the shared output builder.
 pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
@@ -17,6 +34,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     // C# parity: Hardware/MonitorInfo.cs:31. Do not filter Active or reorder rows.
     match wmi::query(wmi::Namespace::Wmi, "SELECT * FROM WmiMonitorID") {
         Ok(rows) if !rows.is_empty() => {
+            let extensions = collect_extensions(&rows);
             out.source("WMI");
             out.info("Count", &format!("{} monitor(s) found:", rows.len()))
                 .blank();
@@ -59,6 +77,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                         out.info("Error", &format!("Error reading monitor details: {error}"));
                     }
                 }
+                write_extensions(out, &extensions[index]);
             }
         }
         result => {
@@ -70,6 +89,197 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         }
     }
     Ok(())
+}
+
+fn write_extensions(out: &mut Out, extensions: &Extensions) {
+    for (block, extension) in &extensions.blocks {
+        for (field, value, id) in &extension.fields {
+            let label = format!("EDID {field} (block {block}, {})", extension.source);
+            if *id {
+                out.id(&label, value);
+            } else {
+                out.info(&label, value);
+            }
+        }
+        for error in &extension.failures {
+            out.fallback_failed(&format!("EDID extension block {block}"), error);
+        }
+    }
+    for error in &extensions.failures {
+        out.fallback_failed("WMI EDID extensions", error);
+    }
+}
+
+fn collect_extensions(rows: &[wmi::Row]) -> Vec<Extensions> {
+    let mut results: Vec<_> = rows.iter().map(|_| Extensions::default()).collect();
+    let names: Vec<_> = rows.iter().map(|row| row.str("InstanceName")).collect();
+    if EXTENSION_WORKER
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        for result in &mut results {
+            result.failures.push(win::Error::msg(
+                "EDID extensions",
+                "previous worker still running; read skipped",
+            ));
+        }
+        return results;
+    }
+    let deadline = Instant::now() + EXTENSION_BUDGET;
+    let (tx, rx) = mpsc::channel();
+    // Only Strings cross threads. The WMI wrapper initializes COM and creates its
+    // own connection in this worker's TLS; no Row/COM proxy crosses apartments.
+    let worker = thread::Builder::new()
+        .name("monitor-edid".into())
+        .spawn(move || {
+            struct WorkerGuard;
+            impl Drop for WorkerGuard {
+                fn drop(&mut self) {
+                    EXTENSION_WORKER.store(false, Ordering::Release);
+                }
+            }
+            let _guard = WorkerGuard;
+            read_extensions(&names, deadline, &tx);
+        });
+    if worker.is_err() {
+        EXTENSION_WORKER.store(false, Ordering::Release);
+        for result in &mut results {
+            result
+                .failures
+                .push(win::Error::msg("EDID extensions", "worker could not start"));
+        }
+        return results;
+    }
+    // Never join a synchronous WMI call. Retain each completed block immediately;
+    // a late/hung call only loses its own result. The latch bounds abandoned workers
+    // to one across UI refreshes; the worker stops between calls after the deadline.
+    let timed_out = loop {
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok((index, Ok(block))) => results[index].blocks.push(block),
+            Ok((index, Err(error))) => results[index].failures.push(error),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break Instant::now() >= deadline,
+            Err(mpsc::RecvTimeoutError::Timeout) => break true,
+        }
+    };
+    if timed_out {
+        for result in &mut results {
+            result.failures.push(win::Error {
+                op: "EDID extensions",
+                code: 1460,
+                detail: "2-second section budget expired; completed blocks retained".into(),
+            });
+        }
+    }
+    results
+}
+
+type ExtensionEvent = (usize, win::Result<(u8, edid::Extension)>);
+
+fn read_extensions(names: &[Option<String>], deadline: Instant, tx: &mpsc::Sender<ExtensionEvent>) {
+    let descriptors = match wmi::query(
+        wmi::Namespace::Wmi,
+        "SELECT * FROM WmiMonitorDescriptorMethods",
+    ) {
+        Ok(rows) => rows,
+        Err(error) => {
+            for index in 0..names.len() {
+                let _ = tx.send((index, Err(extension_error(error.clone()))));
+            }
+            return;
+        }
+    };
+    for (index, name) in names.iter().enumerate() {
+        if Instant::now() >= deadline {
+            return;
+        }
+        let path = name
+            .as_ref()
+            .filter(|name| edid::instance_id(name).is_ok())
+            .and_then(|name| {
+                descriptors.iter().find(|row| {
+                    row.str("InstanceName")
+                        .is_some_and(|other| other.eq_ignore_ascii_case(name))
+                })
+            })
+            .and_then(|row| row.str("__PATH").or_else(|| row.str("__RELPATH")));
+        let Some(path) = path else {
+            let _ = tx.send((
+                index,
+                Err(win::Error {
+                    op: "EDID extensions",
+                    code: 0x80041002,
+                    detail: "matching descriptor instance absent".into(),
+                }),
+            ));
+            continue;
+        };
+        let mut count = 0;
+        for block in 0..=MAX_EXTENSIONS {
+            if block > count || Instant::now() >= deadline {
+                break;
+            }
+            let bytes = wmi::call_method_with_inputs(
+                wmi::Namespace::Wmi,
+                "WmiMonitorDescriptorMethods",
+                &path,
+                "WmiGetMonitorRawEEdidV1Block",
+                &[("BlockId", ::wmi::Variant::UI1(block))],
+            )
+            .and_then(|row| {
+                row.u8_array("BlockContent").ok_or_else(|| {
+                    win::Error::msg("EDID extensions", "BlockContent is not a UInt8 array")
+                })
+            });
+            let bytes = match bytes {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let _ = tx.send((index, Err(extension_error(error))));
+                    break; // Method failure ends only this monitor's block sequence.
+                }
+            };
+            if block == 0 {
+                if let Err(error) =
+                    edid::validate_block(&bytes).and_then(|()| edid::parse(&bytes).map(|_| ()))
+                {
+                    let _ = tx.send((index, Err(error)));
+                    break;
+                }
+                count = bytes[126].min(MAX_EXTENSIONS);
+                if bytes[126] > MAX_EXTENSIONS {
+                    let _ = tx.send((
+                        index,
+                        Err(win::Error::msg(
+                            "EDID extensions",
+                            "extension count exceeds 32-block cap",
+                        )),
+                    ));
+                }
+            } else {
+                let result = edid::parse_extension(&bytes)
+                    .map(|extension| (block, extension))
+                    .map_err(|mut error| {
+                        error.detail = format!("block {block}: {}", error.detail);
+                        error
+                    });
+                if tx.send((index, result)).is_err() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn extension_error(mut error: win::Error) -> win::Error {
+    error.detail = match error.code {
+        2 | 3 | 0x80041002 => "descriptor or requested block absent",
+        5 | 0x80041003 => "access denied",
+        50 | 0x8004100c => "method unsupported",
+        1460 | 0x80043001 => "method timed out",
+        0 => "malformed method output or WMI conversion failure",
+        _ => "WMI extension read failed",
+    }
+    .into();
+    error
 }
 
 fn wmi_details(row: &wmi::Row) -> win::Result<Details> {
@@ -310,6 +520,39 @@ fn write_details(out: &mut Out, details: &[(&str, String)]) {
 #[allow(clippy::unwrap_used)] // Fixture assertions may panic; production code may not.
 mod tests {
     use super::*;
+
+    #[test]
+    fn extension_serials_use_the_existing_masked_view_contract() {
+        let extensions = Extensions {
+            blocks: vec![(
+                2,
+                edid::Extension {
+                    source: "DisplayID",
+                    fields: vec![
+                        ("Serial", "1937468251".into(), true),
+                        ("Serial", "8VJ6M47".into(), true),
+                        ("Model", "U2723QE".into(), false),
+                    ],
+                    failures: Vec::new(),
+                },
+            )],
+            failures: Vec::new(),
+        };
+        let mut out = Out::new();
+        out.info("Base", "kept");
+        write_extensions(&mut out, &extensions);
+        let section = out.finish();
+        assert_eq!(section.ids, ["1937468251", "8VJ6M47"]);
+        let masked = crate::report::masked(&section);
+        assert!(!masked.body.contains("1937468251"));
+        assert!(!masked.body.contains("8VJ6M47"));
+        assert!(masked.body.contains("Base: kept\r\n"));
+        assert!(
+            masked
+                .body
+                .contains("EDID Model (block 2, DisplayID): U2723QE\r\n")
+        );
+    }
 
     #[test]
     fn wp08_historical_presence_requires_a_successful_snapshot() {

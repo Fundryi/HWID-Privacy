@@ -109,10 +109,385 @@ pub fn parse(bytes: &[u8]) -> Result<Edid> {
     })
 }
 
+/// Identity fields from one validated driver-exposed extension, in descriptor order.
+#[derive(Debug, Default)]
+pub struct Extension {
+    pub source: &'static str,
+    pub fields: Vec<(&'static str, String, bool)>,
+    pub failures: Vec<Error>,
+}
+
+/// Validates exactly one E-EDID block, including its extension checksum.
+pub fn validate_block(bytes: &[u8]) -> Result<()> {
+    if bytes.len() != 128 {
+        return Err(Error::msg("EDID extension", "expected exactly 128 bytes"));
+    }
+    if byte_sum(bytes) != 0 {
+        return Err(Error::msg("EDID extension", "invalid block checksum"));
+    }
+    Ok(())
+}
+
+fn byte_sum(bytes: &[u8]) -> u8 {
+    bytes.iter().fold(0_u8, |sum, byte| sum.wrapping_add(*byte))
+}
+
+/// Parses only specified identity layouts; timing and opaque vendor payloads are ignored.
+pub fn parse_extension(bytes: &[u8]) -> Result<Extension> {
+    validate_block(bytes)?;
+    let mut extension = Extension::default();
+    match bytes[0] {
+        0x70 => {
+            extension.source = "DisplayID";
+            // Structure versions 1.0-1.3 and 2.0. The standard document's version
+            // 2.1a still uses structure version 2.0 (VESA v2.1a section 2.1).
+            if !matches!(bytes[1], 0x10..=0x13 | 0x20) {
+                return Err(unsupported("unsupported DisplayID structure version"));
+            }
+            let end = 5 + usize::from(bytes[2]);
+            if end > 126 {
+                return Err(Error::msg(
+                    "DisplayID",
+                    "payload exceeds extension boundary",
+                ));
+            }
+            // The DisplayID checksum excludes the EDID tag and includes its own
+            // checksum byte immediately after the payload (independent of byte 127).
+            if byte_sum(&bytes[1..=end]) != 0 {
+                return Err(Error::msg("DisplayID", "invalid section checksum"));
+            }
+            let mut offset = 5;
+            while offset < end {
+                if bytes[offset..end].iter().all(|byte| *byte == 0) {
+                    break; // Specified zero filler, not an empty product descriptor.
+                }
+                if end - offset < 3 {
+                    extension
+                        .failures
+                        .push(Error::msg("DisplayID", "truncated data-block header"));
+                    break;
+                }
+                let tag = bytes[offset];
+                let revision = bytes[offset + 1];
+                let next = offset + 3 + usize::from(bytes[offset + 2]);
+                if next > end {
+                    extension.failures.push(Error::msg(
+                        "DisplayID",
+                        "data block exceeds section payload",
+                    ));
+                    break;
+                }
+                let payload = &bytes[offset + 3..next];
+                let product = (bytes[1] < 0x20 && tag == 0x00) || (bytes[1] == 0x20 && tag == 0x20);
+                if product {
+                    if revision == 0 {
+                        displayid_product(&mut extension, payload, bytes[1] == 0x20);
+                    } else {
+                        extension
+                            .failures
+                            .push(unsupported("unsupported product-block revision"));
+                    }
+                } else if bytes[1] < 0x20 && tag == 0x0a {
+                    // DisplayID 1.x Product Serial Number ASCII data block.
+                    if revision == 0 {
+                        extension_text(&mut extension, "Serial", payload, true);
+                    } else {
+                        extension
+                            .failures
+                            .push(unsupported("unsupported serial-block revision"));
+                    }
+                } else if matches!(tag, 0x00 | 0x20 | 0x0a) {
+                    extension
+                        .failures
+                        .push(unsupported("identity tag does not match DisplayID version"));
+                }
+                offset = next;
+            }
+        }
+        0x02 => {
+            extension.source = "CTA-861";
+            // Revision 3 introduced the data-block collection used by PIDB.
+            if bytes[1] != 3 {
+                return Err(unsupported("unsupported CTA extension revision"));
+            }
+            let end = usize::from(bytes[2]);
+            if end == 0 {
+                return Ok(extension); // No data-block collection or detailed timings.
+            }
+            if !(4..=127).contains(&end) {
+                return Err(Error::msg(
+                    "CTA-861",
+                    "invalid data-block collection boundary",
+                ));
+            }
+            let mut offset = 4;
+            while offset < end {
+                let header = bytes[offset];
+                let next = offset + 1 + usize::from(header & 31);
+                if next > end {
+                    extension.failures.push(Error::msg(
+                        "CTA-861",
+                        "data block exceeds collection boundary",
+                    ));
+                    break;
+                }
+                let payload = &bytes[offset + 1..next];
+                if header >> 5 == 7 && payload.first() == Some(&0x21) {
+                    // CTA-861.7 section 7.5.20, table 122: ext-tag, OUI/CID LSB
+                    // first, optional version, then at most 25 ASCII model bytes.
+                    if payload.len() < 4 {
+                        extension
+                            .failures
+                            .push(Error::msg("CTA-861 PIDB", "truncated manufacturer field"));
+                    } else {
+                        append_oui(&mut extension, &[payload[3], payload[2], payload[1]]);
+                        if let Some(version) = payload.get(4) {
+                            if *version == 0 {
+                                extension_text(&mut extension, "Model", &payload[5..], false);
+                            } else {
+                                extension
+                                    .failures
+                                    .push(unsupported("unsupported CTA product-block version"));
+                            }
+                        }
+                    }
+                }
+                offset = next;
+            }
+        }
+        _ => {
+            return Err(unsupported(
+                "extension tag has no supported identity layout",
+            ));
+        }
+    }
+    Ok(extension)
+}
+
+fn unsupported(detail: &'static str) -> Error {
+    Error {
+        op: "EDID extension",
+        code: 50,
+        detail: detail.into(),
+    }
+}
+
+fn displayid_product(extension: &mut Extension, payload: &[u8], oui: bool) {
+    // VESA DisplayID v2.1a table 4-1; v1.x tag 0x00 has the same offsets,
+    // but its three-byte manufacturer field is ASCII PNP, not an IEEE OUI.
+    if payload.len() < 12 {
+        extension.failures.push(Error::msg(
+            "DisplayID product",
+            "payload is shorter than 12 bytes",
+        ));
+        return;
+    }
+    if oui {
+        append_oui(extension, &payload[..3]);
+    } else if payload[..3].iter().all(u8::is_ascii_uppercase) {
+        extension.fields.push((
+            "Manufacturer",
+            String::from_utf8_lossy(&payload[..3]).into(),
+            false,
+        ));
+    } else {
+        extension
+            .failures
+            .push(Error::msg("DisplayID product", "invalid PNP manufacturer"));
+    }
+    extension.fields.push((
+        "Product Code",
+        format!("{:04X}", u16::from_le_bytes([payload[3], payload[4]])),
+        false,
+    ));
+    let serial = u32::from_le_bytes([payload[5], payload[6], payload[7], payload[8]]);
+    // Unlike the legacy base parser, this layout only reserves zero for absent serial.
+    if serial != 0 {
+        extension.fields.push(("Serial", serial.to_string(), true));
+    }
+    let size = usize::from(payload[11]);
+    if 12 + size != payload.len() {
+        extension.failures.push(Error::msg(
+            "DisplayID product",
+            "product-name length does not match payload",
+        ));
+    } else {
+        extension_text(extension, "Model", &payload[12..], false);
+    }
+}
+
+fn append_oui(extension: &mut Extension, bytes: &[u8]) {
+    if bytes != [0, 0, 0] && bytes != [255, 255, 255] {
+        extension.fields.push((
+            "Manufacturer OUI",
+            format!("{:02X}-{:02X}-{:02X}", bytes[0], bytes[1], bytes[2]),
+            false,
+        ));
+    }
+}
+
+fn extension_text(extension: &mut Extension, label: &'static str, bytes: &[u8], id: bool) {
+    let bytes = bytes.trim_ascii_end();
+    let end = bytes
+        .iter()
+        .rposition(|byte| *byte != 0)
+        .map_or(0, |i| i + 1);
+    let bytes = &bytes[..end];
+    if !bytes.iter().all(|byte| (0x20..=0x7e).contains(byte)) {
+        extension.failures.push(Error::msg(
+            "EDID extension text",
+            "non-printable or non-ASCII text",
+        ));
+    } else if !bytes.is_empty() {
+        extension
+            .fields
+            .push((label, String::from_utf8_lossy(bytes).into(), id));
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // Fixture assertions may panic; production code may not.
 mod tests {
     use super::*;
+
+    fn extension_fixture(version: u8, blocks: &[u8]) -> [u8; 128] {
+        let mut bytes = [0; 128];
+        bytes[0] = 0x70;
+        bytes[1] = version;
+        bytes[2] = blocks.len() as u8;
+        bytes[3] = 3;
+        bytes[5..5 + blocks.len()].copy_from_slice(blocks);
+        bytes[5 + blocks.len()] = 0_u8.wrapping_sub(byte_sum(&bytes[1..5 + blocks.len()]));
+        bytes[127] = 0_u8.wrapping_sub(byte_sum(&bytes[..127]));
+        bytes
+    }
+
+    fn product_fixture(tag: u8, vendor: &[u8; 3], serial: u32) -> Vec<u8> {
+        let mut block = vec![tag, 0, 19];
+        block.extend_from_slice(vendor);
+        block.extend_from_slice(&0xa1f4_u16.to_le_bytes());
+        block.extend_from_slice(&serial.to_le_bytes());
+        block.extend_from_slice(&[18, 24, 7]);
+        block.extend_from_slice(b"U2723QE");
+        block
+    }
+
+    #[test]
+    fn extensions_decode_versioned_products_and_serial_text_in_order() {
+        for (version, tag, vendor, manufacturer) in [
+            (0x13, 0x00, *b"DEL", "DEL"),
+            (0x20, 0x20, [0x00, 0x10, 0xfa], "00-10-FA"),
+        ] {
+            let mut blocks = product_fixture(tag, &vendor, 1937468251);
+            if version < 0x20 {
+                blocks.extend_from_slice(b"\x0a\0\x07");
+                blocks.extend_from_slice(b"8VJ6M47");
+            }
+            let parsed = parse_extension(&extension_fixture(version, &blocks)).unwrap();
+            assert!(parsed.failures.is_empty());
+            assert_eq!(parsed.fields[0].1, manufacturer);
+            assert_eq!(parsed.fields[1], ("Product Code", "A1F4".into(), false));
+            assert_eq!(parsed.fields[2], ("Serial", "1937468251".into(), true));
+            assert_eq!(parsed.fields[3], ("Model", "U2723QE".into(), false));
+            if version < 0x20 {
+                assert_eq!(parsed.fields[4], ("Serial", "8VJ6M47".into(), true));
+            }
+        }
+        let parsed = parse_extension(&extension_fixture(
+            0x20,
+            &product_fixture(0x20, &[0, 0x10, 0xfa], 0),
+        ))
+        .unwrap();
+        assert!(!parsed.fields.iter().any(|(label, _, _)| *label == "Serial"));
+    }
+
+    #[test]
+    fn extensions_validate_both_checksums_and_outer_lengths() {
+        let valid = extension_fixture(0x20, &product_fixture(0x20, &[0, 0x10, 0xfa], 1937468251));
+        for length in 0..128 {
+            assert!(parse_extension(&valid[..length]).is_err());
+        }
+        let mut long = valid.to_vec();
+        long.push(0);
+        assert!(parse_extension(&long).is_err());
+        let mut bad = valid;
+        bad[127] ^= 1;
+        assert!(parse_extension(&bad).is_err());
+        bad = valid;
+        bad[24] ^= 1;
+        bad[127] = 0_u8.wrapping_sub(byte_sum(&bad[..127]));
+        assert!(parse_extension(&bad).is_err()); // Outer checksum cannot hide a bad DisplayID checksum.
+        bad = valid;
+        bad[2] = 122;
+        bad[127] = 0_u8.wrapping_sub(byte_sum(&bad[..127]));
+        assert!(parse_extension(&bad).is_err());
+        assert!(parse_extension(&extension_fixture(0x21, &[])).is_err());
+    }
+
+    #[test]
+    fn extensions_keep_independent_fields_on_malformed_descriptors() {
+        let mut block = product_fixture(0x20, &[0, 0x10, 0xfa], 1937468251);
+        block[14] = 8; // Claimed name size exceeds this descriptor; fixed fields survive.
+        let parsed = parse_extension(&extension_fixture(0x20, &block)).unwrap();
+        assert_eq!(parsed.fields.len(), 3);
+        assert_eq!(parsed.failures.len(), 1);
+        block = product_fixture(0x20, &[0, 0x10, 0xfa], 1937468251);
+        block.extend_from_slice(&[0x20, 0, 120]); // Later framing failure retains earlier product.
+        let parsed = parse_extension(&extension_fixture(0x20, &block)).unwrap();
+        assert_eq!(parsed.fields.len(), 4);
+        assert_eq!(parsed.failures.len(), 1);
+        let mismatched = parse_extension(&extension_fixture(
+            0x20,
+            &product_fixture(0, b"DEL", 1937468251),
+        ))
+        .unwrap();
+        assert!(mismatched.fields.is_empty());
+        assert_eq!(mismatched.failures.len(), 1);
+        block = product_fixture(0x20, &[0, 0x10, 0xfa], 1937468251);
+        block[1] = 1;
+        assert!(
+            parse_extension(&extension_fixture(0x20, &block))
+                .unwrap()
+                .fields
+                .is_empty()
+        );
+        let serial = parse_extension(&extension_fixture(0x13, b"\x0a\0\x04AB\nC")).unwrap();
+        assert!(serial.fields.is_empty());
+        assert_eq!(serial.failures.len(), 1);
+    }
+
+    #[test]
+    fn cta_product_information_uses_little_endian_oui_and_bounded_ascii() {
+        let mut bytes = [0; 128];
+        bytes[0] = 2;
+        bytes[1] = 3;
+        let data = [0xe9, 0x21, 0xfa, 0x10, 0, 0, b'D', b'E', b'L', b'L'];
+        bytes[2] = (4 + data.len()) as u8;
+        bytes[4..4 + data.len()].copy_from_slice(&data);
+        bytes[127] = 0_u8.wrapping_sub(byte_sum(&bytes[..127]));
+        let parsed = parse_extension(&bytes).unwrap();
+        assert_eq!(
+            parsed.fields,
+            [
+                ("Manufacturer OUI", "00-10-FA".into(), false),
+                ("Model", "DELL".into(), false)
+            ]
+        );
+        assert!(parsed.failures.is_empty());
+        bytes[9] = 1;
+        bytes[127] = 0_u8.wrapping_sub(byte_sum(&bytes[..127]));
+        let parsed = parse_extension(&bytes).unwrap();
+        assert_eq!(parsed.fields.len(), 1);
+        assert_eq!(parsed.failures.len(), 1);
+        bytes[4] = 0xff;
+        bytes[127] = 0_u8.wrapping_sub(byte_sum(&bytes[..127]));
+        let parsed = parse_extension(&bytes).unwrap();
+        assert!(parsed.fields.is_empty());
+        assert_eq!(parsed.failures.len(), 1);
+        bytes[2] = 3;
+        bytes[127] = 0_u8.wrapping_sub(byte_sum(&bytes[..127]));
+        assert!(parse_extension(&bytes).is_err());
+    }
 
     fn fixture() -> serde_json::Value {
         serde_json::from_str(include_str!("../../tests/fixtures/wp-08/monitors.json")).unwrap()
