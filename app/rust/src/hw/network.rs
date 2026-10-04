@@ -152,8 +152,20 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             .and_then(|map| map.get(&adapter.pnp_device_id.to_uppercase()))
             .map(String::as_str);
         append_adapter(adapter, hardware_id, permanent.as_deref(), overridden, out);
-        if let Some(address) = oid.addresses.get(&adapter.pnp_device_id.to_uppercase()) {
-            out.id("Permanent MAC (OID)", address);
+        if let Some(address) = oid
+            .addresses
+            .get(&adapter.pnp_device_id.to_ascii_uppercase())
+        {
+            let unique = adapters
+                .iter()
+                .filter(|other| {
+                    other
+                        .pnp_device_id
+                        .eq_ignore_ascii_case(&adapter.pnp_device_id)
+                })
+                .count()
+                == 1;
+            append_oid(address, permanent.as_deref(), unique, out);
         }
         if let Some(error) = override_error {
             out.text(&format!("MAC override lookup: {error}"));
@@ -170,6 +182,31 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     sources.dedup();
     out.source(&sources.join(" + "));
     Ok(())
+}
+
+fn append_oid(address: &str, permanent: Option<&str>, unique_instance: bool, out: &mut Out) {
+    if !unique_instance {
+        out.fallback_failed(
+            "NDIS OID corroboration",
+            &win::Error::msg(
+                "Permanent MAC (OID)",
+                "ambiguous: multiple WMI adapters share one instance",
+            ),
+        );
+        return;
+    }
+    // AD-94: a disagreement is the evidence this line exists for. The instance join is
+    // exact, so show the value and leave a note that the two sources differ.
+    if permanent.is_some_and(|permanent| !report::eq_ignore_case(address, permanent)) {
+        out.fallback_failed(
+            "NDIS OID corroboration",
+            &win::Error::msg(
+                "Permanent MAC (OID)",
+                "disagreement: OID and GetIfTable2 permanent addresses differ",
+            ),
+        );
+    }
+    out.id("Permanent MAC (OID)", address);
 }
 
 fn permanent_mac(guid: Option<&str>, rows: &[Interface], out: &mut Out) -> Option<String> {
@@ -404,6 +441,35 @@ mod tests {
         assert!(out.finish().failures[0].contains("ambiguous interface GUID"));
         row.permanent_physical_address = [0; 32];
         assert!(permanent_mac(Some(id), &[row], &mut Out::new()).is_none());
+    }
+
+    #[test]
+    fn oid_disagreement_and_duplicate_wmi_leave_existing_lines_identical() {
+        for (permanent, unique, expected, notes) in [
+            (Some("02:7C:39:61:B4:8E"), true, true, 0),
+            (None, true, true, 0),
+            (Some("02:7C:39:61:B4:90"), true, true, 1),
+            (Some("02:7C:39:61:B4:8E"), false, false, 1),
+        ] {
+            let mut out = Out::new();
+            out.info("Adapter Type", "WiFi")
+                .info("Permanent MAC", permanent.unwrap_or("Unavailable"));
+            let baseline = out.finish().body;
+            let mut out = Out::new();
+            out.text(baseline.trim_end_matches("\r\n"));
+            append_oid("02:7C:39:61:B4:8E", permanent, unique, &mut out);
+            let section = out.finish();
+            if expected {
+                assert_eq!(
+                    section.body,
+                    format!("{baseline}Permanent MAC (OID): 02:7C:39:61:B4:8E\r\n")
+                );
+            } else {
+                assert_eq!(section.body, baseline);
+            }
+            assert_eq!(section.failures.len(), notes);
+            assert!(section.failures.iter().all(|note| !note.contains("02:7C")));
+        }
     }
 
     #[test]
