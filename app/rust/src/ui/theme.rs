@@ -497,6 +497,10 @@ pub const MASK_BUTTON_SIZE: Size = size(96, 28);
 pub const COMPARE_SIZE: Size = size(1000, 700);
 /// Compare window minimum outer size.
 pub const COMPARE_MIN_SIZE: Size = size(640, 400);
+/// Compare header's Before/After label column.
+pub const COMPARE_LABEL_WIDTH: i32 = 56;
+/// Compare header's file-name row height.
+pub const COMPARE_FILE_HEIGHT: i32 = 20;
 /// Sidebar section button margin (tier A: gap 4).
 pub const SECTION_BUTTON_MARGIN: Pad = pad(12, 0, 12, 4);
 /// Width of the accent bar on the active sidebar item.
