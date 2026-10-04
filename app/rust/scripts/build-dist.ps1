@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param()
 
-Set-Location $PSScriptRoot
+$RustRoot = Split-Path -Parent $PSScriptRoot
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
@@ -39,6 +39,7 @@ function Assert-DistPe([string]$Binary) {
     Write-Host 'Dist PE passed: MZ, PE, x64 executable (not DLL), Windows GUI subsystem.'
 }
 
+Push-Location $RustRoot
 try {
     if (Test-Path Env:RUSTFLAGS) { throw 'RUSTFLAGS is set. Remove it: it replaces the configured +crt-static rustflags.' }
     $check = Join-Path $PSScriptRoot 'check.ps1'
@@ -76,4 +77,6 @@ try {
 } catch {
     Write-Error $_.Exception.Message -ErrorAction Continue
     exit 1
+} finally {
+    Pop-Location
 }

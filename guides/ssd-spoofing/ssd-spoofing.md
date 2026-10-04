@@ -323,7 +323,7 @@ cmd /c vol C:
 - [Microsoft: Get-VirtualDisk](https://learn.microsoft.com/en-us/powershell/module/storage/get-virtualdisk)
 - [Microsoft: Diskraid hardware RAID model](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/diskraid)
 - [Microsoft: vol command](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/vol)
-- [HWID-Privacy: current DiskDriveInfo source](https://github.com/Fundryi/HWID-Privacy/blob/main/app/src/Hardware/DiskDriveInfo.cs)
+- [HWID-Privacy: current Rust disk provider](../../app/rust/src/hw/disk/)
 - [bensuperpc/rtl9210 community firmware and configuration reference](https://github.com/bensuperpc/rtl9210)
 - [NVM Express Base Specification 2.1](https://nvmexpress.org/wp-content/uploads/NVM-Express-Base-Specification-Revision-2.1-2024.08.05-Ratified.pdf)
 - [Microsoft: Working with NVMe drives](https://learn.microsoft.com/en-us/windows/win32/fileio/working-with-nvme-devices)

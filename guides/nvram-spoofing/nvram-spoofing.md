@@ -225,4 +225,4 @@ Use the saved recovery key. After the machine boots normally and the firmware st
 - [Microsoft: suspend BitLocker for non-Microsoft firmware updates](https://learn.microsoft.com/en-us/troubleshoot/windows-client/windows-security/suspend-bitlocker-protection-non-microsoft-updates)
 - [DMTF SMBIOS Specification 3.9.0](https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_3.9.0.pdf)
 - [Third-party reverse engineering of Windows offline device ID](https://iretq.com/inside-getofflinedeviceuniqueid-how-windows-derives-its-offline-device-id/) **[S]**
-- [Fundryi/HWID-Privacy HWIDChecker source](https://github.com/Fundryi/HWID-Privacy/tree/main/app/src/Hardware)
+- [Fundryi/HWID-Privacy HWIDChecker source](../../app/rust/src/hw/)

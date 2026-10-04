@@ -59,7 +59,7 @@ HWIDChecker reads MachineGuid from `HKLM\SOFTWARE\Microsoft\Cryptography`. **[A]
 
 ## Identifier groups
 
-The repository-root `HWIDChecker.exe` is an inspector. It does not spoof identifiers. Its current source runs 14 providers in parallel and keeps this display order. **[A]** [HardwareInfoManager source](https://github.com/Fundryi/HWID-Privacy/blob/main/app/src/Hardware/HardwareInfoManager.cs)
+The repository-root `HWIDChecker.exe` is an inspector. It does not spoof identifiers. Its current source runs 16 providers in parallel and keeps this display order. **[A]** [Rust provider table](../../app/rust/src/hw/mod.rs)
 
 | HWIDChecker section | What it displays | Main layer |
 |---|---|---|
@@ -72,16 +72,18 @@ The repository-root `HWIDChecker.exe` is an inspector. It does not spoof identif
 | **CPU** | Processor name, processor ID, any exposed serial, CPUID vendor, family, model, and stepping | Processor and OS view |
 | **TPM MODULES** | State, manufacturer, firmware/specification versions, EK public-key hash, and parsed certificate serial, thumbprint, and issuer when available | Security hardware |
 | **USB DEVICES** | USB PnP device name and serial parsed from the device instance | Device firmware and PnP |
-| **GPU INFO** | GPU name, PnP/hardware ID, NVIDIA UUID when `nvidia-smi` provides one, and board part number when available | Device firmware and PnP |
+| **GPU INFO** | GPU name, PnP/hardware ID, NVIDIA UUID, board serial, and supported NVML details when available | Device firmware and PnP |
 | **MONITOR INFORMATION** | EDID manufacturer, model, product code, text and numeric serials, and manufacture week/year | Monitor EDID |
-| **NETWORK ADAPTERS (NIC's)** | Product/device/hardware IDs, current MAC, and whether a Windows `NetworkAddress` override is present. When an override exists, the current source displays a warning in the **Permanent MAC** row. It does not read the burned-in address | NIC firmware, driver, registry |
+| **NETWORK ADAPTERS (NIC's)** | Product/device/hardware IDs, current MAC, permanent MAC through the native interface table when available, and NDIS OID corroboration. Registry override detection is a fallback when the native permanent address is unavailable | NIC firmware, driver, registry |
 | **BLUETOOTH ADAPTERS** | Adapter name and local radio address when Windows exposes it | Radio and registry state |
+| **AUDIO DEVICES** | Audio adapters and MMDevice endpoints, including supported endpoint and container identifiers | PnP and Windows audio |
+| **BATTERY** | Battery interface identity, model, serial, unique ID, and SMBIOS battery records when exposed | Battery firmware and SMBIOS |
 | **ARP INFO/CACHE** | IPv4 and IPv6 neighbor entries grouped by interface. The `arp.exe` fallback is IPv4-only | Local network runtime |
 
 Microsoft documents the underlying Windows views for [baseboards](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-baseboard), [physical memory](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-physicalmemory), [monitor IDs](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorid), and [TPM state](https://learn.microsoft.com/en-us/windows/win32/secprov/win32-tpm). **[A]**
 
 > [!NOTE]
-> The 14 sections are not a complete inventory of every interface. The current NIC provider filters on WMI's `Ethernet 802.3` adapter type and can omit other adapters. The USB provider uses a device-instance parsing heuristic. The monitor provider's numeric-serial lookup matches only the manufacturer code, so two monitors from the same manufacturer can be misassociated. These limits are confirmed in the current source. **[A]**
+> The 16 sections are not a complete inventory of every interface. The NIC provider filters on WMI's `Ethernet 802.3` adapter type and can omit other adapters. USB identity includes device-instance parsing and native descriptor queries where supported. Monitor EDID enrichment matches the exact device instance; unsupported or ambiguous data is recorded in diagnostics rather than borrowed from another monitor. See the [collection contracts and limits](../../app/rust/COLLECTION.md). **[A]**
 
 Keyboards, mice, headsets, docks, webcams, and adapters can contribute USB identity data. Baseline them like any other peripheral. A device missing from **USB DEVICES** is not proof that it has no serial because the current parser intentionally skips several device-instance patterns. **[A]**
 
@@ -163,7 +165,7 @@ Every part guide links back here. Apply this list before any firmware, SPD, EDID
 ### HWIDChecker.exe
 
 1. Run [HWIDChecker.exe](/HWIDChecker.exe). The current application manifest requests administrator rights at launch. **[A]**
-2. Wait for all 14 sections to finish. A provider error appears inside that section rather than cancelling the whole scan.
+2. Wait for all 16 sections to finish. A provider error appears inside that section rather than cancelling the whole scan.
 3. Select **Export**. The app writes a timestamped `HWID-EXPORT-*.txt` file beside the executable and shows the full path. Label a private copy `before` with the date, hardware configuration, and firmware versions.
 4. Make one approved change, then perform the reboot or full power cycle required by the dedicated guide.
 5. Run the same version of HWIDChecker again and export an `after` copy.
@@ -177,12 +179,6 @@ For storage comparisons, record the connection path (native M.2, direct SATA, US
 > The exports can contain a Windows product key, stable hardware identifiers, TPM certificate data, and network addresses. Keep them private. Redact identifiers before sharing excerpts.
 
 Do not use **Clean Devices**, **Clean Logs**, or the updater as part of measurement. Those paths change system state and are not required for a before/after comparison.
-
-### Batch-script fallback
-
-Use [the Windows 10 script](/app/scripts/hwid-check-w10.bat) or [the Windows 11 script](/app/scripts/hwid-check-w11.bat) when the GUI is unavailable. They display and can export 12 categories: disk, CPU, system, motherboard, BIOS, RAM, TPM, GPU, USB, monitor, NIC, and ARP data. Pressing a key at the prompt writes a timestamped `HWID_CHECK_EXPORT_*.txt` beside the script. **[A]**
-
-The batch scripts are not equivalent to the GUI. They omit the dedicated **CHASSIS** and **BLUETOOTH ADAPTERS** sections, do not collect MachineGuid or the hardware-profile GUID, use legacy WMI/WMIC paths in their export routines, and expose fewer low-level storage and TPM details. Use one method consistently for both snapshots.
 
 ## Keep changed values plausible
 
@@ -333,7 +329,7 @@ These statuses are community-reported. This project has not verified them. Every
 - [Microsoft: suspend BitLocker for non-Microsoft firmware updates](https://learn.microsoft.com/en-us/troubleshoot/windows-client/windows-security/suspend-bitlocker-protection-non-microsoft-updates)
 - [Microsoft Q&A: choosing a machine identifier](https://learn.microsoft.com/en-us/answers/questions/5762504/unique-id-of-machine) (supporting context, not a Windows product specification)
 - [AMI Aptio Utilities](https://www.ami.com/resources/aptio-utilities/)
-- [HWIDChecker hardware providers](https://github.com/Fundryi/HWID-Privacy/tree/main/app/src/Hardware) and [Windows batch scripts](https://github.com/Fundryi/HWID-Privacy/tree/main/app/scripts)
+- [HWIDChecker hardware providers](../../app/rust/src/hw/)
 - [Riot: error VAN 152](https://support.riotgames.com/en-us/riot/performance/error-van-152/)
 - [Riot: Vanguard security requirements](https://support.riotgames.com/en-us/riot/performance/vanguard-security-requirements)
 - [Riot: Vanguard Pre-Check](https://support.riotgames.com/en-us/riot/performance/vanguard-pre-check)

@@ -814,7 +814,7 @@ Get-CimInstance Win32_NetworkAdapter |
 2. Open the `NETWORK ADAPTERS (NIC's)` section.
 3. Match the adapter by product name and PnP device ID, then record the displayed MAC.
 
-HWIDChecker reads the current `Win32_NetworkAdapter.MACAddress`. It also checks the adapter's `NetworkAddress` registry value. When an override is present, it labels the current value `MAC Address (Overridden)` and reports `Permanent MAC` as `Spoofed (see NetworkAddress registry override)`. That text is a detection warning, not the burned-in address. [A]
+HWIDChecker reads the current `Win32_NetworkAdapter.MACAddress` and matches the adapter GUID to the native interface table for **Permanent MAC**. If those values differ, it labels the current value **MAC Address (Overridden)**. When the native permanent address is unavailable, it uses the `NetworkAddress` registry value to detect an override and reports **Permanent MAC: Unavailable**. Supported NDIS queries add **Permanent MAC (OID)** for the exact PnP instance; disagreements are recorded in diagnostics. These are driver-visible readbacks, not proof that firmware storage changed. [A]
 
 ### 4. Read back with the vendor tool
 
@@ -863,7 +863,7 @@ A changed current address after only a driver restart proves a software-visible 
 - [Intel: Ethernet Controller Products 30.4 release notes](https://cdrdv2-public.intel.com/864646/Intel%20Ethernet%20Controller%20Products_Release%20Notes_30.4_v2.pdf)
 - [Intel: Ethernet Controller Products 25.2 release notes](https://cdrdv2-public.intel.com/630597/630597%20-%20Software_Release_25_2_v_1_1_External.pdf)
 - [Intel: Ethernet Adapters and Devices User Guide](https://edc.intel.com/output/DownloadPdfDocument?id=10427)
-- [HWID-Privacy: NetworkInfo.cs](https://github.com/Fundryi/HWID-Privacy/blob/main/app/src/Hardware/NetworkInfo.cs)
+- [HWID-Privacy: Rust network provider](../../app/rust/src/hw/network.rs)
 - [Intel Community: i226 EEUPDATE ADAPTERINFO output (ETrackID, NVM, serial)](https://community.intel.com/t5/Ethernet-Products/i226-LM-and-i-226V-NIC-NVM-cannot-be-updated-on-DFI-motherboard/m-p/1672867)
 - [KevinYSH: Realtek LAN chip PGtool user guide (UEFI), RTL8126 `8126EF.CFG`](https://github.com/KevinYSH/document/blob/master/DE-LDRET004_Realtek_LAN_Chip_PGtool_UserGuide_UEFI.md)
 - [NVIDIA Developer Forums: RTL8126 MAC from eFuse](https://forums.developer.nvidia.com/t/technical-inquiry-regarding-mac-address-provisioning-for-custom-jetson-carrier-board-with-multi-nic-aqr113c-dp83867-rtl8126/368972)

@@ -1,10 +1,8 @@
 # WP-03 fixtures
 
-`no-msdm-report.json` preserves the labels, order, CRLF text, and identifier
-formats from the live non-admin WP-03 capture on 2026-10-03. Every identifier
-and the installation timestamp are replaced. The PC returned error 1168 for
-MSDM; the WMI licensing fallback and registry ProductId matched the C# WQL
-reference exactly. This fixture records the captured shape for review.
+The historical WP-03 capture on 2026-10-03 returned error 1168 for MSDM;
+the WMI licensing fallback and registry ProductId matched the C# WQL reference.
+That capture remains private; the tracked parser input here is `msdm.hex`.
 
 `msdm.hex` is a synthetic 85-byte ACPI MSDM table with a fabricated 29-character
 product key and OEM metadata. Its ACPI checksum is repaired. It contains no real

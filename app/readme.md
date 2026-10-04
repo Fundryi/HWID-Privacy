@@ -1,6 +1,6 @@
 # HWID Checker Project
 
-> Native Rust Windows desktop tool for inspecting hardware identifiers, viewing them in a sectioned UI, and exporting results to text files. The C# app remains buildable in `app/src/` for legacy reference; the shipped exe comes from `app/rust/`.
+> Native Rust Windows desktop tool for inspecting hardware identifiers in 16 sections and exporting results to text files. [Download HWIDChecker.exe](../HWIDChecker.exe) and run it as administrator.
 
 ## Table of Contents
 
@@ -18,7 +18,6 @@
     - [Cleaning Actions](#cleaning-actions)
   - [Usage Instructions](#usage-instructions)
     - [GUI Version](#gui-version)
-    - [Command Line Scripts](#command-line-scripts)
   - [Project Structure](#project-structure)
   - [Export Format](#export-format)
 
@@ -28,34 +27,25 @@ Run these commands from the repository root in PowerShell 7.
 
 ### Test build
 
-```powershell
-.\test-build.ps1
-```
-
-Builds a release test exe and prints its path without changing the shipped root exe. Add `-Safe` for a debug build with destructive actions guarded as dry runs; add `-Run` to open it (`-Safe -Run` clears the destructive-action override for that launch).
-
-Visual Studio: open `app/HWID-CHECKER.sln`, select `Release | x64`, then **Build Solution**; the root exe stays unchanged.
+Build: `.\app\rust\scripts\build-test.ps1` (release test exe; `-Safe` for debug, `-Run` to open it, `-Safe -Run` to launch with destructive actions guarded as dry runs; root exe unchanged).
 
 ### Release a new version
 
-```powershell
-.\release.ps1
-```
+Release: `.\app\rust\scripts\release.ps1` (next patch; `-Minor`, `-Major`, or `-Version X.Y.Z` for a higher version; `-DryRun` builds and restores version files/root exe; clean `main` and signed-in `gh` required; `YES` gates commit, tag, atomic push, and GitHub release).
 
-Releases the next patch from a clean `main`; use `-Minor` for new features, `-Major` for big changes, or `-Version X.Y.Z` for an exact higher version. It updates Cargo's version and lockfile, checks and builds the exe, shows its hash and pending commits, then asks for `YES` before committing, tagging, pushing and creating the GitHub release. GitHub CLI (`gh`) must be signed in.
-
-Add `-DryRun` to check and build without going live; it restores the version files and root exe afterward.
+The release script runs `build-dist.ps1`, which runs `check.ps1` and validates the dist executable, then copies exactly `app/rust/target/dist/HWIDChecker.exe` to the root after checking its version. The copied hash must match. Run `pwsh -NoProfile -File app/rust/scripts/check.ps1` for the standalone gate. Every script anchors paths to its own location and also works when invoked by absolute path from another folder.
 
 ### Roll back
 
-The [csharp-last GitHub release](https://github.com/Fundryi/HWID-Privacy/releases/tag/csharp-last) holds the last C# exe. To roll back the Rust app, revert and commit the code, then run `release.ps1` with a version higher than the current release; or restore an older root exe from Git history, commit it and push `main`. Installed copies offer it on their next update check because updates compare hashes.
+The [csharp-last GitHub release](https://github.com/Fundryi/HWID-Privacy/releases/tag/csharp-last) holds the last C# exe as the historical fallback. To roll back Rust source, revert and commit the code, then run `.\app\rust\scripts\release.ps1` with a version higher than the current release. Installed copies compare hashes at the fixed root-executable URL documented in [auto-update.md](auto-update.md); keep that path and filename unchanged.
 
 ## Requirements
 
 - Windows 10/11 (x64)
 - Administrator privileges on every launch
-- No .NET runtime or VC++ redistributable required to run the shipped exe
-- To build: pinned Rust toolchain, Visual Studio C++ build tools/Windows SDK, PowerShell 7; .NET 10 SDK for the MSBuild wrapper and legacy solution project
+- Standalone executable with a static CRT; no additional runtime installation
+- To build: pinned Rust toolchain, Visual Studio C++ build tools/Windows SDK, PowerShell 7
+- To release: Git and authenticated GitHub CLI (`gh`)
 
 ## Features
 
@@ -68,7 +58,7 @@ The [csharp-last GitHub release](https://github.com/Fundryi/HWID-Privacy/release
 
 ### Hardware Providers
 
-Current providers (14):
+Current sections (16):
 
 - Disk drives
 - Motherboard
@@ -83,16 +73,18 @@ Current providers (14):
 - Bluetooth devices
 - Monitor information
 - Network adapters
+- Audio devices
+- Battery
 - ARP info/cache
 
 ### System Services
 
-- Parallel hardware collection (`src/hw/`)
-- Output formatting and export serialization (`src/report.rs`)
-- File export from the main window (`src/ui/main_window.rs`)
+- Parallel hardware collection (`rust/src/hw/`)
+- Output formatting (`rust/src/report.rs`)
+- Text export and adjacent diagnostics from the main window (`rust/src/ui/main_window.rs`)
 - Device cleaning + whitelist management
 - Event log cleaning (native Windows API discovery, privilege elevation, OS-locked log skipping)
-- Admin check and native Windows helpers (`src/win/`)
+- Admin check and native Windows helpers (`rust/src/win/`)
 - Auto-update check/download for `HWIDChecker.exe` from GitHub (SHA256 hash comparison)
 
 ### Cleaning Actions
@@ -132,43 +124,40 @@ Operational note:
 2. Wait for the initial scan in the native main window.
 3. Use section buttons to inspect specific hardware outputs.
 4. Use:
-   - `↻ Refresh` to rescan
-   - `💾 Export` to export all section data
-   - `🧹 Clean Devices` / `📝 Clean Logs` for maintenance tasks (admin required)
-   - `⟳ Updates` to check/download updates
+   - `Refresh` to rescan
+   - `Export` to export all section data and diagnostics
+   - `Mask IDs` to hide identifiers in the view, Copy, and Export
+   - `Compare now` / `Compare files` for before/after reports
+   - `Clean Devices` / `Clean Logs` for maintenance tasks
+   - `Updates` to check/download updates; `Auto Update` enables the optional startup check
 5. For cleaning:
    - `Clean Devices` opens a device-focused cleanup flow with whitelist support.
    - `Clean Logs` opens a log-focused cleanup flow with live progress and end-of-run overview.
-
-### Command Line Scripts
-
-Legacy batch scripts are in `app/scripts/`:
-
-```bat
-hwid-check-w10.bat
-hwid-check-w11.bat
-```
 
 ## Project Structure
 
 ```text
 app/
 ├── rust/
-│   ├── HWIDChecker.Rust.proj                 # MSBuild Build/Publish wrapper
 │   ├── Cargo.toml
-│   ├── check.ps1                             # Formatting, lint, tests, release checks
-│   ├── release.ps1                           # Checked dist build
+│   ├── assets/                               # Icon and embedded fonts/license
+│   ├── scripts/
+│   │   ├── check.ps1                         # Formatting, lint, tests, release checks
+│   │   ├── build-test.ps1                    # Local build and optional launch
+│   │   ├── build-dist.ps1                    # Checked dist build
+│   │   └── release.ps1                       # Version, controlled staging, publication
+│   ├── tests/fixtures/                       # Fabricated Rust regression data
 │   └── src/
 │       ├── main.rs                           # GUI and read-only CLI entrypoint
-│       ├── hw/                               # 14 providers and collection
+│       ├── hw/                               # 16 providers and collection
 │       ├── win/                              # Native OS wrappers and parsers
 │       ├── clean/                            # Devices, whitelist, event logs
 │       ├── ui/                               # Native Win32 windows and controls
 │       ├── update.rs                         # SHA-256 update/install/restart
 │       └── report.rs                         # Text and export formatting
-├── src/                                      # Legacy C# WinForms, still buildable
-├── scripts/                                  # Legacy read/export batch scripts
-└── HWID-CHECKER.sln
+├── architecture.md
+├── auto-update.md
+└── readme.md
 ```
 
 ## Export Format

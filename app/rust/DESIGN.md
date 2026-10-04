@@ -2,6 +2,8 @@
 
 This file is binding for every UI change in `app/rust/`. Read it before you touch `src/ui/`.
 
+Historical C# layout and `ThemeColors.cs` references below describe the port's baseline, preserved in the [pre-retirement source snapshot](https://github.com/Fundryi/HWID-Privacy/tree/3768ddc9c21c9e64f8ada067d8466c7e9f7460e3/app/src/UI). They are design provenance, not a dependency on retired source. Current verification is `pwsh -NoProfile -File app/rust/scripts/check.ps1` from the repository root.
+
 - `src/ui/theme.rs` holds every value (colors, fonts, sizes, radii). Form code uses only named constants from it.
 - This file holds the rules and the reasons behind those values.
 - A new design decision goes into this file in the same change that uses it. Never let code and this file disagree. If they do, fix one of them in the same change.
@@ -133,7 +135,7 @@ Control sizes and paddings come from the C# layout (section 1), not from the han
 
 ## 7. Window frame
 
-- **C5 Version.** Main window title `HWID Checker {CARGO_PKG_VERSION}`. `Cargo.toml` is the single source; `check.ps1` fails when any of `app.rc`'s four version fields differs. Other window and message-box titles are unchanged.
+- **C5 Version.** Main window title `HWID Checker {CARGO_PKG_VERSION}`. `Cargo.toml` is the single source; `scripts/check.ps1` fails when any of `app.rc`'s four version fields differs. Other window and message-box titles are unchanged.
 
 - Native title bar, not frameless. On Windows 11: `DwmSetWindowAttribute` sets the caption color to `BG`, the border color to `BORDER`, and the caption text color to `TEXT` (attributes 35, 34, 36), plus immersive dark mode. The border stays `BORDER` when active, inactive, and when the mouse enters or leaves; never switch it to the system default or repaint the frame for hover. On Windows 10: immersive dark mode only.
 - Windows 11 rounds the window corners itself.

@@ -9,7 +9,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 $override = $env:HWID_ALLOW_DESTRUCTIVE
-Push-Location (Join-Path $PSScriptRoot 'app/rust')
+$RustRoot = Split-Path -Parent $PSScriptRoot
+Push-Location $RustRoot
 try {
     $arguments = @('build', '--locked')
     $profile = 'debug'
