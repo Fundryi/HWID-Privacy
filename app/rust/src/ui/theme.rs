@@ -545,8 +545,8 @@ pub struct SidebarTier {
     /// Whether the `{n} sections` subtitle is shown.
     pub subtitle: bool,
 }
-/// Tier A (default), B, C, D in order.
-pub const SIDEBAR_TIERS: [SidebarTier; 4] = [
+/// Tier A (default), B, C, D, E in order; the last tier is the floor before a scrollbar.
+pub const SIDEBAR_TIERS: [SidebarTier; 5] = [
     SidebarTier {
         item: 42,
         gap: 4,
@@ -570,6 +570,13 @@ pub const SIDEBAR_TIERS: [SidebarTier; 4] = [
     },
     SidebarTier {
         item: 28,
+        gap: 2,
+        title: 28,
+        title_gap: 4,
+        subtitle: false,
+    },
+    SidebarTier {
+        item: 26,
         gap: 2,
         title: 28,
         title_gap: 4,

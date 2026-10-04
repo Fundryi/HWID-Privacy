@@ -77,7 +77,7 @@ pub fn run() {
 
 #[derive(Default)]
 struct State {
-    /// The 14 sections in provider order; bodies are raw provider text (`Loading...` while a
+    /// The sections (`hw::PROVIDERS`) in provider order; bodies are raw provider text (`Loading...` while a
     /// load runs).
     sections: RefCell<Vec<Section>>,
     /// Index of the highlighted sidebar item (C# finds it by its `BackColor`).
@@ -696,7 +696,10 @@ fn responsive(form: &Form, state: &State, client: Size) {
         let (tier, scroll) = theme::SIDEBAR_TIERS
             .iter()
             .find(|tier| tier_height(tier, padding, dpi) <= inner)
-            .map_or((&theme::SIDEBAR_TIERS[3], true), |tier| (tier, false));
+            .map_or(
+                (&theme::SIDEBAR_TIERS[theme::SIDEBAR_TIERS.len() - 1], true),
+                |tier| (tier, false),
+            );
         // Width: margins, padding, the scroll bar once, and the scaled inset (audit F7).
         let bar = if scroll { bar_w } else { 0 };
         let item_w = (sidebar
@@ -1452,7 +1455,7 @@ mod live {
             ("1920x1080 custom 137 DPI", 1920, 1080, 137),
         ];
         let mut rows = vec![
-            "| Setup | Work area (px) | Default outer | Start | Restored outer | Client | Tier | 14 visible | Scrollbar | Elided | Footer rows |".to_owned(),
+            "| Setup | Work area (px) | Default outer | Start | Restored outer | Client | Tier | All visible | Scrollbar | Elided | Footer rows |".to_owned(),
             "|---|---|---|---|---|---|---|---|---|---|---|".to_owned(),
         ];
         let mut fit_failures = Vec::new();
@@ -1461,7 +1464,7 @@ mod live {
                 let side = t.find(SIDEBAR).unwrap();
                 let first = t.find(FIRST_SECTION).unwrap();
                 let last = t.find(section_id(hw::PROVIDERS.len() - 1)).unwrap();
-                let tier = ["A", "B", "C", "D"]
+                let tier = ["A", "B", "C", "D", "E"]
                     .iter()
                     .zip(theme::SIDEBAR_TIERS.iter())
                     .find(|(_, tier)| dpi::scale(tier.item, dpi) == first.bounds.h)
@@ -1896,7 +1899,8 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
         form.focus(MASK_IDS);
         bmps_to_png();
         println!(
-            "RESULT C1/C3: off restores exact body; Enter/Space/click, accessible names, scroll preservation, both real exports, ISO/filename match, 14 sections, CRLF/no BOM, provider-ID masking, refresh persistence and fresh masked Old View passed"
+            "RESULT C1/C3: off restores exact body; Enter/Space/click, accessible names, scroll preservation, both real exports, ISO/filename match, {} sections, CRLF/no BOM, provider-ID masking, refresh persistence and fresh masked Old View passed",
+            hw::PROVIDERS.len()
         );
     }
 
