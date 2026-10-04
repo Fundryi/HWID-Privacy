@@ -2236,7 +2236,10 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
             form.click(section_id(i));
             pump_for(30);
             assert_eq!(form.text(SECTION_TITLE), p.title);
-            assert_eq!(form.text(SECTION_META), format!("Section {} of 14", i + 1));
+            assert_eq!(
+                form.text(SECTION_META),
+                format!("Section {} of {}", i + 1, hw::PROVIDERS.len())
+            );
             assert_eq!(form.text(section_id(i)), p.title);
             let body = form.text(CONTENT);
             private.push_str(&format!("===== {} =====\r\n{body}\r\n\r\n", p.title));

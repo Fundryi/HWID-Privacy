@@ -5,7 +5,7 @@ Read this file first when changing collection or planning a new identifier. Ever
 ## Global behavior
 
 - **Administrator only.** The manifest requires elevation; the entrypoint also rejects a non-admin process before collection. A non-admin launch may start, but collection need not work; do not add non-admin fallbacks or change handles for that purpose. Each section below inherits this requirement. Prefer firmware tables, device protocol commands and descriptors when they preserve the existing information.
-- **14 parallel sections.** [Provider order and `Ctx`](src/hw/mod.rs), [collection](src/hw/collection.rs): all selected workers start before waiting, each with a 60-second deadline from its own start. Results return in app order. Timeout replaces that section with a timeout body; late results cannot replace it. Workers are detached, so abandoning a wait does not cancel an in-flight OS call.
+- **15 parallel sections.** [Provider order and `Ctx`](src/hw/mod.rs), [collection](src/hw/collection.rs): all selected workers start before waiting, each with a 60-second deadline from its own start. Results return in app order. Timeout replaces that section with a timeout body; late results cannot replace it. Workers are detached, so abandoning a wait does not cancel an in-flight OS call.
 - **Shared snapshots, per collection.** `Ctx` lazily caches the parsed RSMB SMBIOS table, a present-device instance-ID → first SetupAPI hardware-ID map, and a separate present-instance-ID set. Successes and failures are cached. USB and Bluetooth also perform their own SetupAPI scans. WMI connections are cached per thread and namespace, not shared across workers.
 - **Values are source reports.** Firmware strings, driver replies and registry data do not prove uniqueness or authenticity. A Windows disk serial, controller serial, namespace ID, filesystem serial and partition GUID identify different layers. Preserve differing values with distinct labels.
 - **Identifier means marked, not necessarily unique.** The tables' **ID** column means the provider records the value in `Section.ids`. `Out::id`, `id_value`, or `combined` with `true` supplies that marking. Unmarked names, model/part codes and status text remain visible.
@@ -50,6 +50,7 @@ These are order-of-magnitude observations, not guarantees or a new benchmark. Th
 | MONITOR INFORMATION | No current figure | ~3 ms before expanded EDID enrichment. |
 | NETWORK ADAPTERS (NIC's) | 123 ms; candidate 120 ms rejected as noise | ~0.1 s; existing WMI path retained. |
 | BLUETOOTH ADAPTERS | 349 → 52 ms | ~50 ms empty-radio path, not a successful radio benchmark. |
+| AUDIO DEVICES | Round 2: 11 ms five-run median (2026-10-04) | New Rust-only section; synchronous COM/topology and shared SetupAPI snapshot costs vary. |
 | ARP INFO/CACHE | Native 2–3 ms; `arp.exe` 43 ms (2026-10-03 entry) | Milliseconds native, tens of ms process; cache varies. |
 
 ## DISK DRIVES
@@ -550,6 +551,41 @@ MAC Address: 3C:FD:FE:85:27:B1
 **Admin/timing/limits.** Admin app; local radio APIs. Latest ~52 ms on no-radio hardware. **F-06a open:** native `szName` may be the PC/radio name, not adapter model; successful radio naming/address path unverified on a Bluetooth-equipped laptop. Fallback can include historical devices and reuse one global address. No adapters gives `No Bluetooth adapters detected.` Unresolved errors can appear as `Error: {E}`.
 
 **AD:** 01–03, 08, 46. **Not built:** exact radio-interface SetupAPI friendly-name correlation — adapter model instead of possible host name; hardware association and laptop evidence cost. Extra controller metadata — vendor/revision context; API/presentation validation cost. Remote BLE devices are outside this local-adapter section.
+
+## AUDIO DEVICES
+
+[Provider](src/hw/audio.rs), [Core Audio helper](src/win/audio.rs).
+
+```text
+Adapter: USB Audio Device
+Instance ID: USB\VID_046D&PID_0A9F\A7C28E41
+Hardware IDs: USB\VID_046D&PID_0A9F&REV_0100
+Container ID: {52B18C39-7D64-4AF0-963E-826A19DB4507}
+Endpoint: Microphone (USB Audio Device)
+Direction: Capture
+Endpoint ID: {0.0.1.00000000}.{941d59a2-72ce-4536-a71a-66af60dd2788}
+Endpoint: Speakers (USB Audio Device)
+Direction: Render
+Endpoint ID: {0.0.0.00000000}.{6d73e082-684f-4130-a0cb-fb538d1c3279}
+```
+
+| Label | Meaning | ID | Appears when |
+|---|---|---|---|
+| Adapter | `PKEY_DeviceInterface_FriendlyName`; `Unknown Audio Adapter` if absent; final unresolved group is `Unresolved Audio Adapters` | No | Once per adapter group. |
+| Instance ID | Adapter devnode: endpoint `PKEY_Device_InstanceId` first, then topology adapter's `PKEY_Device_InstanceId` | Yes | Either route resolves the adapter; preserve returned case. Endpoint `SWD\MMDEVAPI\` IDs are not adapter grouping keys. |
+| Hardware IDs | Shared SetupAPI hardware-ID map joined by uppercase instance ID | Yes | Snapshot has a matching hardware ID. |
+| Container ID | A3 SetupAPI helper, exact present devnode's braced uppercase container GUID | Yes | Present devnode/property exists and GUID is non-null. |
+| Endpoint Container ID | A3 helper on `SWD\MMDEVAPI\{opaque endpoint ID}`, labelled at that endpoint | Yes | Adapter Container ID is unavailable and the endpoint container exists. Never presented as an adapter container. |
+| Endpoint | `PKEY_Device_FriendlyName`; `Unknown Audio Endpoint` if absent | No | Each active endpoint. |
+| Direction | `Render` or `Capture` | No | Each active endpoint. |
+| Endpoint ID | Opaque `IMMDevice::GetId` string, unchanged | Yes | GetId succeeds with a nonempty string; includes device-specific GUID identity. |
+| Stable ID | `PKEY_AudioEndpoint_StableId`: opaque case-sensitive string unchanged, or braced GUID from `VT_CLSID` | Yes | Windows 11 24H2+ supplies a nonempty string or non-null GUID; optional even on supported Windows. |
+
+**Sources/order.** Worker-local COM MTA (retain an existing STA as in WMI), `MMDeviceEnumerator` → active render/capture endpoints, read-only `STGM_READ` property stores. GetId and each property are independent: one failure preserves the other successful fields. Adapter instance ID prefers the endpoint property; absent/failed/software-endpoint values use `IMMDevice::Activate(IDeviceTopology)` → `GetConnector(0)` → [GetDeviceIdConnectedTo](https://learn.microsoft.com/en-us/windows/win32/api/devicetopology/nf-devicetopology-iconnector-getdeviceidconnectedto) → `IMMDeviceEnumerator::GetDevice` → the adapter's read-only property store and `PKEY_Device_InstanceId`. The topology token is an opaque MMDevice ID, which can have a `{2}.` prefix; do not pass it as a SetupAPI interface path or infer a devnode by parsing it or joining a name. The CfgMgr32 interface-property/direct SetupAPI-interface routes failed on this PC and are not used. Group by case-insensitive adapter instance ID, ordered by uppercase instance ID, then direction (`Capture` before `Render`), endpoint name, and opaque endpoint ID as a tie-breaker. All unresolved endpoints share one final group in the same endpoint order. Print adapter fields once, then each endpoint's fields; 40-dash separators divide groups. Shared SetupAPI hardware-ID snapshot and a present-all `DevInfoSet` supply independent hardware/container joins. Missing adapter container falls back independently to each endpoint's software devnode, with the distinct `Endpoint Container ID` label. No WMI fallback, audio-stream activation, or device changes. Read `VT_LPWSTR`/`VT_CLSID` directly and release PROPVARIANTs with OLE32 `PropVariantClear`; no propsys conversion helpers. All six identity labels use `Out::id`; complete tokens retain case and satisfy the existing minimum-four-character, whole-token masking rules.
+
+**Admin/timing/limits.** Admin app; synchronous COM calls run under the collector's existing 60-second provider deadline. Endpoint/property strings are limited to 32767 UTF-16 units and reject malformed UTF-16. `VT_EMPTY`, `VT_NULL`, empty strings and null GUIDs omit optional fields with diagnostics; unsupported types, access-denied, timeout, and other failures retain separate diagnostics and do not remove successful endpoints. Inactive (disabled, not-present, unplugged) endpoint counts appear only in diagnostics, separately for render/capture. Empty successful active enumeration gives `No active audio endpoints detected.` Incomplete empty enumeration reports an error instead. Endpoint IDs and stable IDs are OS/driver identities, not guaranteed immutable physical serial numbers; virtual devices can appear. Hardware-ID/ContainerID joins can be absent independently. Elevated owner-PC round 2 capture on 2026-10-04: 25 active endpoints (15 render, 10 capture), grouped as BEACN Studio (22), NVIDIA Broadcast (2), and HyperX Cloud II Wireless (1); all three adapters supply instance, hardware and container IDs. Endpoint property InstanceId is absent, so every adapter uses the topology fallback. 24 inactive render and one inactive capture endpoint are excluded. Section-only dump 13 ms; five-run median 16 → 11 ms from round 1, not a general speed claim. The real `report::masked` function masked all 34 captured identity values; fabricated-fixture verification covers optional Stable ID. Earlier development captures exercised endpoint-container reads and one final unresolved group. **Untested:** `PKEY_AudioEndpoint_StableId` (absent on every endpoint on this Windows build), successful endpoint-property-first adapter join, naturally unavailable adapter/container, no-endpoint hardware, older Windows, access-denied, COM/enumeration/property failures, malformed UTF-16/property types, and provider timeout. Captures remain in session temp.
+
+**AD:** 01–03, 46, 116. The C# app has no audio section; `check.ps1` lists it in `$RustOnlyTitles`.
 
 ## ARP INFO/CACHE
 
