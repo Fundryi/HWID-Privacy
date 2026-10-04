@@ -116,6 +116,12 @@ pub enum Event {
     Created,
     /// A button was clicked (mouse, Space, Enter, or a double click counted as a click).
     Click(u16),
+    /// A toggle changed through mouse, Space, Enter, or Form::click.
+    Toggled(u16, bool),
+    /// An editable single-line control changed text.
+    TextChanged(u16),
+    /// Opt-in find-key routing; return true only when the handler consumes it.
+    Key(FindKey),
     /// A checked list item was toggled.
     ItemCheck {
         /// List control id.
@@ -141,6 +147,19 @@ pub enum Event {
     Worker(Box<dyn Any + Send>),
     /// The window is being destroyed.
     Destroyed,
+}
+
+/// Find commands; the form decides whether its bar is shown and owns the focused control.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FindKey {
+    /// Ctrl+F anywhere in the form.
+    Open,
+    /// F3 / Shift+F3 anywhere in the form.
+    Step { backwards: bool },
+    /// Enter / Shift+Enter in an editable single-line control.
+    Enter { id: u16, backwards: bool },
+    /// Escape, with the focused control id for checking membership in the find bar.
+    Escape { id: Option<u16> },
 }
 
 /// `FormBorderStyle` and the min/max boxes.
@@ -207,6 +226,8 @@ pub struct FormSpec {
     pub message_box: bool,
     /// An edit whose whole text Ctrl+C copies while the form has the focus.
     pub copy_on_ctrl_c: Option<u16>,
+    /// Routes find keys to Event::Key before normal dialog navigation (opt-in).
+    pub find_keys: bool,
 }
 
 impl FormSpec {
@@ -228,6 +249,7 @@ impl FormSpec {
             maximize_if_too_big: false,
             message_box: false,
             copy_on_ctrl_c: None,
+            find_keys: false,
         }
     }
 }
@@ -573,6 +595,9 @@ fn paint_container(hwnd: HWND, back: Color, card: Option<(Color, i32)>) {
         controls::paint_card(hwnd, paint.hdc(), outer, back, dpi::scale(radius, dpi));
     }
     controls::paint_focus_ring(hwnd, paint.hdc(), back);
+    // The ring buffer fills its interior with the container color; restore the input's
+    // frame and padding afterward (the native EDIT occupies only its centered text area).
+    controls::paint_input_frames(hwnd, paint.hdc(), back);
 }
 
 impl FormState {
@@ -715,6 +740,7 @@ impl FormState {
                     continue;
                 };
                 for (_, child, r, _) in &group {
+                    let r = controls::input_bounds(*child, *r);
                     match DeferWindowPos(
                         hdwp,
                         *child,
@@ -1148,6 +1174,11 @@ unsafe extern "system" fn panel_proc(
 }
 
 fn panel_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+    if msg == windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDOWN
+        && controls::focus_input_frame(hwnd, lparam)
+    {
+        return Some(LRESULT(0));
+    }
     match msg {
         WM_NCCREATE => {
             // SAFETY: For WM_NCCREATE, lParam points to the CREATESTRUCTW of this window.
@@ -1218,7 +1249,9 @@ pub(crate) fn control_event(child: HWND, id: u16, event: CtlEvent) {
         return;
     };
     let ev = match event {
-        CtlEvent::Click => Event::Click(id),
+        CtlEvent::Click => controls::toggle_click(child)
+            .map_or(Event::Click(id), |checked| Event::Toggled(id, checked)),
+        CtlEvent::TextChanged => Event::TextChanged(id),
         CtlEvent::ItemCheck(index, checked) => Event::ItemCheck { id, index, checked },
     };
     state.dispatch(ev);
@@ -1250,6 +1283,11 @@ unsafe extern "system" fn form_proc(
 }
 
 fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+    if msg == windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDOWN
+        && controls::focus_input_frame(hwnd, lparam)
+    {
+        return Some(LRESULT(0));
+    }
     if msg == WM_NCCREATE {
         // SAFETY: For WM_NCCREATE, lParam points to the CREATESTRUCTW of this window.
         let cs = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
@@ -1420,7 +1458,7 @@ fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
                 // SAFETY: Read-only enabled-state query of our own control.
                 && unsafe { IsWindowEnabled(h) }.as_bool()
             {
-                state.dispatch(Event::Click(id));
+                control_event(h, id, CtlEvent::Click);
             }
             Some(LRESULT(0))
         }
@@ -1824,9 +1862,9 @@ impl Form {
     /// `PerformClick`: raises `Event::Click(id)` when the control is enabled.
     pub fn click(&self, id: u16) {
         if self.is_enabled(id)
-            && let Some(state) = self.state()
+            && let Some(h) = self.control(id)
         {
-            state.dispatch(Event::Click(id));
+            control_event(h, id, CtlEvent::Click);
         }
     }
 
@@ -1880,6 +1918,21 @@ impl Form {
     /// Marks a sidebar button as the active item or not.
     pub fn set_active(&self, id: u16, active: bool) {
         self.with_control(id, |h| controls::set_active(h, active));
+    }
+
+    /// Sets a toggle without generating an event (initial load or failed-save rollback).
+    pub fn set_checked(&self, id: u16, checked: bool) {
+        self.with_control(id, |h| controls::set_checked(h, checked));
+    }
+
+    /// Reads a toggle's state.
+    pub fn is_checked(&self, id: u16) -> bool {
+        self.control(id).is_some_and(controls::is_checked)
+    }
+
+    /// Overrides text and icon color; None restores the button kind's color.
+    pub fn set_button_fore(&self, id: u16, fore: Option<Color>) {
+        self.with_control(id, |h| controls::set_button_fore(h, fore));
     }
 
     /// Marks a sidebar button as not collected yet (`FAINT`) or collected.
@@ -2173,6 +2226,41 @@ pub(super) fn pre_translate(msg: &MSG) -> bool {
     if msg.message == WM_KEYDOWN {
         let vk = msg.wParam.0 as u16;
         let form = state.form();
+        if state.spec.find_keys {
+            use windows::Win32::UI::Input::KeyboardAndMouse::{VK_F3, VK_SHIFT};
+            // SAFETY: Reads this UI thread's focus and synchronous modifier states.
+            let (focus, ctrl, alt, backwards) = unsafe {
+                (
+                    GetFocus(),
+                    GetKeyState(i32::from(VK_CONTROL.0)) < 0,
+                    GetKeyState(i32::from(VK_MENU.0)) < 0,
+                    GetKeyState(i32::from(VK_SHIFT.0)) < 0,
+                )
+            };
+            let id = state
+                .hwnds
+                .borrow()
+                .iter()
+                .find_map(|(&id, &h)| (h == focus).then_some(id));
+            let key = if alt {
+                None
+            } else if ctrl && vk == u16::from(b'F') {
+                Some(FindKey::Open)
+            } else if !ctrl && vk == VK_F3.0 {
+                Some(FindKey::Step { backwards })
+            } else if !ctrl && vk == VK_RETURN.0 && controls::is_input(focus) {
+                id.map(|id| FindKey::Enter { id, backwards })
+            } else if !ctrl && vk == VK_ESCAPE.0 {
+                Some(FindKey::Escape { id })
+            } else {
+                None
+            };
+            if let Some(key) = key
+                && state.dispatch(Event::Key(key))
+            {
+                return true;
+            }
+        }
         if vk == u16::from(b'C')
             && let Some(id) = state.spec.copy_on_ctrl_c
             // SAFETY: Reads this UI thread's synchronous modifier state.

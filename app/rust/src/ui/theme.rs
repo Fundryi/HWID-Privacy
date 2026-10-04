@@ -214,6 +214,8 @@ pub const MARQUEE_STEP_MS: i32 = 30;
 
 /// Button corner radius.
 pub const BUTTON_RADIUS: i32 = 6;
+/// Single-line inputs use the button radius.
+pub const INPUT_RADIUS: i32 = BUTTON_RADIUS;
 /// Focus ring corner radius.
 pub const FOCUS_RING_RADIUS: i32 = 8;
 /// Focus ring distance outside the control.
@@ -313,6 +315,18 @@ pub fn icon_font(pixels: i32) -> FontSpec {
 
 /// Glyphs (`Segoe Fluent Icons` code points; the same codes exist in `Segoe MDL2 Assets`).
 pub mod glyph {
+    /// Toggle on-state.
+    pub const CHECK_MARK: char = '\u{E73E}';
+    /// Mask IDs off-state.
+    pub const HIDE: char = '\u{ED1A}';
+    /// Compare Exports.
+    pub const SWITCH: char = '\u{E8AB}';
+    /// Previous find match.
+    pub const CHEVRON_UP: char = '\u{E70E}';
+    /// Next find match.
+    pub const CHEVRON_DOWN: char = '\u{E70D}';
+    /// Close find.
+    pub const CANCEL: char = '\u{E711}';
     /// `HardDrive`: DISK DRIVES.
     pub const HARD_DRIVE: char = '\u{EDA2}';
     /// `Component`: MOTHERBOARD.
@@ -442,6 +456,47 @@ pub const SIDEBAR_SUBTITLE_MARGIN: Pad = pad(12, 0, 12, 8);
 pub const SECTION_BUTTON_HEIGHT: i32 = 42;
 /// Sidebar section button padding.
 pub const SECTION_BUTTON_PADDING: Pad = pad(12, 0, 0, 0);
+/// Fixed sidebar tools row height.
+pub const TOOLS_ROW_HEIGHT: i32 = 28;
+/// Gap between the two tools rows.
+pub const TOOLS_ROW_GAP: i32 = 2;
+/// Divider inset and gaps; its stroke stays one device pixel.
+pub const TOOLS_DIVIDER_MARGIN: Pad = pad(12, 8, 12, 8);
+/// CheckMark right inset.
+pub const TOOLS_CHECK_INSET: i32 = 12;
+/// Tools use the section item inset.
+pub const TOOLS_ROW_PADDING: Pad = SECTION_BUTTON_PADDING;
+/// Tools row outer margins match the section items, without a bottom gap.
+pub const TOOLS_ROW_MARGIN: Pad = pad(12, 0, 12, 0);
+/// Tools block height excluding its one-device-pixel divider (75 total at 96 DPI).
+pub const TOOLS_BLOCK_CONTENT: i32 =
+    2 * TOOLS_ROW_HEIGHT + TOOLS_ROW_GAP + TOOLS_DIVIDER_MARGIN.t + TOOLS_DIVIDER_MARGIN.b;
+/// Find bar row height.
+pub const FIND_BAR_HEIGHT: i32 = 28;
+/// Gap below the find bar.
+pub const FIND_BAR_MARGIN: Pad = pad(0, 0, 0, 8);
+/// Minimum input width.
+pub const FIND_EDIT_MIN_WIDTH: i32 = 160;
+/// Minimum match-count width.
+pub const FIND_COUNT_MIN_WIDTH: i32 = 72;
+/// Icon-only find buttons.
+pub const FIND_BUTTON_SIZE: Size = size(28, 28);
+/// Find control gaps.
+pub const FIND_GAP: i32 = 8;
+/// Gap between previous and next.
+pub const FIND_PAIR_GAP: i32 = 4;
+/// Native input length limit, UTF-16 units.
+pub const FIND_QUERY_MAX: usize = 256;
+/// Input font.
+pub const FIND_EDIT_FONT: FontSpec = BODY_FONT;
+/// Find count font.
+pub const FIND_COUNT_FONT: FontSpec = SMALL_FONT;
+/// Mask toggle minimum size.
+pub const MASK_BUTTON_SIZE: Size = size(96, 28);
+/// Compare window default outer size.
+pub const COMPARE_SIZE: Size = size(1000, 700);
+/// Compare window minimum outer size.
+pub const COMPARE_MIN_SIZE: Size = size(640, 400);
 /// Sidebar section button margin (tier A: gap 4).
 pub const SECTION_BUTTON_MARGIN: Pad = pad(12, 0, 12, 4);
 /// Width of the accent bar on the active sidebar item.

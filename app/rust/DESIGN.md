@@ -56,6 +56,7 @@ Status map (use the color by meaning, never by the text):
 | skipped, cancelled, dry run, unclear | `WARNING` |
 | running, loading, notice | `INFO` |
 | anything else | `FAINT` |
+| toggle states | none (`SECONDARY` off, `TEXT` on) |
 
 Where the map applies today: the main window section meta line (section 13), the confirm dialog warning line (`WARNING`), the update window status line (`SECONDARY` for the byte counts, `SUCCESS` for `Download completed successfully`; section 16), and the message box icon (section 15). Text inside a multi-line text box is never colored. The loading state uses no status color: its title is `TEXT` and its counter `FAINT`, because loading is the expected state, not a notice.
 
@@ -82,6 +83,8 @@ Sizes are logical pixels at 96 DPI and scale with DPI. `theme.rs` stores them as
 - Data text wells (`EDIT`) use Consolas 10 pt (main window) and 9.75 pt (cleaners, whitelist), 9 pt in the Old View, no word wrap except the Old View, a 10 px inner margin left and right (`EM_SETMARGINS`, re-sent after every font change), and line height from the font. A well shows a scroll bar only when its text needs it (lines x line height against the client height, widest line against the client width; re-checked after every text change, resize and font change). A well never selects its text on focus; Ctrl+A still selects all. Text selection uses the system highlight color; a plain EDIT cannot restyle it.
 - Icons in buttons are icon-font glyphs (section 14), never emoji.
 
+- **Two wells keep their selection visible when unfocused** (`EditSpec::keep_selection()`, `ES_NOHIDESEL`): the main section well and the Old View well, so a find match stays visible while the find edit has the focus. Every other well keeps the C# `HideSelection = true` default.
+
 ## 5. Shape
 
 | Item | Value |
@@ -101,11 +104,16 @@ Control sizes and paddings come from the C# layout (section 1), not from the han
 - No WinForms default-button ring: Enter still clicks the focused button or the accept button, the focus ring shows where the keyboard is.
 - The progress bar is owner-painted as a pill: `HOVER` track and `TEXT` fill, both rounded by half the bar height (8 px tall in the update window), no edge; the fill is clipped by the track shape. A marquee shows a block one third wide that moves 4 px per 30 ms step with the clock, repainted by the control's own marquee timer.
 - A container can be a card: 1 px `BORDER` outline, radius 8, over the parent's color (the section header). Three depths only: window (`BG`), card (`CARD`), text well.
+- **Input (single-line edit).** 28 px tall, `CARD` fill, 1 px `BORDER` frame with radius 6 painted by the container (like the focus ring, offset 0), focus ring outside it, 13/400 `TEXT`, 10 px inner margins, cue text in the system gray (close to `FAINT`; accepted). The only editable text control of the app. `ES_AUTOHSCROLL`, no native frame or scroll bars; cue stays visible while focused, query limit 256; text changes deliver `Event::TextChanged(id)`.
 - The focus ring follows the keyboard focus only: it disappears when the window is deactivated and comes back with the focus, like WinForms focus cues.
 - The checked list keeps the native check glyph of the `DarkMode_Explorer` theme.
 - `BORDER_STRONG` text selection applies to the list box (owner-drawn). The native multi-line EDIT paints its selection in the system highlight color, which a control cannot override. Accepted exception until the text boxes are owner-drawn; no well selects its text on its own, so the system color shows only after the user selects.
 
 ## 6. Buttons
+
+- **Toggle.** A button can carry an on/off state. On: the CheckMark glyph (`E73E`) replaces an outline button's icon and adds the held look (`HOVER` fill, `BORDER_STRONG` outline). Sidebar host retains its leading icon, adds `TEXT` text and shows the CheckMark right-aligned, 12 px inset. Off: the host's rest look with its own icon. The accessible name is `{caption}, on` or `{caption}, off`; the drawn caption never changes. Space, Enter and click toggle. No status color: a toggle's state is not a status.
+- **Icon-only button.** 28 x 28, icon centered, the text is the accessible name only (8.3).
+- **Button text color override.** A button's text and icon can take a status color (`Form::set_button_fore`; `None` restores the kind's color). Fills and the disabled `FAINT` are unchanged. Step 2c will use `INFO` for the `Update available` notice.
 
 - **Primary:** `TEXT` fill, `BG` text, no border. Hover `#E4E4E7`, pressed `#D4D4D8`. Disabled: `BORDER` fill, `FAINT` text. One per window: the main action.
 - **Outline (default):** `CARD` fill, 1 px `BORDER`. Hover: `HOVER` fill and `BORDER_STRONG`. Pressed: `BORDER` fill. Disabled: `FAINT` text.
@@ -120,6 +128,8 @@ Control sizes and paddings come from the C# layout (section 1), not from the han
 - The destructive button: `Reset Whitelist` (it deletes the whitelist file). The confirm dialog's `Yes` buttons are not destructive-styled: the dialog itself is the confirmation, and one of them is the primary.
 
 ## 7. Window frame
+
+- **C5 Version.** Main window title `HWID Checker {CARGO_PKG_VERSION}`. `Cargo.toml` is the single source; `check.ps1` fails when any of `app.rc`'s four version fields differs. Other window and message-box titles are unchanged.
 
 - Native title bar, not frameless. On Windows 11: `DwmSetWindowAttribute` sets the caption color to `BG`, the border color to `BORDER`, and the caption text color to `TEXT` (attributes 35, 34, 36), plus immersive dark mode. On Windows 10: immersive dark mode only.
 - Windows 11 rounds the window corners itself.
@@ -138,6 +148,7 @@ Control sizes and paddings come from the C# layout (section 1), not from the han
 8. **No flicker.** Buffered paint, one layout pass per resize and per DPI change (the main window's resize handler edits the tree only; the kit lays out once after it), no background erase under owner-drawn controls.
 9. **Motion:** one loading indicator only (section 13), driven by a form timer. State changes are instant. The indicator stops when Windows "Show animations" is off (`SPI_GETCLIENTAREAANIMATION`, read when the control is created; the arc then stays at its start) and while the window is minimized (the kit kills every form timer on minimize). The progress marquee of the update window keeps its 30 ms clock (it is the native control's own timer and shows for less than a second).
 10. **Nothing is larger than the screen.** Section 11.
+11. **Find key routing.** Forms opt into `FormSpec::find_keys`: `Ctrl+F`, `F3`/`Shift+F3`, `Enter`/`Shift+Enter` in a single-line input, and `Esc` with the focused control id reach `Event::Key(FindKey)` before dialog navigation. The handler returns true only when consumed. Main and Old View currently use named no-op handlers; step 2b supplies find behavior. Neither sets `accept`/`cancel`.
 
 ## 9. Not adopted (and why)
 
@@ -168,6 +179,8 @@ Logical work areas this app must be right on: 1920x1032, 1536x816, 2560x1392, 20
 5. **Footer** buttons keep their order and wrap only when the client is narrower than the row of six (about 800 px at 96 DPI); no listed work area does that. Spacing above and below the row is equal (8 px); wrapped rows get an 8 px gap.
 6. **Old View** minimum outer size 640x400 (C# has none).
 7. Strokes are device pixels: borders, the focus ring, the card outline, and the sidebar accent bar's radius never scale. The old 1 px divider row of the main window (which scaled to 2 px) is gone; the header card's outline replaces it.
+
+8. **Sidebar tools block (C2, C8 scaffold).** Under the section list, outside its scroll flow: a 1 device px `BORDER` divider (margins 12 left/right, 8 above/below), then rows in the sidebar item look (13/400, icon at inset 12, 28 px tall, 2 px gap, same width as section items): the toggle `Startup Update Check` (icon Sync) and the action `Compare Exports` (icon Switch `E8AB`). No accent bar or loading state on tools rows. The block (75 px at 96 DPI; its stroke never scales) is subtracted before the tier is chosen; resulting tiers per listed work area are in `features-design.md` 0.2 (1536x816 goes A to B, 1280x672 C to D, the minimum window B to C). All 14 entries stay visible without a scrollbar everywhere; the two captions never elide. Tab order: sections, tools, footer. No extra bottom gap: the footer supplies it.
 
 ## 12. Spacing
 
@@ -213,6 +226,13 @@ Icons are glyphs of the Windows icon font, tinted like the text they sit next to
 | warning | StatusCircleExclamation | `F13C` |
 | error | StatusCircleErrorX | `F13D` |
 | question | StatusCircleQuestionMark | `F142` |
+| toggle on-state | CheckMark | `E73E` |
+| Mask IDs (off; kit glyph reserved for step 2a) | Hide | `ED1A` |
+| Compare Exports | Switch | `E8AB` |
+| Startup Update Check | Sync | `E895` |
+| find: previous (kit glyph for step 2b) | ChevronUp | `E70E` |
+| find: next (kit glyph for step 2b) | ChevronDown | `E70D` |
+| find: close (kit glyph for step 2b) | Cancel | `E711` |
 
 The section lookup keeps the C# `GetSectionIcon` order (lower-case `Contains`, first match wins) with `chassis` and `bluetooth` matched before the generic words, so every section gets its own glyph. The C# button texts drop their emoji prefix (`↻ Refresh` is `Refresh` with the Refresh glyph; `⟳ Checking...` is `Checking...`); the texts after the prefix are unchanged.
 
@@ -237,23 +257,12 @@ Outer 400 x 150 (scaled by DPI, AD-39), fixed. Padding 16. The app icon (32 px; 
 - Whitelist: header label 12 px above the list, the list in a 12 px panel, the same action row.
 - Confirm Device Removal: message 13/400 `TEXT`, warning 12/400 `WARNING`, the three buttons centered; `Yes (Autoclose)` is the primary and accept button.
 - Old View: the well in a 12 px panel, minimum 640 x 400, opens unselected at the top.
+- Native open-file picker: `win::dialog::open_file(owner, title, filters, initial_dir)` uses `IFileOpenDialog`; cancel does nothing, errors are recorded. Native chrome keeps the Windows theme (section 9).
+- Portable settings: `HWIDChecker.settings.json` next to the exe; pretty JSON, CRLF, UTF-8 without BOM, atomic replacement, unknown keys retained. `check_updates_on_start` defaults false on missing/corrupt/unreadable data (record the error). The sidebar reads on creation and saves immediately; failure reverts the toggle and shows `Settings Error` / `Could not save settings: {error}` / error icon / OK. Step 1 stores the setting only; no startup check yet. Compare Exports is a no-op scaffold until step 2d.
 
 ## 18. Features in design (2026-10-04; not in code yet)
 
 The rules below are binding for the features C1, C2, C3, C4, C5 and C8 of `docs/rust-port/IMPROVEMENTS.md`. The detail (sizes, texts, flows, states) is in `docs/rust-port/features-design.md`. When a feature lands, move its rules into the sections above and delete them here, so code and this file never disagree (line 7). Until then, nothing in this section describes the shipped build.
-
-### 18.1 New kit rules
-
-- **Toggle.** A button can carry an on/off state. On: the CheckMark glyph (`E73E`) replaces the button's icon. Outline host adds the held look (`HOVER` fill, `BORDER_STRONG` outline). Sidebar host adds `TEXT` text and shows the CheckMark right-aligned, 12 px inset. Off: the host's rest look with its own icon. The accessible name is `{caption}, on` or `{caption}, off`; the drawn caption never changes. Space, Enter and click toggle. No status color: a toggle's state is not a status.
-- **Icon-only button.** 28 x 28, icon centered, the text is the accessible name only (8.3).
-- **Input (single-line edit).** 28 px tall, `CARD` fill, 1 px `BORDER` frame with radius 6 painted by the container (like the focus ring, offset 0), focus ring outside it, 13/400 `TEXT`, 10 px inner margins, cue text in the system gray (close to `FAINT`; accepted). The only editable text control of the app.
-- **Button text color override.** A button's text and icon can take a status color (today: `INFO` for the `Update available` notice). Fills and the disabled `FAINT` are unchanged.
-- **Two wells keep their selection visible when unfocused** (`EditSpec::keep_selection()`, `ES_NOHIDESEL`): the main section well and the Old View well, so a find match stays visible while the find edit has the focus. Every other well keeps the C# `HideSelection = true` default.
-- **Keys:** `Ctrl+F` opens the find bar, `F3`/`Shift+F3` step through matches, `Esc` inside the bar closes it. `Enter`/`Esc` never collide with `accept`/`cancel` (the main window and the Old View set neither).
-
-### 18.2 Sidebar tools block (C2, C8)
-
-Under the section list, outside its scroll flow: a 1 device px `BORDER` divider (margins 12 left/right, 8 above/below), then rows in the sidebar item look (13/400, icon at inset 12, 28 px tall, 2 px gap, same width as section items): the toggle `Startup Update Check` (icon Sync) and the action `Compare Exports` (icon Switch `E8AB`). No accent bar on tools rows. The block (75 px) is subtracted before the tier is chosen; resulting tiers per listed work area are in `features-design.md` 0.2 (1536x816 goes A to B, 1280x672 C to D, the minimum window B to C). All 14 entries stay visible without a scrollbar everywhere; the two captions never elide.
 
 ### 18.3 Per feature
 
@@ -261,24 +270,11 @@ Under the section list, outside its scroll flow: a 1 device px `BORDER` divider 
 - **C2 Compare Exports.** Two open-file dialogs (before, after), then a modal window `Compare Exports` (1000 x 700 scaled, minimum 640 x 400): the header card with `Before`/`After` file names (11/600 `SECONDARY` labels, 13/400 `TEXT` names, ellipsis), the summary `Changed n · Added n · Removed n · Same n` in 11/600 `FAINT`, `Copy` 72 x 28; the well (`CARD`, Consolas 10 pt, no wrap) lists rows per section with a kind column `changed` / `removed` / `added` / `same`. No colors in rows (section 3) and none on the summary: a count is not a status and the tool cannot know whether a change is good. Esc closes.
 - **C3 JSON export.** `Export` writes the `.txt` and a `.json` with the same stamp in one click; the success text gains `JSON: {path}`. No new control, no dialog, no footer change.
 - **C4 Find.** A 28 px bar between the header card and the well (main) or above the well (Old View), 8 px gap below, hidden until `Ctrl+F`: input (fills, min 160), count `{i} of {n}` / `No matches` in 12/400 `SECONDARY`, icon-only `Previous match` (ChevronUp `E70E`), `Next match` (ChevronDown `E70D`) 4 px apart, `Close find` (Cancel `E711`); gaps 8. A match is the well's selection (the system highlight, section 5 exception). Previous/Next are disabled at 0 matches; the count label is the reason.
-- **C5 Version.** Main window title `HWID Checker {CARGO_PKG_VERSION}`. `Cargo.toml` is the single source; `check.ps1` fails when `app.rc` differs.
-- **C8 Startup update check.** Opt-in through the sidebar toggle, stored in `HWIDChecker.settings.json` next to the exe. A start check runs in parallel with the load, never shows a box, and on success turns the `Updates` footer button into `Update available` in `INFO` (status map: notice). The click skips the check and continues at the existing `Update Available` box with the kept download. Row width at the minimum window stays one footer row (about 861 of 884 px).
-
-### 18.4 Glyphs added to section 14
-
-| Where | Glyph | Code |
-|---|---|---|
-| toggle on-state | CheckMark | `E73E` |
-| Mask IDs (off) | Hide | `ED1A` |
-| Compare Exports | Switch | `E8AB` |
-| Startup Update Check | Sync | `E895` |
-| find: previous | ChevronUp | `E70E` |
-| find: next | ChevronDown | `E70D` |
-| find: close | Cancel | `E711` |
+- **C8 Startup update check (behavior pending).** The opt-in toggle and settings persistence are implemented (sections 11 and 17). Step 2c adds the start check in parallel with the load, never shows a box, and on success turns the `Updates` footer button into `Update available` in `INFO` (status map: notice). The click skips the check and continues at the existing `Update Available` box with the kept download. Row width at the minimum window stays one footer row (about 861 of 884 px).
 
 ### 18.5 Status map additions (section 3)
 
 | Meaning | Color |
 |---|---|
 | update available (footer button notice) | `INFO` |
-| compare counts, find counts, toggle states | none (`FAINT` / `SECONDARY` text) |
+| compare counts, find counts | none (`FAINT` / `SECONDARY` text) |

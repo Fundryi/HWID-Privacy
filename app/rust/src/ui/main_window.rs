@@ -12,7 +12,7 @@ use super::window::{self, Event, Form, FormSpec, StartPosition, WindowSize};
 use super::{clean_devices, clean_logs, dpi, raw_view, theme, update_progress};
 use crate::report::{self, Section};
 use crate::win::hash::io_error;
-use crate::{hw, update, win};
+use crate::{hw, settings, update, win};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -36,6 +36,11 @@ const LOADING_PROGRESS: u16 = 12;
 const CONTENT_TABLE: u16 = 13;
 const COPY: u16 = 14;
 const LOADING_BOX: u16 = 15;
+const SIDEBAR_CELL: u16 = 16;
+const TOOLS: u16 = 17;
+const TOOLS_DIVIDER: u16 = 18;
+const STARTUP_UPDATES: u16 = 26;
+const COMPARE_EXPORTS: u16 = 27;
 const REFRESH: u16 = 20;
 const EXPORT: u16 = 21;
 const CLEAN_DEVICES: u16 = 22;
@@ -81,6 +86,7 @@ struct State {
     collected: Cell<usize>,
     /// DPI of the last layout the footer bounds belong to (0 = none yet).
     layout_dpi: Cell<u32>,
+    settings: RefCell<settings::Settings>,
 }
 
 enum Msg {
@@ -102,12 +108,19 @@ type Handler = Box<dyn Fn(&Form, Event) -> bool>;
 /// The form spec, the control tree, and the event handler of the main window.
 fn parts() -> (FormSpec, Vec<Node>, Handler) {
     // C# parity: SectionedViewForm.cs:62-71.
-    let mut spec = FormSpec::new("HWID Checker", WindowSize::Client(theme::MAIN_CLIENT_SIZE));
+    let mut spec = FormSpec::new(
+        &format!("HWID Checker {}", env!("CARGO_PKG_VERSION")),
+        WindowSize::Client(theme::MAIN_CLIENT_SIZE),
+    );
+    spec.find_keys = true;
     spec.min = Some(theme::MAIN_MIN_SIZE);
     spec.start = StartPosition::CenterScreen;
     spec.maximize_if_too_big = true; // AD-38
     let state = Rc::new(State::default());
     let handler = move |form: &Form, event: Event| {
+        if let Event::Key(key) = event {
+            return on_find_key(form, key);
+        }
         handle(form, &state, event);
         true
     };
@@ -118,6 +131,7 @@ fn handle(form: &Form, state: &State, event: Event) {
     match event {
         Event::Resize { client, .. } => responsive(form, state, client),
         Event::Created => {
+            load_settings(form, state);
             // C# parity: SectionedViewForm.cs:53-55 starts the load in the constructor, so the
             // first paint already shows the loading state and the `Loading...` bodies.
             let load = begin_load(form, state);
@@ -132,6 +146,7 @@ fn handle(form: &Form, state: &State, event: Event) {
         }
         Event::Timer(SPIN_TIMER) => form.spin(SPINNER),
         Event::Click(id) => on_click(form, state, id),
+        Event::Toggled(STARTUP_UPDATES, checked) => set_startup_updates(form, state, checked),
         _ => {}
     }
 }
@@ -148,6 +163,7 @@ fn on_msg(form: &Form, state: &State, msg: Msg) {
         Msg::Startup(load) => {
             spawn_load(form, state, load, false);
             show_pending_update_error();
+            start_update_check(form, state);
         }
         Msg::Progress { load, index } => {
             if load == state.load.get() {
@@ -178,15 +194,13 @@ fn on_click(form: &Form, state: &State, id: u16) {
         }
         EXPORT => export(form, state),
         COPY => form.edit_copy_all(CONTENT),
+        COMPARE_EXPORTS => compare_exports(form),
         // The frozen dialogs report their own errors; a panic in one reaches the kit's handler
         // boundary (AD-42) instead of C#'s `Error opening ...` boxes.
         CLEAN_DEVICES => clean_devices::show(form.hwnd()),
         CLEAN_LOGS => clean_logs::show(form.hwnd()),
         // `check_and_update` owns the button's `⟳ Checking...` state (WP-17).
-        UPDATES => update_progress::check_and_update(
-            form.hwnd(),
-            form.control(UPDATES).unwrap_or_default(),
-        ),
+        UPDATES => on_updates(form, state),
         OLD_VIEW => {
             // C# parity: SectionedViewForm.cs:821-872.
             set_button_text(form, OLD_VIEW, false, OLD_VIEW_LOADING);
@@ -202,6 +216,47 @@ fn on_click(form: &Form, state: &State, id: u16) {
                 highlight(form, state, index);
             }
         }
+    }
+}
+
+// Step 2d owns this entry point; the scaffold deliberately performs no file operations.
+fn compare_exports(_form: &Form) {}
+
+// Step 2c owns these two hooks; the trunk never checks on start.
+fn start_update_check(_form: &Form, _state: &State) {}
+
+fn on_updates(form: &Form, _state: &State) {
+    update_progress::check_and_update(form.hwnd(), form.control(UPDATES).unwrap_or_default());
+}
+
+// Step 2b owns find behavior; unhandled keys keep the existing dialog navigation.
+fn on_find_key(_form: &Form, _key: window::FindKey) -> bool {
+    false
+}
+
+fn load_settings(form: &Form, state: &State) {
+    let settings = settings::Settings::load();
+    form.set_checked(STARTUP_UPDATES, settings.check_updates_on_start());
+    *state.settings.borrow_mut() = settings;
+}
+
+fn set_startup_updates(form: &Form, state: &State, checked: bool) {
+    let result = state
+        .settings
+        .borrow_mut()
+        .set_check_updates_on_start(checked);
+    if let Err(error) = result {
+        form.set_checked(
+            STARTUP_UPDATES,
+            state.settings.borrow().check_updates_on_start(),
+        );
+        msgbox::show(
+            form.hwnd(),
+            &format!("Could not save settings: {error}"),
+            "Settings Error",
+            Buttons::Ok,
+            Icon::Error,
+        );
     }
 }
 
@@ -552,10 +607,16 @@ fn responsive(form: &Form, state: &State, client: Size) {
                 footer.padding.vertical() + button_h
             }
         });
+        let cell_margin = t.find(SIDEBAR_CELL).map_or(0, |n| n.margin.vertical());
+        let cell_margin_w = t.find(SIDEBAR_CELL).map_or(0, |n| n.margin.horizontal());
+        let block_h = s(theme::TOOLS_BLOCK_CONTENT) + theme::STROKE;
+        if let Some(divider) = t.find_mut(TOOLS_DIVIDER) {
+            divider.size.h = theme::STROKE;
+        }
         let Some(side) = t.find_mut(SIDEBAR) else {
             return;
         };
-        let inner = client.h - footer_h - side.margin.vertical();
+        let inner = client.h - footer_h - cell_margin - block_h;
         let padding = side.padding.vertical();
         let (tier, scroll) = theme::SIDEBAR_TIERS
             .iter()
@@ -564,7 +625,7 @@ fn responsive(form: &Form, state: &State, client: Size) {
         // Width: margins, padding, the scroll bar once, and the scaled inset (audit F7).
         let bar = if scroll { bar_w } else { 0 };
         let item_w = (sidebar
-            - side.margin.horizontal()
+            - cell_margin_w
             - side.padding.horizontal()
             - bar
             - s(theme::SIDEBAR_ITEM_INSET))
@@ -581,6 +642,11 @@ fn responsive(form: &Form, state: &State, client: Size) {
                     c.size.h = s(tier.item);
                     c.margin.b = s(tier.gap);
                 }
+            }
+        }
+        for id in [STARTUP_UPDATES, COMPARE_EXPORTS] {
+            if let Some(row) = t.find_mut(id) {
+                row.size.w = item_w;
             }
         }
     });
@@ -632,13 +698,65 @@ fn sidebar() -> Node {
             .padding(theme::SECTION_BUTTON_PADDING)
             .margin(theme::SECTION_BUTTON_MARGIN)
     }));
-    Node::flow(FlowDir::TopDown, false, items)
+    let sections = Node::flow(FlowDir::TopDown, false, items)
         .id(SIDEBAR)
         .fill()
         .scroll()
         .padding(theme::SIDEBAR_PADDING)
+        .margin(theme::NO_PAD)
         .back(theme::SIDEBAR_BACKGROUND)
-        .cell(0, 0)
+        .cell(0, 0);
+    Node::table(
+        vec![Track::Percent(100.0)],
+        vec![Track::Percent(100.0), Track::AutoSize],
+        vec![sections, tools_block(item_w).cell(0, 1)],
+    )
+    .id(SIDEBAR_CELL)
+    .fill()
+    .back(theme::SIDEBAR_BACKGROUND)
+    .cell(0, 0)
+}
+
+fn tools_block(item_w: i32) -> Node {
+    let row = |id, button| {
+        Node::leaf(id, Ctl::Button(button))
+            .size(Size {
+                w: item_w,
+                h: theme::TOOLS_ROW_HEIGHT,
+            })
+            .padding(theme::TOOLS_ROW_PADDING)
+            .margin(theme::TOOLS_ROW_MARGIN)
+    };
+    let mut toggle = row(
+        STARTUP_UPDATES,
+        ButtonSpec::sidebar("Startup Update Check")
+            .icon(glyph::SYNC)
+            .toggle(),
+    );
+    toggle.margin.b = theme::TOOLS_ROW_GAP;
+    // Empty painted panel: stroke height is restored to a device pixel in responsive().
+    let divider = Node::panel(vec![])
+        .id(TOOLS_DIVIDER)
+        .height(theme::STROKE)
+        .anchor(Anchor(Anchor::LEFT.0 | Anchor::RIGHT.0))
+        .margin(theme::TOOLS_DIVIDER_MARGIN)
+        .back(theme::BORDER);
+    Node::flow(
+        FlowDir::TopDown,
+        false,
+        vec![
+            divider,
+            toggle,
+            row(
+                COMPARE_EXPORTS,
+                ButtonSpec::sidebar("Compare Exports").icon(glyph::SWITCH),
+            ),
+        ],
+    )
+    .id(TOOLS)
+    .fill()
+    .auto_size()
+    .margin(theme::NO_PAD)
 }
 
 fn content() -> Node {
@@ -698,7 +816,8 @@ fn content() -> Node {
         theme::CONTENT_FONT,
         theme::TEXT_BOX_TEXT,
         theme::TEXT_BOX_BACKGROUND,
-    );
+    )
+    .keep_selection();
     let loaded = Node::table(
         vec![Track::Percent(100.0)],
         vec![Track::AutoSize, Track::Percent(100.0)],
@@ -839,7 +958,7 @@ mod live {
     };
     use windows::core::BOOL;
 
-    const GOLDEN: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\wp-10b";
+    const GOLDEN: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\feat-trunk";
     const TICK: usize = 0x7E57;
     const CLOSE_WHILE_BUSY: usize = 0x7E58;
 
@@ -1195,13 +1314,14 @@ mod live {
 
     /// The per-setup fit table of DESIGN.md 11: every listed screen setup as a forced work area
     /// plus a synthetic DPI change; the restored (clamped) window and, where the default does
-    /// not fit, the maximized client. Screenshots and `fit-matrix.md` go to `golden/wp-19`.
+    /// not fit, the maximized client. Screenshots and `fit-matrix.md` go to `golden/feat-trunk`.
     /// `cargo test --locked --lib -- --ignored --exact ui::main_window::live::fit_matrix --nocapture`
     #[test]
     #[ignore = "opens a real window and collects real hardware data"]
     fn fit_matrix() {
-        const OUT: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\wp-19\fit";
+        const OUT: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\feat-trunk\fit";
         std::fs::create_dir_all(OUT).unwrap();
+        std::fs::create_dir_all(GOLDEN).unwrap();
         assert!(dpi::set_per_monitor_v2_for_tests(), "PerMonitorV2");
         assert!(activate_comctl6(), "comctl v6 activation context");
         let (spec, nodes, handler) = parts();
@@ -1218,7 +1338,12 @@ mod live {
         };
         pump_while(Duration::from_secs(150), || loading(&form));
         pump_for(300);
+        trunk_tools_check(&form);
         let real = dpi::window_dpi(form.hwnd());
+        // C8's longest idle caption must still fit before the behavior lands in step 2c.
+        form.set_text(UPDATES, "Update available");
+        form.set_button_fore(UPDATES, Some(theme::INFO));
+        form.set_checked(STARTUP_UPDATES, true);
         // (name, width, height, dpi)
         let setups: [(&str, i32, i32, u32); 10] = [
             ("1920x1080 @100", 1920, 1080, 96),
@@ -1236,6 +1361,7 @@ mod live {
             "| Setup | Work area (px) | Default outer | Start | Restored outer | Client | Tier | 14 visible | Scrollbar | Elided | Footer rows |".to_owned(),
             "|---|---|---|---|---|---|---|---|---|---|---|".to_owned(),
         ];
+        let mut fit_failures = Vec::new();
         let measure_state = |form: &Form, dpi: u32| -> (String, bool, bool, usize, usize) {
             form.with_tree(|t| {
                 let side = t.find(SIDEBAR).unwrap();
@@ -1261,10 +1387,12 @@ mod live {
             let dpi = form.dpi();
             let font = dpi::Font::new(theme::SECTION_BUTTON_FONT, dpi).unwrap();
             (0..hw::PROVIDERS.len())
-                .filter(|&i| {
+                .map(section_id)
+                .chain([STARTUP_UPDATES, COMPARE_EXPORTS])
+                .filter(|&id| {
                     let (w, spec) = form
                         .with_tree(|t| {
-                            let n = t.find(section_id(i)).unwrap();
+                            let n = t.find(id).unwrap();
                             let Kind::Leaf(Ctl::Button(b)) = &n.kind else {
                                 unreachable!()
                             };
@@ -1315,6 +1443,11 @@ mod live {
             let c = form.client_size();
             let (tier, visible, scroll, _, rows_n) = measure_state(&form, dpi);
             let el = elided(&form);
+            if name != "1366x768 @125" && (!visible || scroll || el != 0 || rows_n != 1) {
+                fit_failures.push(format!(
+                    "{name}: visible={visible}, scroll={scroll}, elided={el}, footer={rows_n}"
+                ));
+            }
             let tag = name.replace(' ', "-").replace('@', "at");
             shot_dir(form.hwnd(), OUT, &format!("{tag}-restored"));
             rows.push(format!(
@@ -1353,6 +1486,9 @@ mod live {
                 let c = form.client_size();
                 let (tier, visible, scroll, _, rows_n) = measure_state(&form, dpi);
                 let el = elided(&form);
+                if name != "1366x768 @125" && (!visible || scroll || el != 0 || rows_n != 1) {
+                    fit_failures.push(format!("{name} maximized: visible={visible}, scroll={scroll}, elided={el}, footer={rows_n}"));
+                }
                 shot_dir(form.hwnd(), OUT, &format!("{tag}-maximized"));
                 rows.push(format!(
                     "| {name} (maximized) | {}x{} | - | maximized | - | {}x{} | {tier} | {visible} | {scroll} | {el} | {rows_n} |",
@@ -1391,6 +1527,11 @@ mod live {
         let c = form.client_size();
         let (tier, visible, scroll, _, rows_n) = measure_state(&form, 96);
         let el = elided(&form);
+        if !visible || scroll || el != 0 || rows_n != 1 {
+            fit_failures.push(format!(
+                "minimum: visible={visible}, scroll={scroll}, elided={el}, footer={rows_n}"
+            ));
+        }
         shot_dir(form.hwnd(), OUT, "minimum-96");
         rows.push(format!(
             "| minimum @100 (2560x1392) | 2560x1392 | 900x750 | normal | {}x{} | {}x{} | {tier} | {visible} | {scroll} | {el} | {rows_n} |",
@@ -1469,6 +1610,267 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
         stop.store(true, Ordering::SeqCst);
         closer_thread.join().unwrap();
         bmps_to_png_in(OUT);
+        assert!(fit_failures.is_empty(), "{fit_failures:?}");
+        trunk_primitives_check();
+        msgbox::testing::review_keyboard();
+    }
+
+    // Extend the existing real-HWND run rather than adding mock layout tests.
+    fn trunk_tools_check(form: &Form) {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{VK_RETURN, VK_SPACE};
+        use windows::Win32::UI::WindowsAndMessaging::{MSG, WM_KEYDOWN, WM_KEYUP};
+        let path = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("HWIDChecker.settings.json");
+        let previous = std::fs::read(&path).ok();
+        let initial = form.is_checked(STARTUP_UPDATES);
+        let toggle = form.control(STARTUP_UPDATES).unwrap();
+        form.focus(STARTUP_UPDATES);
+        let enter = MSG {
+            hwnd: toggle,
+            message: WM_KEYDOWN,
+            wParam: WPARAM(VK_RETURN.0 as usize),
+            ..Default::default()
+        };
+        assert!(window::pre_translate(&enter));
+        assert_eq!(form.is_checked(STARTUP_UPDATES), !initial);
+        assert_eq!(
+            text_of(toggle),
+            format!(
+                "Startup Update Check, {}",
+                if initial { "off" } else { "on" }
+            )
+        );
+        assert_eq!(
+            settings::Settings::load().check_updates_on_start(),
+            !initial
+        );
+        // SAFETY: Native Space down/up to this test's focused button, no desktop input.
+        unsafe {
+            SendMessageW(toggle, WM_KEYDOWN, Some(WPARAM(VK_SPACE.0 as usize)), None);
+            SendMessageW(toggle, WM_KEYUP, Some(WPARAM(VK_SPACE.0 as usize)), None);
+        }
+        assert_eq!(form.is_checked(STARTUP_UPDATES), initial);
+        assert_eq!(settings::Settings::load().check_updates_on_start(), initial);
+        let windows = own_windows().len();
+        form.click(COMPARE_EXPORTS);
+        assert_eq!(
+            own_windows().len(),
+            windows,
+            "Compare scaffold opens nothing"
+        );
+        match previous {
+            Some(bytes) => std::fs::write(&path, bytes).unwrap(),
+            None => std::fs::remove_file(&path).unwrap(),
+        }
+        println!(
+            "RESULT tools: Enter/Space toggle, accessible name, persisted reload, Compare no-op passed"
+        );
+    }
+
+    fn trunk_primitives_check() {
+        use windows::Win32::UI::Controls::{EM_GETLIMITTEXT, EM_REPLACESEL, EM_SETSEL};
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SetKeyboardState, VK_CONTROL, VK_ESCAPE, VK_F3, VK_RETURN, VK_SHIFT,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            ES_NOHIDESEL, GWL_STYLE, GetWindowLongW, MSG, WM_KEYDOWN,
+        };
+        let changes = Rc::new(Cell::new(0));
+        let keys = Rc::new(RefCell::new(Vec::new()));
+        let (changed, received) = (Rc::clone(&changes), Rc::clone(&keys));
+        let mut spec = FormSpec::new(
+            "Trunk primitives",
+            WindowSize::Client(Size { w: 500, h: 220 }),
+        );
+        spec.find_keys = true;
+        let nodes = vec![
+            Node::flow(
+                FlowDir::TopDown,
+                false,
+                vec![
+                    Node::leaf(
+                        1,
+                        Ctl::Button(ButtonSpec::outline("Mask IDs").icon(glyph::HIDE).toggle()),
+                    )
+                    .min(theme::MASK_BUTTON_SIZE)
+                    .auto_size(),
+                    Node::leaf(
+                        2,
+                        Ctl::Edit(
+                            EditSpec::new(theme::BODY_FONT, theme::TEXT, theme::CARD)
+                                .single_line()
+                                .cue("Find"),
+                        ),
+                    )
+                    .size(Size {
+                        w: 320,
+                        h: theme::FIND_BAR_HEIGHT,
+                    }),
+                    Node::leaf(
+                        3,
+                        Ctl::Button(
+                            ButtonSpec::outline("Previous match")
+                                .icon(glyph::CHEVRON_UP)
+                                .icon_only(),
+                        ),
+                    )
+                    .size(theme::FIND_BUTTON_SIZE),
+                    Node::leaf(
+                        4,
+                        Ctl::Edit(
+                            EditSpec::new(theme::CONTENT_FONT, theme::TEXT, theme::CARD)
+                                .keep_selection(),
+                        ),
+                    )
+                    .size(Size { w: 400, h: 60 }),
+                ],
+            )
+            .fill()
+            .padding(theme::OUTPUT_PANEL_PADDING),
+        ];
+        let form = Form::create(HWND::default(), spec, nodes, move |_, event| {
+            match event {
+                Event::TextChanged(2) => changed.set(changed.get() + 1),
+                Event::Key(key) => received.borrow_mut().push(key),
+                _ => {}
+            }
+            true
+        })
+        .unwrap();
+        form.show();
+        form.set_timer(TICK, 20);
+        form.click(1);
+        assert!(form.is_checked(1));
+        assert_eq!(form.text(1), "Mask IDs, on");
+        assert_eq!(form.text(3), "Previous match");
+        let edit = form.control(2).unwrap();
+        let well = form.control(4).unwrap();
+        form.edit_set_text(4, "Selected match remains visible");
+        // SAFETY: Messages and style queries target this test's live HWNDs.
+        unsafe {
+            assert_eq!(SendMessageW(edit, EM_GETLIMITTEXT, None, None).0, 256);
+            let text = to_wide(&"A".repeat(300));
+            SendMessageW(
+                edit,
+                EM_REPLACESEL,
+                None,
+                Some(LPARAM(text.as_ptr() as isize)),
+            );
+            assert_eq!(GetWindowLongW(well, GWL_STYLE) & ES_NOHIDESEL, ES_NOHIDESEL);
+            SendMessageW(well, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(14)));
+        }
+        assert_eq!(form.text(2).len(), 256);
+        assert!(changes.get() > 0, "real EN_CHANGE reaches form");
+        form.focus(3);
+        let frame = form.with_tree(|t| t.find(2).unwrap().bounds).unwrap();
+        // SAFETY: Click the top padding of this test's input, outside its native text area.
+        unsafe {
+            use windows::Win32::UI::Input::KeyboardAndMouse::GetFocus;
+            use windows::Win32::UI::WindowsAndMessaging::{GetParent, WM_LBUTTONDOWN};
+            SendMessageW(
+                GetParent(edit).unwrap(),
+                WM_LBUTTONDOWN,
+                None,
+                Some(LPARAM(((frame.y + 1) << 16 | (frame.x + 1)) as isize)),
+            );
+            assert_eq!(GetFocus(), edit);
+        }
+        for (vk, modifiers, expected) in [
+            (u16::from(b'F'), vec![VK_CONTROL.0], window::FindKey::Open),
+            (
+                VK_F3.0,
+                vec![VK_SHIFT.0],
+                window::FindKey::Step { backwards: true },
+            ),
+            (
+                VK_RETURN.0,
+                vec![VK_SHIFT.0],
+                window::FindKey::Enter {
+                    id: 2,
+                    backwards: true,
+                },
+            ),
+            (VK_ESCAPE.0, vec![], window::FindKey::Escape { id: Some(2) }),
+        ] {
+            let mut keyboard = [0u8; 256];
+            for modifier in modifiers {
+                keyboard[modifier as usize] = 0x80;
+            }
+            // SAFETY: Changes only this UI thread's keyboard snapshot, restored immediately.
+            unsafe {
+                SetKeyboardState(&keyboard).unwrap();
+            }
+            assert!(window::pre_translate(&MSG {
+                hwnd: edit,
+                message: WM_KEYDOWN,
+                wParam: WPARAM(vk as usize),
+                ..Default::default()
+            }));
+            // SAFETY: Restores this test thread's neutral modifier state.
+            unsafe {
+                SetKeyboardState(&[0; 256]).unwrap();
+            }
+            assert_eq!(keys.borrow().last(), Some(&expected));
+        }
+        form.edit_set_text(2, "");
+        // SAFETY: Enables keyboard focus cues only in this test form.
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                UIS_CLEAR, UISF_HIDEFOCUS, WM_UPDATEUISTATE,
+            };
+            SendMessageW(
+                form.hwnd(),
+                WM_UPDATEUISTATE,
+                Some(WPARAM((UIS_CLEAR | (UISF_HIDEFOCUS << 16)) as usize)),
+                None,
+            );
+        }
+        dpi_change(&form, 96);
+        pump_for(100);
+        shot(form.hwnd(), "primitives-96");
+        dpi_change(&form, 144);
+        shot(form.hwnd(), "primitives-144");
+        form.destroy();
+        // Open the real native picker with both filters, then cancel its own HWND.
+        let closer = std::thread::spawn(|| {
+            for _ in 0..100 {
+                if let Some(dialog) = own_windows()
+                    .into_iter()
+                    .find(|h| text_of(*h) == "Trunk picker check")
+                {
+                    // SAFETY: Value-only close message to this process's test picker.
+                    unsafe {
+                        PostMessageW(Some(dialog), WM_CLOSE, WPARAM(0), LPARAM(0)).unwrap();
+                    }
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            false
+        });
+        assert!(
+            win::dialog::open_file(
+                HWND::default(),
+                "Trunk picker check",
+                &[
+                    ("HWID exports (*.txt;*.json)", "*.txt;*.json"),
+                    ("All files (*.*)", "*.*")
+                ],
+                Path::new(GOLDEN)
+            )
+            .is_none()
+        );
+        assert!(
+            closer.join().unwrap(),
+            "picker actually opened before cancellation"
+        );
+        bmps_to_png();
+        println!(
+            "RESULT primitives: toggle, icon name, input limit/change, keep-selection style, find key routing, native picker cancel passed"
+        );
     }
 
     #[test]

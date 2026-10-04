@@ -1,6 +1,7 @@
 //! Windows helpers and their frozen cross-work-package contracts.
 
 pub mod bluetooth;
+pub mod dialog;
 pub mod dll;
 pub mod edid;
 pub mod evt;
