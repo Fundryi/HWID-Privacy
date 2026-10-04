@@ -166,14 +166,14 @@ pub fn call_method(_ns: Namespace, _object_path: &str, _method: &str) -> Result<
     })
 }
 
-/// Calls an input-aware method on a thread-local connection; preserves input CIM types.
+/// Calls a method with scalar UInt8 inputs on a thread-local connection.
 /// The caller must bound its wait (the underlying COM method is synchronous).
 pub fn call_method_with_inputs(
     ns: Namespace,
     class: &str,
     object_path: &str,
     method: &str,
-    inputs: &[(&str, Variant)],
+    inputs: &[(&str, u8)],
 ) -> Result<Row> {
     with_connection(ns, |connection| {
         // GetMethod requires a class definition, not the instance object.
@@ -186,9 +186,13 @@ pub fn call_method_with_inputs(
             .spawn_instance()
             .map_err(|e| wmi_error("WMI method inputs", e))?;
         for (name, value) in inputs {
-            parameters
-                .put_property(name, value.clone())
-                .map_err(|e| wmi_error("WMI method input", e))?;
+            let name = HSTRING::from(*name);
+            // Direct VT_UI1 construction avoids the crate's propsys array helpers.
+            let value = VARIANT::from(*value);
+            // SAFETY: parameters is a live spawned instance; name is terminated and
+            // value lives through Put. Type 0 retains the signature's CIM UInt8 type.
+            unsafe { parameters.inner.Put(PCWSTR(name.as_ptr()), 0, &value, 0) }
+                .map_err(|e| Error::from_win("WMI method input", e))?;
         }
         let output = connection
             .exec_method(object_path, method, Some(&parameters))

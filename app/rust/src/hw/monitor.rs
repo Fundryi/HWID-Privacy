@@ -223,7 +223,7 @@ fn read_extensions(names: &[Option<String>], deadline: Instant, tx: &mpsc::Sende
                 "WmiMonitorDescriptorMethods",
                 &path,
                 "WmiGetMonitorRawEEdidV1Block",
-                &[("BlockId", ::wmi::Variant::UI1(block))],
+                &[("BlockId", block)],
             )
             .and_then(|row| {
                 row.u8_array("BlockContent").ok_or_else(|| {
