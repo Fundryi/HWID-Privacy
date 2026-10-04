@@ -52,9 +52,9 @@ use windows::{
             BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, ClientToScreen, CreateSolidBrush,
             DFC_BUTTON, DFCS_BUTTONCHECK, DFCS_CHECKED, DFCS_FLAT, DIB_RGB_COLORS,
             DRAW_TEXT_FORMAT, DRAWTEXTPARAMS, DT_BOTTOM, DT_CALCRECT, DT_CENTER, DT_EDITCONTROL,
-            DT_END_ELLIPSIS, DT_HIDEPREFIX, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
-            DT_WORDBREAK, DeleteObject, DrawFocusRect, DrawFrameControl, DrawTextExW, EndPaint,
-            FillRect, GetDC, GetTextMetricsW, GetWindowDC, HBRUSH, HDC, HFONT, HGDIOBJ,
+            DT_END_ELLIPSIS, DT_HIDEPREFIX, DT_LEFT, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE,
+            DT_VCENTER, DT_WORDBREAK, DeleteObject, DrawFocusRect, DrawFrameControl, DrawTextExW,
+            EndPaint, FillRect, GetDC, GetTextMetricsW, GetWindowDC, HBRUSH, HDC, HFONT, HGDIOBJ,
             InvalidateRect, MapWindowPoints, PAINTSTRUCT, ReleaseDC, SelectObject, SetBkColor,
             SetBkMode, SetDIBitsToDevice, SetTextColor, TEXTMETRICW, TRANSPARENT,
         },
@@ -115,6 +115,8 @@ pub enum Align {
     MiddleLeft,
     /// `ContentAlignment.MiddleCenter`.
     MiddleCenter,
+    /// `ContentAlignment.MiddleRight`.
+    MiddleRight,
 }
 
 /// The button kinds of `DESIGN.md` section 6 (`Buttons.ButtonVariant` in C#).
@@ -930,6 +932,7 @@ fn align_flags(align: Align) -> DRAW_TEXT_FORMAT {
     match align {
         Align::MiddleLeft => DT_VCENTER | DT_LEFT,
         Align::MiddleCenter => DT_VCENTER | DT_CENTER,
+        Align::MiddleRight => DT_VCENTER | DT_RIGHT,
     }
 }
 
@@ -938,6 +941,7 @@ fn align_in(size: Size, within: Rect, align: Align) -> Rect {
     let x = match align {
         Align::MiddleLeft => within.x,
         Align::MiddleCenter => within.x + (within.w - size.w) / 2,
+        Align::MiddleRight => within.x + within.w - size.w,
     };
     Rect {
         x,

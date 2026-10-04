@@ -1,6 +1,6 @@
 //! C4: shared, view-local find bar. Searches the displayed text without changing it.
 
-use super::controls::{ButtonSpec, Ctl, EditSpec, LabelSpec};
+use super::controls::{Align, ButtonSpec, Ctl, EditSpec, LabelSpec};
 use super::layout::{Node, Pad, Size, Track};
 use super::theme::{self, glyph};
 use super::window::{Event, FindKey, Form};
@@ -38,9 +38,13 @@ pub(super) fn bar() -> Node {
         ..theme::NO_PAD
     })
     .cell(0, 0);
+    // Right-aligned: the count hugs the buttons it describes; the minimum width keeps the
+    // input from resizing on every keystroke.
     let count = Node::leaf(
         COUNT,
-        Ctl::Label(LabelSpec::new("", theme::FIND_COUNT_FONT, theme::SECONDARY)),
+        Ctl::Label(
+            LabelSpec::new("", theme::FIND_COUNT_FONT, theme::SECONDARY).align(Align::MiddleRight),
+        ),
     )
     .fill()
     .auto_size()
@@ -91,6 +95,9 @@ pub(super) fn bar() -> Node {
     .id(BAR)
     .fill()
     .auto_size()
+    // The bar is its own window, which clips the focus rings of its children: pad by the ring
+    // room and overhang the row by the same, so the input stays flush with the well.
+    .padding(theme::FIND_BAR_PADDING)
     .margin(theme::FIND_BAR_MARGIN)
     .visible(false)
 }
@@ -124,6 +131,26 @@ impl Find {
     /// Handles the bar's notifications; other controls retain the host's behavior.
     pub(super) fn event(&self, form: &Form, event: &Event) -> bool {
         match *event {
+            Event::Resize { .. } => {
+                // Scale each distance before subtracting: at custom DPI, scaling the logical
+                // sums drifts by a pixel (for example the Old View's -1 margin at 137 DPI).
+                // The kit lays out after this event, so this adds no layout pass.
+                let gap = form.scale(theme::FIND_GAP);
+                form.with_tree(|tree| {
+                    let Some(well_margin) = tree.find(self.well).map(|well| well.margin) else {
+                        return;
+                    };
+                    if let Some(bar) = tree.find_mut(BAR) {
+                        bar.margin = Pad {
+                            l: well_margin.l - bar.padding.l,
+                            t: well_margin.t - bar.padding.t,
+                            r: well_margin.r - bar.padding.r,
+                            b: gap - bar.padding.b - well_margin.t,
+                        };
+                    }
+                });
+                return false;
+            }
             Event::TextChanged(QUERY) if self.shown(form) => self.search(form, Direction::Current),
             Event::Click(PREVIOUS) => self.search(form, Direction::Previous),
             Event::Click(NEXT) => self.search(form, Direction::Next),
