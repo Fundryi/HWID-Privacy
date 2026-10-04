@@ -43,11 +43,26 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
 
 fn legacy(out: &mut Out, mut unresolved: Vec<win::Error>) -> Result<(), win::Error> {
     let mut adapters = Vec::new();
+    let candidates = match win::bluetooth::legacy_candidates() {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            out.fallback_failed("SetupAPI Bluetooth candidates", &error);
+            // An incomplete snapshot proves nothing: retain the full legacy chain.
+            win::bluetooth::LegacyCandidates {
+                usb_name: true,
+                bthusb: true,
+            }
+        }
+    };
     // C# parity: Hardware/BluetoothInfo.cs:24-47. Keep this exact USB-name query.
-    match wmi::query(
-        Namespace::Cimv2,
-        "SELECT Name, PNPDeviceID FROM Win32_PnPEntity WHERE PNPDeviceID LIKE 'USB%' AND Name LIKE '%Bluetooth%'",
-    ) {
+    match if candidates.usb_name {
+        wmi::query(
+            Namespace::Cimv2,
+            "SELECT Name, PNPDeviceID FROM Win32_PnPEntity WHERE PNPDeviceID LIKE 'USB%' AND Name LIKE '%Bluetooth%'",
+        )
+    } else {
+        Ok(Vec::new())
+    } {
         Ok(rows) if !rows.is_empty() => {
             let mac = registry_mac(out, &mut unresolved);
             out.source(if mac.is_some() {
@@ -84,12 +99,20 @@ fn legacy(out: &mut Out, mut unresolved: Vec<win::Error>) -> Result<(), win::Err
     }
     // C# parity: Hardware/BluetoothInfo.cs:63-77. Do not read a MAC for BTHUSB rows.
     if adapters.is_empty() {
-        match wmi::query(
-            Namespace::Cimv2,
-            "SELECT Name, PNPDeviceID FROM Win32_PnPEntity WHERE Service = 'BTHUSB'",
-        ) {
+        match if candidates.bthusb {
+            wmi::query(
+                Namespace::Cimv2,
+                "SELECT Name, PNPDeviceID FROM Win32_PnPEntity WHERE Service = 'BTHUSB'",
+            )
+        } else {
+            Ok(Vec::new())
+        } {
             Ok(rows) => {
-                out.source("WMI BTHUSB");
+                out.source(if candidates.bthusb {
+                    "WMI BTHUSB"
+                } else {
+                    "SetupAPI (no BTHUSB candidates)"
+                });
                 for row in rows {
                     adapters.push((
                         row.str("Name")
