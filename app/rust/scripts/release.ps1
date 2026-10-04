@@ -92,15 +92,21 @@ try {
         throw 'Remove Cargo target overrides before releasing; Release staging uses app/rust/target/dist.'
     }
     $head = Invoke-Checked git @('rev-parse', 'HEAD') 'Cannot read HEAD'
-    $tags = @(Invoke-Checked git @('tag', '--merged', 'HEAD') 'Cannot list release tags')
+    $tags = @(Invoke-Checked git @('tag', '--list', 'v*', '--merged', 'HEAD') 'Cannot list release tags')
     $range = 'HEAD'
     if ($tags.Count) {
-        $lastTag = Invoke-Checked git @('describe', '--tags', '--abbrev=0', 'HEAD') 'Cannot find the previous tag'
+        $lastTag = Invoke-Checked git @('describe', '--tags', '--match', 'v*', '--abbrev=0', 'HEAD') 'Cannot find the previous tag'
         $range = "$lastTag..HEAD"
     }
-    $subjects = @(Invoke-Checked git @('log', $range, '--format=%s', '--reverse') 'Cannot read release notes')
-    $notes = ($subjects | ForEach-Object { "- $_" }) -join "`n"
-    if (-not $notes) { $notes = "- Release $tag" }
+    $subjects = @(Invoke-Checked git @('log', $range, '--no-merges', '--format=%s', '--reverse') 'Cannot read release notes')
+    $changes = @($subjects | ForEach-Object {
+        if ($_ -match '^(?:feat|fix|perf)(?:\([^)]+\))?!?:\s+(.+)$') {
+            $item = $Matches[1].Trim().TrimEnd('.').TrimEnd()
+            if ($item) { '- ' + $item.Substring(0, 1).ToUpperInvariant() + $item.Substring(1) }
+        }
+    } | Select-Object -Unique)
+    if (-not $changes.Count) { $changes = @('- Maintenance release') }
+    $title = "HWID Checker $tag"
     $newCommits = [int](Invoke-Checked git @('rev-list', '--count', 'origin/main..HEAD') 'Cannot count commits to publish')
     Complete-Step
 
@@ -143,6 +149,14 @@ try {
     Add-Content -LiteralPath $log -Value "File version: $($info.FileVersion)", "SHA-256: $hash"
     Complete-Step
     Write-Host "      $newCommits new commit(s) since the last push will go live."
+    $notes = (@('## Changes') + $changes + @(
+        '', '## Download',
+        '`HWIDChecker.exe` below. Windows 10/11 x64, runs as administrator. Installed copies offer this update on their next update check.',
+        '', '## SHA-256', ('`{0}`' -f $hash)
+    )) -join "`n"
+    Write-Host "Title: $title"
+    Write-Host 'Body:'
+    Write-Host $notes
     if ($DryRun) {
         Write-Host "Dry run OK: $tag built and checked. Nothing was published." -ForegroundColor Green
         Write-Host '      Test exe: app\rust\target\dist\HWIDChecker.exe'
@@ -175,7 +189,7 @@ try {
     $null = Invoke-Checked git @('tag', $tag) 'Cannot tag the release'
     $null = Invoke-Checked git @('push', '--atomic', 'origin', 'main', "refs/tags/$tag") 'Cannot push main and the release tag'
     $pushed = $true
-    $url = @(Invoke-Checked gh @('release', 'create', $tag, 'HWIDChecker.exe', '--verify-tag', '--title', "HWIDChecker $tag", '--notes-file', $notesFile) 'Cannot create the GitHub release') |
+    $url = @(Invoke-Checked gh @('release', 'create', $tag, 'HWIDChecker.exe', '--verify-tag', '--title', $title, '--notes-file', $notesFile) 'Cannot create the GitHub release') |
         Where-Object { $_ -match '^https://' } | Select-Object -Last 1
     Complete-Step
     Write-Host "Release $tag published: $url" -ForegroundColor Green

@@ -31,7 +31,7 @@ Build: `.\app\rust\scripts\build-test.ps1` (release test exe; `-Safe` for debug,
 
 ### Release a new version
 
-Release: `.\app\rust\scripts\release.ps1` (next patch; `-Minor`, `-Major`, or `-Version X.Y.Z` for a higher version; `-DryRun` builds and restores version files/root exe; clean `main` and signed-in `gh` required; `YES` gates commit, tag, atomic push, and GitHub release).
+Release: `.\app\rust\scripts\release.ps1` (next patch; `-Minor`, `-Major`, or `-Version X.Y.Z` for a higher version; `-DryRun` builds and restores version files/root exe; clean `main` and signed-in `gh` required; `YES` gates commit, tag, atomic push, and GitHub release; previews the title `HWID Checker vX.Y.Z` and Changes/Download/SHA-256 body, with unique feat/fix/perf subjects since the previous `v*` tag).
 
 The release script runs `build-dist.ps1`, which runs `check.ps1` and validates the dist executable, then copies exactly `app/rust/target/dist/HWIDChecker.exe` to the root after checking its version. The copied hash must match. Run `pwsh -NoProfile -File app/rust/scripts/check.ps1` for the standalone gate. Every script anchors paths to its own location and also works when invoked by absolute path from another folder.
 
