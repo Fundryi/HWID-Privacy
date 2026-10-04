@@ -155,8 +155,11 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     }
     if let Some(error) = wmi_error {
         out.fallback_failed("WMI additional adapters", &error)
+            .blank()
             .text(&format!("WMI query failed: Win32_VideoController: {error}"));
     }
+    // C# parity: Hardware/GpuInfo.cs:80,124. Trim any trailing enrichment error too.
+    out.trim_end();
     Ok(())
 }
 
@@ -269,6 +272,8 @@ fn render(
         // C# parity: Hardware/GpuInfo.cs:89-92.
         out.text("No GPU detected.");
     }
+    // C# parity: Hardware/GpuInfo.cs:80,124. Both identity paths use TrimEnd.
+    out.trim_end();
 }
 
 #[cfg(test)]
@@ -304,8 +309,9 @@ mod tests {
         );
         let section = out.finish();
         assert_eq!(
-            section.body.trim_end(),
+            section.body,
             include_str!("../../tests/fixtures/wp-07/mixed-gpus.fixture")
+                .replace("\r\n", "\n")
                 .replace('\n', "\r\n")
                 .trim_end()
         );
@@ -322,13 +328,10 @@ mod tests {
                 hardware_id: None,
             }],
         );
-        assert_eq!(
-            out.finish().body,
-            "GPU 0\r\n└── Unknown\r\n    └── Unknown\r\n"
-        );
+        assert_eq!(out.finish().body, "GPU 0\r\n└── Unknown\r\n    └── Unknown");
         let mut out = Out::new();
         render(&mut out, &[], None, &[]);
-        assert_eq!(out.finish().body, "No GPU detected.\r\n");
+        assert_eq!(out.finish().body, "No GPU detected.");
         let mut out = Out::new();
         render(
             &mut out,
@@ -343,7 +346,7 @@ mod tests {
             &[],
         );
         assert!(out.finish().body.ends_with(
-            "\r\n\r\nBoard Serial Number: Unavailable (NvAPI_GPU_GetBoardInfo failed: 0x00000000 fabricated failure)\r\n"
+            "\r\n\r\nBoard Serial Number: Unavailable (NvAPI_GPU_GetBoardInfo failed: 0x00000000 fabricated failure)"
         ));
     }
 
@@ -405,7 +408,7 @@ mod tests {
         );
         assert_eq!(
             out.finish().body,
-            "GPU 0\r\n└── NVIDIA\r\nGPU 1\r\n└── NVIDIA\r\n\r\nBoard Serial Number: 2222222222222222\r\n"
+            "GPU 0\r\n└── NVIDIA\r\nGPU 1\r\n└── NVIDIA\r\n\r\nBoard Serial Number: 2222222222222222"
         );
     }
 

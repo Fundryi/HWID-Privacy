@@ -266,8 +266,9 @@ fn check_tree(cancelled: bool, exit_parent: bool) {
         };
         assert_eq!(error, expected);
         for handle in handles {
+            // Job termination is asynchronous; give the kernel a moment to signal the process.
             // SAFETY: This retained handle belongs to a test-created process.
-            let status = unsafe { WaitForSingleObject(handle.as_raw(), 0) };
+            let status = unsafe { WaitForSingleObject(handle.as_raw(), 2000) };
             assert_eq!(status, WAIT_OBJECT_0, "a process survived job termination");
         }
     });
