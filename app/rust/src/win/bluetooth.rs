@@ -190,6 +190,63 @@ fn address_text(bytes: &[u8]) -> String {
         .join(":")
 }
 
+/// Whether the legacy WMI filters could match any installed device.
+pub(crate) struct LegacyCandidates {
+    pub usb_name: bool,
+    pub bthusb: bool,
+}
+
+/// Rules out empty WMI scans without replacing WMI names, ordering or device selection.
+pub(crate) fn legacy_candidates() -> Result<LegacyCandidates> {
+    use windows::Win32::Devices::DeviceAndDriverInstallation::{
+        SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME, SPDRP_SERVICE,
+    };
+    use windows::Win32::Foundation::ERROR_INVALID_DATA;
+
+    // Include historical devices: the legacy WQL does not filter on presence.
+    let set = super::setupapi::DevInfoSet::enum_all()?;
+    let mut candidates = LegacyCandidates {
+        usb_name: false,
+        bthusb: false,
+    };
+    for device in set.devices()? {
+        if !candidates.bthusb {
+            match device.property_string(SPDRP_SERVICE) {
+                Ok(service) => candidates.bthusb = service.eq_ignore_ascii_case("BTHUSB"),
+                // An unassigned service is normal; other failures must try WMI.
+                Err(error) if error.code == ERROR_INVALID_DATA.0 => {}
+                Err(error) => return Err(error),
+            }
+        }
+        if !candidates.usb_name
+            && device
+                .instance_id()?
+                .to_ascii_uppercase()
+                .starts_with("USB")
+        {
+            let mut has_name = false;
+            // Check both, deliberately allowing extra candidates when the friendly
+            // name hides a Bluetooth description. Only WMI chooses displayed rows.
+            for property in [SPDRP_FRIENDLYNAME, SPDRP_DEVICEDESC] {
+                match device.property_string(property) {
+                    Ok(name) => {
+                        has_name |= !name.is_empty();
+                        candidates.usb_name |= name.to_ascii_lowercase().contains("bluetooth");
+                    }
+                    Err(error) if error.code == ERROR_INVALID_DATA.0 => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            // Missing names are not evidence that WMI cannot supply one.
+            candidates.usb_name |= !has_name;
+        }
+        if candidates.usb_name && candidates.bthusb {
+            break;
+        }
+    }
+    Ok(candidates)
+}
+
 /// Reads the legacy global address without substituting any paired device's address.
 pub fn legacy_registry_mac() -> Result<Option<String>> {
     // C# parity: Hardware/BluetoothInfo.cs:108-116. Reverse the whole value for
