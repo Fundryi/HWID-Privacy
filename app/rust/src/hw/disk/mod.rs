@@ -187,7 +187,9 @@ fn disk_error(out: &mut Out, disk: &mut DiskInfo, label: &str, error: &Error) {
     out.fallback_failed(&format!("{} {label}", disk.device_id), error);
     // C# parity: Hardware/DiskDriveInfo.cs shows nothing when a disk does not
     // support a query; keep that case in `.diag.txt` only.
-    if !EXPECTED_UNSUPPORTED.contains(&error.code) {
+    // USB bridges (USBSTOR) reject the unique-ID property with ERROR_INVALID_PARAMETER.
+    let unsupported_id = label == "UniqueId (IOCTL)" && error.code == 87;
+    if !EXPECTED_UNSUPPORTED.contains(&error.code) && !unsupported_id {
         disk.failures.push(format!("    {label}: {error}"));
     }
 }
