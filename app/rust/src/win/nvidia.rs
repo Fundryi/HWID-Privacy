@@ -1,6 +1,6 @@
 //! Owned by WP-07: runtime-loaded NVIDIA APIs.
 
-use super::{Error, Result, dll, process, record, wide};
+use super::{Error, Result, dll, process, record, setupapi, wide};
 use std::{
     ffi::{CStr, c_char, c_void},
     path::{Path, PathBuf},
@@ -26,7 +26,7 @@ pub struct Capture<T> {
 }
 
 /// NVIDIA identity in the same index/name/UUID notation as nvidia-smi -L.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Gpu {
     /// The NVIDIA enumeration index.
     pub index: u32,
@@ -36,6 +36,24 @@ pub struct Gpu {
     pub uuid_suffix: Option<String>,
     /// A domain-zero PCI bus, if the vendor source proved it.
     pub pci_bus: Option<u32>,
+    /// Full domain-zero PCI address for an exact WMI devnode join.
+    pub pci_address: Option<PciAddress>,
+    /// Optional NVML board/module serial.
+    pub serial: Option<String>,
+    /// Optional NVML 64-bit physical device identifier, as sixteen hex digits.
+    pub pdi: Option<String>,
+    /// Optional NVML firmware version (context, not a unit identifier).
+    pub vbios: Option<String>,
+    /// Optional NVML board part number.
+    pub board_part: Option<String>,
+}
+
+/// PCI location; Windows devnodes can prove only domain zero here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PciAddress {
+    pub bus: u32,
+    pub device: u32,
+    pub function: u32,
 }
 
 /// The raw NVAPI board identifier and the PCI bus belonging to its handle.
@@ -182,6 +200,51 @@ type Count = unsafe extern "C" fn(*mut u32) -> i32;
 type Handle = unsafe extern "C" fn(u32, *mut Device) -> i32;
 type Text = unsafe extern "C" fn(Device, *mut c_char, u32) -> i32;
 type Pci = unsafe extern "C" fn(Device, *mut PciInfo) -> i32;
+#[repr(C)]
+struct PdiInfo {
+    version: u32,
+    value: u64,
+}
+type Pdi = unsafe extern "C" fn(Device, *mut PdiInfo) -> i32;
+
+fn optional_text(
+    library: &VendorLibrary,
+    symbol: &CStr,
+    device: Device,
+    op: &'static str,
+) -> Result<String> {
+    let function = symbol!(library, symbol, Text);
+    driver_text(function, device, op)
+}
+
+fn optional_pdi(library: &VendorLibrary, device: Device) -> Result<String> {
+    let function = symbol!(library, c"nvmlDeviceGetPdi", Pdi);
+    let mut info = PdiInfo {
+        // NVML_STRUCT_VERSION(Pdi, 1), not NVAPI's version encoding.
+        version: std::mem::size_of::<PdiInfo>() as u32 | (1 << 24),
+        value: 0,
+    };
+    // SAFETY: info is the aligned, versioned nvmlPdi_v1_t and device is live.
+    status("nvmlDeviceGetPdi", unsafe { function(device, &mut info) })?;
+    Ok(format!("{:016X}", info.value))
+}
+
+fn optional_value<T>(
+    capture: &mut Capture<Gpu>,
+    index: u32,
+    source: &'static str,
+    value: Result<T>,
+) -> Option<T> {
+    match value {
+        Ok(value) => Some(value),
+        Err(mut error) => {
+            // GPU indices are report positions, never captured identity values.
+            error.detail.push_str(&format!(" (GPU {index})"));
+            capture.failures.push((source, error));
+            None
+        }
+    }
+}
 
 fn driver_text(function: Text, device: Device, op: &'static str) -> Result<String> {
     let mut bytes = [0_u8; 256];
@@ -194,6 +257,11 @@ fn driver_text(function: Text, device: Device, op: &'static str) -> Result<Strin
         .position(|&b| b == 0)
         .ok_or_else(|| Error::msg(op, "unterminated driver string"))?;
     let value = std::str::from_utf8(&bytes[..end]).map_err(|e| Error::msg(op, e.to_string()))?;
+    if matches!(op, "nvmlDeviceGetSerial" | "nvmlDeviceGetBoardPartNumber")
+        && value.trim().bytes().all(|byte| byte == b'0')
+    {
+        return Err(Error::msg(op, "placeholder driver string"));
+    }
     if value.trim().is_empty() {
         return Err(Error::msg(op, "empty driver string"));
     }
@@ -207,8 +275,6 @@ pub fn nvml(path: &Path) -> Result<Capture<Gpu>> {
     let shutdown = symbol!(library, c"nvmlShutdown", End);
     let count = symbol!(library, c"nvmlDeviceGetCount_v2", Count);
     let handle = symbol!(library, c"nvmlDeviceGetHandleByIndex_v2", Handle);
-    let name = symbol!(library, c"nvmlDeviceGetName", Text);
-    let uuid = symbol!(library, c"nvmlDeviceGetUUID", Text);
     // SAFETY: All required exports have the documented NVML signatures.
     status("nvmlInit_v2", unsafe { initialize() })?;
     let mut session = Session {
@@ -245,25 +311,76 @@ pub fn nvml(path: &Path) -> Result<Capture<Gpu>> {
     for index in 0..length {
         let mut device = std::ptr::null_mut();
         // SAFETY: index is within the returned count; device is writable.
-        status("nvmlDeviceGetHandleByIndex_v2", unsafe {
+        let result = status("nvmlDeviceGetHandleByIndex_v2", unsafe {
             handle(index, &mut device)
-        })?;
+        });
+        if optional_value(&mut capture, index, "NVML handle", result).is_none() {
+            continue;
+        }
         if device.is_null() {
-            return Err(Error::msg(
-                "nvmlDeviceGetHandleByIndex_v2",
-                "null GPU handle",
+            capture.failures.push((
+                "NVML handle",
+                Error::msg("nvmlDeviceGetHandleByIndex_v2", "null GPU handle"),
             ));
+            continue;
         }
         let mut gpu = Gpu {
             index,
-            name: driver_text(name, device, "nvmlDeviceGetName")?
-                .trim()
-                .to_owned(),
-            uuid_suffix: Some(format!(
-                ": {}",
-                driver_text(uuid, device, "nvmlDeviceGetUUID")?
-            )),
-            pci_bus: None,
+            name: optional_value(
+                &mut capture,
+                index,
+                "NVML name",
+                optional_text(&library, c"nvmlDeviceGetName", device, "nvmlDeviceGetName"),
+            )
+            .map(|value| value.trim().to_owned())
+            .unwrap_or_else(|| "Unknown".to_owned()),
+            uuid_suffix: optional_value(
+                &mut capture,
+                index,
+                "NVML UUID",
+                optional_text(&library, c"nvmlDeviceGetUUID", device, "nvmlDeviceGetUUID"),
+            )
+            .map(|value| format!(": {value}")),
+            serial: optional_value(
+                &mut capture,
+                index,
+                "NVML serial",
+                optional_text(
+                    &library,
+                    c"nvmlDeviceGetSerial",
+                    device,
+                    "nvmlDeviceGetSerial",
+                ),
+            ),
+            pdi: optional_value(
+                &mut capture,
+                index,
+                "NVML PDI",
+                optional_pdi(&library, device),
+            ),
+            vbios: optional_value(
+                &mut capture,
+                index,
+                "NVML VBIOS",
+                optional_text(
+                    &library,
+                    c"nvmlDeviceGetVbiosVersion",
+                    device,
+                    "nvmlDeviceGetVbiosVersion",
+                ),
+            ),
+            board_part: optional_value(
+                &mut capture,
+                index,
+                "NVML board part",
+                optional_text(
+                    &library,
+                    c"nvmlDeviceGetBoardPartNumber",
+                    device,
+                    "nvmlDeviceGetBoardPartNumber",
+                ),
+            ),
+            ..Default::default()
         };
         if let Some(pci) = pci {
             let mut info = PciInfo {
@@ -277,7 +394,27 @@ pub fn nvml(path: &Path) -> Result<Capture<Gpu>> {
             };
             // SAFETY: info matches the published nvmlPciInfo_t layout, including both strings.
             match status("nvmlDeviceGetPciInfo_v3", unsafe { pci(device, &mut info) }) {
-                Ok(()) if info.domain == 0 && info.bus <= 255 => gpu.pci_bus = Some(info.bus),
+                Ok(()) if info.domain == 0 && info.bus <= 255 && info.device <= 31 => {
+                    gpu.pci_bus = Some(info.bus);
+                    let end = info.bus_id.iter().position(|&b| b == 0);
+                    let address = end.and_then(|end| {
+                        let bytes: Vec<u8> = info.bus_id[..end].iter().map(|&b| b as u8).collect();
+                        std::str::from_utf8(&bytes)
+                            .ok()
+                            .and_then(|text| parse_pci_address(text).ok())
+                    });
+                    match address {
+                        Some(address)
+                            if address.bus == info.bus && address.device == info.device =>
+                        {
+                            gpu.pci_address = Some(address)
+                        }
+                        _ => capture.failures.push((
+                            "NVML PCI match",
+                            Error::msg("NVML PCI match", "invalid or inconsistent PCI BDF"),
+                        )),
+                    }
+                }
                 Ok(()) => capture.failures.push((
                     "NVML PCI match",
                     Error::msg(
@@ -292,6 +429,12 @@ pub fn nvml(path: &Path) -> Result<Capture<Gpu>> {
     }
     if let Err(error) = session.finish() {
         capture.failures.push(("NVML shutdown", error));
+    }
+    if capture.items.is_empty() {
+        for (_, error) in capture.failures {
+            record(error);
+        }
+        return Err(Error::msg("NVML", "no readable GPU handles"));
     }
     Ok(capture)
 }
@@ -320,13 +463,162 @@ fn parse_smi(text: &str) -> Result<Vec<Gpu>> {
             index,
             name: name.to_owned(),
             uuid_suffix,
-            pci_bus: None,
+            ..Default::default()
         });
     }
     if gpus.is_empty() {
         return Err(Error::msg("nvidia-smi -L", "no GPU lines in output"));
     }
     Ok(gpus)
+}
+
+fn parse_pci_address(text: &str) -> Result<PciAddress> {
+    let invalid = || Error::msg("NVIDIA PCI BDF", "invalid or nonzero-domain PCI address");
+    let parts: Vec<_> = text.split(':').collect();
+    if parts.len() != 3 {
+        return Err(invalid());
+    }
+    let (device, function) = parts[2].split_once('.').ok_or_else(invalid)?;
+    let hex = |part| u32::from_str_radix(part, 16).map_err(|_| invalid());
+    let domain = hex(parts[0])?;
+    let address = PciAddress {
+        bus: hex(parts[1])?,
+        device: hex(device)?,
+        function: hex(function)?,
+    };
+    if domain != 0 || address.bus > 255 || address.device > 31 || address.function > 7 {
+        return Err(invalid());
+    }
+    Ok(address)
+}
+
+fn zero_domain_location(text: &str, address: PciAddress) -> bool {
+    let suffix = format!(
+        "bus {}, device {}, function {}",
+        address.bus, address.device, address.function
+    );
+    text == format!("PCI {suffix}") || text == format!("PCI segment 0 {suffix}")
+}
+
+/// Gets PCI BDFs from the exact NVIDIA WMI instance IDs through SetupAPI.
+/// No instance ID or PCI address is embedded in a failure message.
+pub fn adapter_pci_addresses(ids: &[&str]) -> Result<Capture<(usize, PciAddress)>> {
+    use windows::Win32::Devices::DeviceAndDriverInstallation::{
+        SP_DEVINFO_DATA, SPDRP_ADDRESS, SPDRP_BUSNUMBER, SetupDiGetDevicePropertyW,
+        SetupDiGetDeviceRegistryPropertyW, SetupDiOpenDeviceInfoW,
+    };
+    use windows::Win32::Devices::Properties::{
+        DEVPKEY_Device_LocationInfo, DEVPROP_TYPE_STRING, DEVPROPTYPE,
+    };
+    use windows::Win32::System::Registry::REG_DWORD;
+    let set = setupapi::DevInfoSet::enum_present_all()?;
+    let mut capture = Capture {
+        items: Vec::new(),
+        failures: Vec::new(),
+    };
+    for (index, id) in ids.iter().enumerate() {
+        let result = (|| {
+            let id = wide::to_wide(id);
+            let mut data = SP_DEVINFO_DATA {
+                cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32,
+                ..Default::default()
+            };
+            // SAFETY: The snapshot is live, the ID is terminated, and data has the SDK size.
+            unsafe {
+                SetupDiOpenDeviceInfoW(set.as_raw(), PCWSTR(id.as_ptr()), None, 0, Some(&mut data))
+            }
+            .map_err(|e| Error::from_win("SetupDiOpenDeviceInfoW (GPU PCI)", e))?;
+            let read = |property| -> Result<u32> {
+                let mut bytes = [0_u8; 4];
+                let mut kind = 0;
+                let mut required = 0;
+                // SAFETY: data belongs to the live snapshot and all outputs are writable.
+                unsafe {
+                    SetupDiGetDeviceRegistryPropertyW(
+                        set.as_raw(),
+                        &data,
+                        property,
+                        Some(&mut kind),
+                        Some(&mut bytes),
+                        Some(&mut required),
+                    )
+                }
+                .map_err(|e| Error::from_win("SetupDiGetDeviceRegistryPropertyW (GPU PCI)", e))?;
+                if kind != REG_DWORD.0 || required != 4 {
+                    return Err(Error::msg(
+                        "GPU PCI location",
+                        "invalid DWORD property type or size",
+                    ));
+                }
+                Ok(u32::from_le_bytes(bytes))
+            };
+            let bus = read(SPDRP_BUSNUMBER)?;
+            // For PCI, SPDRP_ADDRESS is device in high word, function in low word.
+            let address = read(SPDRP_ADDRESS)?;
+            let device = address >> 16;
+            let function = address & 0xffff;
+            if bus > 255 || device > 31 || function > 7 {
+                return Err(Error::msg(
+                    "GPU PCI location",
+                    "invalid PCI bus, device or function",
+                ));
+            }
+            let address = PciAddress {
+                bus,
+                device,
+                function,
+            };
+            let mut bytes = [0_u8; 512];
+            let mut kind = DEVPROPTYPE::default();
+            let mut required = 0;
+            // SAFETY: data belongs to this snapshot; byte buffer and output sizes are live.
+            unsafe {
+                SetupDiGetDevicePropertyW(
+                    set.as_raw(),
+                    &data,
+                    &DEVPKEY_Device_LocationInfo,
+                    &mut kind,
+                    Some(&mut bytes),
+                    Some(&mut required),
+                    0,
+                )
+            }
+            .map_err(|e| Error::from_win("SetupDiGetDevicePropertyW (GPU PCI domain)", e))?;
+            if kind != DEVPROP_TYPE_STRING
+                || required < 2
+                || required as usize > bytes.len()
+                || required % 2 != 0
+            {
+                return Err(Error::msg(
+                    "GPU PCI domain",
+                    "invalid location string type or size",
+                ));
+            }
+            let words: Vec<_> = bytes[..required as usize]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect();
+            if words.last() != Some(&0) {
+                return Err(Error::msg("GPU PCI domain", "unterminated location string"));
+            }
+            let location = String::from_utf16(&words[..words.len() - 1])
+                .map_err(|_| Error::msg("GPU PCI domain", "malformed location string"))?;
+            if !zero_domain_location(&location, address) {
+                return Err(Error::msg(
+                    "GPU PCI domain",
+                    "zero domain and matching BDF not proven",
+                ));
+            }
+            Ok(address)
+        })();
+        match result {
+            Ok(address) => capture.items.push((index, address)),
+            Err(error) => capture.failures.push(("WMI PCI match", error)),
+        }
+    }
+    Ok(capture)
 }
 
 fn pci_buses(text: &str, gpus: &mut [Gpu]) -> Result<()> {
@@ -364,24 +656,32 @@ fn pci_buses(text: &str, gpus: &mut [Gpu]) -> Result<()> {
                 "PCI address cannot be matched to NVAPI",
             ));
         }
-        buses.push((index, bus));
+        buses.push((
+            index,
+            PciAddress {
+                bus,
+                device,
+                function,
+            },
+        ));
     }
     if seen.len() != gpus.len() {
         return Err(Error::msg("nvidia-smi PCI match", "incomplete GPU list"));
     }
     for gpu in gpus {
-        gpu.pci_bus = buses
+        gpu.pci_address = buses
             .iter()
             .find(|(index, _)| *index == gpu.index)
-            .map(|(_, bus)| *bus);
+            .map(|(_, address)| *address);
+        gpu.pci_bus = gpu.pci_address.map(|address| address.bus);
     }
     Ok(())
 }
 
 /// Runs nvidia-smi by absolute path with a shared fifteen-second deadline.
-pub fn smi(path: &Path) -> Result<Capture<Gpu>> {
+pub fn smi(path: &Path, budget: Duration) -> Result<Capture<Gpu>> {
     let start = Instant::now();
-    let deadline = Duration::from_secs(15);
+    let deadline = budget;
     let cancel = process::Cancel::new();
     let run = |args: &[&str]| -> Result<String> {
         let output = process::run(
@@ -488,9 +788,14 @@ pub fn boards() -> Result<Capture<Board>> {
             // SAFETY: The enumerated handle and writable bus output are live.
             status("NvAPI_GPU_GetBusId", unsafe { bus(handle, &mut pci_bus) })?;
             // SAFETY: info is the 20-byte version-1 NV_BOARD_INFO, with sixteen inline bytes.
-            status("NvAPI_GPU_GetBoardInfo", unsafe {
+            if let Err(error) = status("NvAPI_GPU_GetBoardInfo", unsafe {
                 board(handle, &mut info)
-            })?;
+            }) {
+                // Keep the successfully identified bus in the complete enumeration.
+                // Failed optional board bytes must not suppress another GPU's board.
+                info.bytes = [0; 16];
+                capture.failures.push(("NVAPI board", error));
+            }
             Ok(Board {
                 pci_bus,
                 bytes: info.bytes,
@@ -531,6 +836,40 @@ mod tests {
 
     #[test]
     fn nvidia_smi_parser_keeps_csharp_crlf_and_uuid_delimiters() {
+        let address = PciAddress {
+            bus: 1,
+            device: 2,
+            function: 3,
+        };
+        assert_eq!(
+            parse_pci_address("00000000:01:02.3").expect("PCI BDF"),
+            address
+        );
+        for text in [
+            "0001:01:02.3",
+            "0000:100:02.3",
+            "0000:01:20.0",
+            "0000:01:00.8",
+            "invalid",
+        ] {
+            assert!(parse_pci_address(text).is_err());
+        }
+        assert!(zero_domain_location(
+            "PCI bus 1, device 2, function 3",
+            address
+        ));
+        assert!(zero_domain_location(
+            "PCI segment 0 bus 1, device 2, function 3",
+            address
+        ));
+        for text in [
+            "PCI segment 1 bus 1, device 2, function 3",
+            "PCI bus 1, device 2, function 4",
+            "unknown",
+            "PCI bus 1, device 2, function 3 extra",
+        ] {
+            assert!(!zero_domain_location(text, address));
+        }
         let fixture = include_str!("../../tests/fixtures/wp-07/nvidia-smi.fixture");
         for input in [fixture.to_owned(), fixture.replace('\n', "\r\n")] {
             let mut gpus = parse_smi(&input).expect("fabricated SMI capture");

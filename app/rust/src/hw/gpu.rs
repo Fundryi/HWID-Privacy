@@ -6,15 +6,46 @@ use crate::{
     win::{self, nvidia, process, wmi},
 };
 
+#[derive(Clone)]
 struct Adapter {
     name: String,
     pnp_id: String,
     hardware_id: Option<String>,
+    pci_address: Option<nvidia::PciAddress>,
 }
 
 /// Collects all GPU identities through optional NVIDIA APIs and cached SetupAPI IDs.
 pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     let source = std::cell::Cell::new("");
+    let smi_seen = std::cell::RefCell::new(std::collections::HashSet::new());
+    let smi_start = std::cell::Cell::new(None);
+    let smi = |path: std::path::PathBuf| {
+        let start = smi_start.get().unwrap_or_else(|| {
+            let start = std::time::Instant::now();
+            smi_start.set(Some(start));
+            start
+        });
+        let resolved = std::fs::canonicalize(&path)
+            .map_err(|e| win::Error::msg("nvidia-smi path", e.to_string()))?;
+        // Windows paths are case-insensitive; canonicalize resolves directory links too.
+        if !smi_seen
+            .borrow_mut()
+            .insert(resolved.as_os_str().to_ascii_lowercase())
+        {
+            return Err(win::Error::msg(
+                "nvidia-smi path",
+                "resolved executable already attempted",
+            ));
+        }
+        let budget = std::time::Duration::from_secs(15).saturating_sub(start.elapsed());
+        if budget.is_zero() {
+            return Err(win::Error::msg(
+                "nvidia-smi",
+                "shared fifteen-second deadline expired",
+            ));
+        }
+        nvidia::smi(&resolved, budget)
+    };
     let nvml_system = || {
         let capture = nvidia::nvml(&process::system32("nvml.dll"))?;
         source.set("NVML (System32)");
@@ -26,12 +57,12 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         Ok(capture)
     };
     let smi_system = || {
-        let capture = nvidia::smi(&process::system32("nvidia-smi.exe"))?;
+        let capture = smi(process::system32("nvidia-smi.exe"))?;
         source.set("nvidia-smi (System32)");
         Ok(capture)
     };
     let smi_standard = || {
-        let capture = nvidia::smi(&nvidia::standard_path("nvidia-smi.exe")?)?;
+        let capture = smi(nvidia::standard_path("nvidia-smi.exe")?)?;
         source.set("nvidia-smi (NVSMI)");
         Ok(capture)
     };
@@ -67,6 +98,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                     .str("PNPDeviceID")
                     .unwrap_or_else(|| "Unknown".to_owned()),
                 hardware_id: None,
+                pci_address: None,
             })
             .collect::<Vec<_>>(),
         Err(error) if native.is_some() => {
@@ -75,11 +107,34 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         }
         Err(error) => return Err(error),
     };
+    let mut nvidia_adapters = Vec::new();
     if let Some(gpus) = &native {
         let is_nvidia = |adapter: &Adapter| {
             adapter.pnp_id.to_ascii_uppercase().contains("VEN_10DE")
                 || (adapter.pnp_id == "Unknown" && adapter.name.starts_with("NVIDIA "))
         };
+        nvidia_adapters = adapters
+            .iter()
+            .filter(|adapter| is_nvidia(adapter))
+            .cloned()
+            .collect();
+        if !nvidia_adapters.is_empty() {
+            let ids: Vec<_> = nvidia_adapters
+                .iter()
+                .map(|adapter| adapter.pnp_id.as_str())
+                .collect();
+            match nvidia::adapter_pci_addresses(&ids) {
+                Ok(capture) => {
+                    record_failures(out, &capture.failures);
+                    for (index, address) in capture.items {
+                        nvidia_adapters[index].pci_address = Some(address);
+                    }
+                }
+                Err(error) => {
+                    out.fallback_failed("WMI PCI match", &error);
+                }
+            }
+        }
         // Same NVIDIA count on both sides: every WMI NVIDIA row is in the
         // NVIDIA block, even when the driver names differ (e.g. no "NVIDIA "
         // prefix in older NVML names), so none is listed twice.
@@ -142,6 +197,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         native.as_deref().unwrap_or(&[]),
         boards.as_ref(),
         &adapters,
+        &nvidia_adapters,
     );
     if native.is_none() {
         out.source("WMI + SetupAPI");
@@ -197,6 +253,7 @@ fn render(
     gpus: &[nvidia::Gpu],
     boards: Option<&nvidia::Capture<nvidia::Board>>,
     adapters: &[Adapter],
+    nvidia_adapters: &[Adapter],
 ) {
     for gpu in gpus {
         // C# parity: Hardware/GpuInfo.cs:52-65. NVIDIA GPU groups are adjacent;
@@ -209,35 +266,82 @@ fn render(
             out.id_value(uuid);
         }
     }
-    // Keep C#'s single, GPU-0 board line after the entire NVIDIA block.
-    // AD-15 does not yet approve placement of extra per-GPU board lines.
-    if let (Some(gpu), Some(boards)) = (gpus.first(), boards) {
-        // If any NVAPI handle's identity/value failed, its bus might alias
-        // a successful handle. Never infer uniqueness from an incomplete list.
-        let complete = boards
-            .failures
-            .iter()
-            .all(|(_, error)| error.op == "NvAPI_Unload");
-        if let Some(board) = complete
-            .then(|| matched_board(gpu, gpus, &boards.items))
-            .flatten()
-        {
-            if let Some(value) = nvidia::board_value(&board.bytes) {
-                // C# parity: Hardware/GpuInfo.cs:74-75. AD-12 changes only
-                // the label; AD-13 changes binary values to separator-free hex.
-                out.blank()
-                    .text(&format!("Board Serial Number: {value}"))
-                    .id_value(&value);
-            }
+    // AD-15/F-07a: keep details after all NVIDIA groups, in GPU index order.
+    let mut detail_line = false;
+    for gpu in gpus {
+        let prefix = if gpus.len() == 1 {
+            String::new()
         } else {
-            // AD-15 permits omitting an unproven board match; retain evidence.
-            out.fallback_failed(
-                "NVAPI PCI match",
-                &win::Error::msg(
+            format!("GPU {} ", gpu.index)
+        };
+        if let Some(boards) = boards {
+            // A failed bus/handle makes identity incomplete. Optional board failures
+            // retain their successfully identified buses and do not hide other boards.
+            let complete = boards
+                .failures
+                .iter()
+                .all(|(_, error)| matches!(error.op, "NvAPI_Unload" | "NvAPI_GPU_GetBoardInfo"));
+            // Preserve the single-GPU board contract even if WMI enrichment fails.
+            // Multi-GPU output additionally requires a complete, unique BDF join to WMI.
+            let wmi_matched = gpus.len() == 1
+                || (nvidia_adapters.len() == gpus.len()
+                    && nvidia_adapters
+                        .iter()
+                        .all(|adapter| adapter.pci_address.is_some())
+                    && gpus.iter().all(|gpu| {
+                        gpu.pci_address.is_some_and(|address| {
+                            nvidia_adapters
+                                .iter()
+                                .filter(|adapter| adapter.pci_address == Some(address))
+                                .count()
+                                == 1
+                        })
+                    }));
+            if let Some(board) = (complete && wmi_matched)
+                .then(|| matched_board(gpu, gpus, &boards.items))
+                .flatten()
+            {
+                if let Some(value) = nvidia::board_value(&board.bytes) {
+                    // C# parity: Hardware/GpuInfo.cs:74-75. AD-12 changes only
+                    // the label; AD-13 changes binary values to separator-free hex.
+                    if !detail_line {
+                        out.blank();
+                        detail_line = true;
+                    }
+                    out.text(&format!("{prefix}Board Serial Number: {value}"))
+                        .id_value(&value);
+                }
+            } else {
+                // AD-15 permits omitting an unproven board match; retain evidence.
+                out.fallback_failed(
                     "NVAPI PCI match",
-                    format!("GPU {}: unique PCI bus match not proven", gpu.index),
-                ),
-            );
+                    &win::Error::msg(
+                        "NVAPI PCI match",
+                        format!("GPU {}: unique PCI bus match not proven", gpu.index),
+                    ),
+                );
+            }
+        }
+        for (label, value) in [
+            ("Serial Number", &gpu.serial),
+            ("PDI", &gpu.pdi),
+            ("Board Part Number", &gpu.board_part),
+        ] {
+            if let Some(value) = value {
+                if !detail_line {
+                    out.blank();
+                    detail_line = true;
+                }
+                out.text(&format!("{prefix}{label}: {value}"))
+                    .id_value(value);
+            }
+        }
+        if let Some(value) = &gpu.vbios {
+            if !detail_line {
+                out.blank();
+                detail_line = true;
+            }
+            out.text(&format!("{prefix}VBIOS Version: {value}"));
         }
     }
     if let Some(boards) = boards {
@@ -287,6 +391,7 @@ mod tests {
             name: "NVIDIA GeForce RTX 5080".to_owned(),
             uuid_suffix: Some(": GPU-358d91ef-2174-43eb-9221-d36a721cd603".to_owned()),
             pci_bus: Some(1),
+            ..Default::default()
         };
         let board = nvidia::Capture {
             items: vec![nvidia::Board {
@@ -299,6 +404,7 @@ mod tests {
             name: "Intel(R) UHD Graphics 770".to_owned(),
             pnp_id: "PCI\\VEN_8086&DEV_A780\\3&24137E09&0&10".to_owned(),
             hardware_id: Some("PCI\\VEN_8086&DEV_A780&SUBSYS_88881043&REV_04".to_owned()),
+            pci_address: None,
         };
         let mut out = Out::new();
         render(
@@ -306,6 +412,7 @@ mod tests {
             std::slice::from_ref(&gpu),
             Some(&board),
             &[adapter],
+            &[],
         );
         let section = out.finish();
         assert_eq!(
@@ -326,11 +433,13 @@ mod tests {
                 name: "Unknown".to_owned(),
                 pnp_id: "Unknown".to_owned(),
                 hardware_id: None,
+                pci_address: None,
             }],
+            &[],
         );
         assert_eq!(out.finish().body, "GPU 0\r\n└── Unknown\r\n    └── Unknown");
         let mut out = Out::new();
-        render(&mut out, &[], None, &[]);
+        render(&mut out, &[], None, &[], &[]);
         assert_eq!(out.finish().body, "No GPU detected.");
         let mut out = Out::new();
         render(
@@ -343,6 +452,7 @@ mod tests {
                     win::Error::msg("NvAPI_GPU_GetBoardInfo", "fabricated failure"),
                 )],
             }),
+            &[],
             &[],
         );
         assert!(out.finish().body.ends_with(
@@ -357,6 +467,12 @@ mod tests {
             name: "NVIDIA".to_owned(),
             uuid_suffix: None,
             pci_bus,
+            pci_address: pci_bus.map(|bus| nvidia::PciAddress {
+                bus,
+                device: 0,
+                function: 0,
+            }),
+            ..Default::default()
         };
         let gpus = [gpu(0, Some(2)), gpu(1, Some(3))];
         let boards = [
@@ -394,8 +510,7 @@ mod tests {
             )
             .is_none()
         );
-        // AD-15: until additional placement is approved, keep one matched
-        // GPU-0 board line after both NVIDIA groups, regardless of NVAPI order.
+        // AD-15/F-07a: per-GPU lines follow both groups, regardless of NVAPI order.
         let mut out = Out::new();
         render(
             &mut out,
@@ -405,10 +520,19 @@ mod tests {
                 failures: vec![],
             }),
             &[],
+            &gpus
+                .iter()
+                .map(|gpu| Adapter {
+                    name: "NVIDIA".to_owned(),
+                    pnp_id: "Unknown".to_owned(),
+                    hardware_id: None,
+                    pci_address: gpu.pci_address,
+                })
+                .collect::<Vec<_>>(),
         );
         assert_eq!(
             out.finish().body,
-            "GPU 0\r\n└── NVIDIA\r\nGPU 1\r\n└── NVIDIA\r\n\r\nBoard Serial Number: 2222222222222222"
+            "GPU 0\r\n└── NVIDIA\r\nGPU 1\r\n└── NVIDIA\r\n\r\nGPU 0 Board Serial Number: 2222222222222222\r\nGPU 1 Board Serial Number: 1111111111111111"
         );
     }
 
@@ -432,7 +556,10 @@ mod tests {
             assert!(!section.body.contains("not ported yet"));
         }
         // Independent fallback cross-check, using the same bounded process helper.
-        match nvidia::smi(&process::system32("nvidia-smi.exe")) {
+        match nvidia::smi(
+            &process::system32("nvidia-smi.exe"),
+            std::time::Duration::from_secs(15),
+        ) {
             Ok(capture) => {
                 for gpu in &capture.items {
                     println!(
@@ -488,12 +615,13 @@ mod tests {
                         Adapter {
                             name: row.str("Name").unwrap_or_else(|| "Unknown".to_owned()),
                             hardware_id: ctx.hardware_id(&pnp_id).map(str::to_owned),
+                            pci_address: None,
                             pnp_id,
                         }
                     })
                     .collect();
                 let mut out = Out::new();
-                render(&mut out, &[], None, &adapters);
+                render(&mut out, &[], None, &adapters, &[]);
                 println!(
                     "BEGIN WMI-ONLY GPU INFO\n{}END WMI-ONLY GPU INFO",
                     out.finish().body
