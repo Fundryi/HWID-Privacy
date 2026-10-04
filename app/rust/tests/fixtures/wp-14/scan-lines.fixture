@@ -1,0 +1,29 @@
+The following non-present (ghost) devices were found:
+----------------------------------------
+Device Name       : True
+Device Description: USB Input Device
+Hardware ID       : USB\VID_046D&PID_C534&REV_2901&MI_00USB\VID_046D&PID_C534&MI_00
+Class             : HIDClass
+----------------------------------------
+Device Name       : True
+Device Description: Generic USB Hub
+Hardware ID       : USB\VID_05E3&PID_0610&REV_9312USB\VID_05E3&PID_0610
+Class             : USB
+Status            : Whitelisted (will not be removed)
+----------------------------------------
+Device Name       : True
+Device Description: Intel(R) Wi-Fi 6 AX201 160MHz
+Hardware ID       : PCI\VEN_8086&DEV_A0F0&SUBSYS_00748086&REV_20PCI\VEN_8086&DEV_A0F0&SUBSYS_00748086
+Class             : Net
+Status            : Presence unclear (will not be removed)
+----------------------------------------
+Device Name       : True
+Device Description: Disk drive
+Hardware ID       : SCSI\DiskNVMe____Samsung_SSD_980_PRO_5B2QGXA7SCSI\DiskNVMe____
+Class             : DiskDrive
+Status            : Whitelisted (will not be removed)
+Status            : Presence unclear (will not be removed)
+----------------------------------------
+Total non-present devices found: 4
+Whitelisted devices: 2
+Devices that can be removed: 1

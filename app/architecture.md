@@ -1,303 +1,65 @@
-# AI-README: HWID Checker Architecture Index
+# HWID Checker Architecture
 
-> **READ THIS FIRST** - This file is the authoritative guide for AI-assisted code modifications.
-> WE USE THIS BUILD COMMAND ALWAYS: dotnet publish "app/src/HWIDChecker.csproj" -c Release
+HWIDChecker is a native Rust Windows x64 inspector, cleaner, and updater. The shipped executable comes from `app/rust/`. It uses native Win32 controls and a static CRT and needs neither .NET nor the VC++ redistributable. Every launch requires administrator rights. The C# WinForms implementation in `app/src/` remains buildable for reference and rollback; it is no longer shipped.
 
----
+## Build and publish
 
-## Status
+From the repository root:
 
-- Legacy `MainForm*` and `UI/DataHandlers/*` paths were removed in Phase 2 cleanup.
-- Active UI entry point is `UI/Forms/SectionedViewForm.cs`.
-
----
-
-## Quick Reference: Modification Patterns
-
-| Task | Files to Modify | Key Classes |
-|------|----------------|-------------|
-| Add new hardware info type | `Hardware/*Info.cs`, `HardwareInfoManager.cs` | `IHardwareInfo` |
-| Add property to existing hardware | `Hardware/*Info.cs` | Specific info class |
-| Change text formatting | `TextFormattingService.cs` | `TextFormattingService` |
-| Add UI button/handler | `SectionedViewForm.cs` | `SectionedViewForm` (buttons created inline) |
-| Add export format | `FileExportService.cs` | `FileExportService` |
-
----
-
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           Program.cs                                 │
-│                           (Entry Point)                              │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     SectionedViewForm.cs                            │
-│              (MAIN UI - Sidebar + Content + Buttons)                │
-└──────┬──────────────────────────────────────────────────┬───────────┘
-       │                                                  │
-       ▼                                                  ▼
-┌─────────────────────┐                        ┌─────────────────────┐
-│ HardwareInfoManager │                        │   Services Layer    │
-│  (Orchestrator)     │                        │                     │
-└──────┬──────────────┘                        │ • TextFormatting    │
-       │                                       │ • FileExport        │
-       │                                       │ • DeviceCleaning    │
-       │                                       │ • EventLogCleaning  │
-       │                                       │ • AutoUpdate        │
-       ▼                                       └─────────────────────┘
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Hardware Providers                               │
-│              (Implement IHardwareInfo)                               │
-│                                                                     │
-│ DiskDriveInfo, CpuInfo, GpuInfo, BiosInfo,                         │
-│ MotherboardInfo, RamInfo, TpmInfo, UsbInfo,                        │
-│ MonitorInfo, NetworkInfo, ArpInfo                                  │
-└─────────────────────────────────────────────────────────────────────┘
+```powershell
+pwsh -NoProfile -File app/rust/check.ps1
+dotnet build app/HWID-CHECKER.sln -c Release -p:Platform=x64
+dotnet msbuild app/rust/HWIDChecker.Rust.proj -t:Publish
 ```
 
----
+Build produces the Rust release exe under `app/rust/target/release/` and leaves the root exe unchanged. Publish runs `app/rust/release.ps1`: the base checks, the Cargo `dist` build, and dist PE/import/manifest validation. Only after success does the Rust Publish target copy `app/rust/target/dist/HWIDChecker.exe` to the root. C# has no PostPublish copy target. The Rust release script performs no version bump, commit, tag, push, or upload.
 
-## Core Contracts
+## Source layout and contracts
 
-### IHardwareInfo Interface
-**Location:** `Hardware/IHardwareInfo.cs`
+| Path under `app/rust/src/` | Responsibility |
+|---|---|
+| `main.rs` | GUI entrypoint and read-only CLI modes |
+| `hw/` | Fourteen providers, shared collection context, parallel collection and deadlines |
+| `win/` | Windows API wrappers, RAII handles, WMI, SMBIOS/EDID/storage parsers, bounded child processes, HTTP and hashing |
+| `clean/` | Ghost-device removal, whitelist JSON, event-log cleaning, destructive-operation guard |
+| `ui/` | Main window, raw view, cleaner/whitelist/confirmation/update windows, layout and drawing |
+| `update.rs` | Hash comparison, retained download, executable replacement, rollback and restart |
+| `report.rs` | Section model, output builder, text formatting and export serialization |
 
-All hardware info classes must implement:
-```csharp
-string GetInformation();     // Returns raw data string
-string SectionTitle { get; } // Display title for UI
-```
+`hw/mod.rs` defines the provider table and context. Providers return `report::Section`; `report::Out` builds report text and diagnostics. A collection shares cached SetupAPI and SMBIOS data. WMI connections belong to the calling thread. Providers run in parallel and report progress; a provider exceeding 60 seconds becomes a timeout section.
 
----
+The fourteen sections are disk, motherboard, BIOS, chassis, system, RAM, CPU, TPM, USB, GPU, Bluetooth, monitors, network, and ARP. Sources include WMI, SetupAPI, SMBIOS, storage IOCTLs, registry data, IP Helper, TPM APIs, and optional GPU/Bluetooth DLLs. Optional DLLs are loaded dynamically; missing APIs use fallback paths.
 
-## File Responsibilities
+`ui` may call `hw`, `clean`, `update`, and `report`. Hardware, cleaning, and update logic may call `win` and `report`; `win` calls the OS. Worker failures are returned or recorded. Provider/worker panics are caught. Windows API safety and handle ownership live in the native wrappers and UI kit. The binding UI design is [Rust DESIGN.md](rust/DESIGN.md).
 
-### Hardware Layer (`Hardware/`)
+## Collection and export
 
-| File | Purpose | Dependencies |
-|------|---------|-------------|
-| `HardwareInfoManager.cs` | **ORCHESTRATOR** - Combines all hardware providers, runs parallel collection | All `*Info.cs`, `TextFormattingService` |
-| `IHardwareInfo.cs` | Contract for all hardware providers | None |
-| `DiskDriveInfo.cs` | Collects disk info (device ID, model, serial, firmware, volume serial, WWN/UniqueId) | `TextFormattingService`, WMI, PowerShell |
-| `CpuInfo.cs` | Collects CPU info (name, processor ID, serial) | `TextFormattingService`, WMI |
-| `BiosInfo.cs` | Collects BIOS/SMBIOS info (manufacturer, version, UUID) | `TextFormattingService`, WMI |
-| `MotherboardInfo.cs` | Collects motherboard info (product, serial, manufacturer) | `TextFormattingService`, WMI |
-| `RamInfo.cs` | Collects RAM info (capacity, speed, device locator) | `TextFormattingService`, WMI |
-| `GpuInfo.cs` | Collects GPU info (name, device ID, driver version) | `TextFormattingService`, WMI |
-| `TpmInfo.cs` | Collects TPM state + EK details (hash/serial/thumbprint/issuer) | `TextFormattingService`, PowerShell |
-| `UsbInfo.cs` | Collects USB device info (device ID, description) | `TextFormattingService`, WMI |
-| `MonitorInfo.cs` | Collects monitor info (name, serial, product code) | `TextFormattingService`, WMI |
-| `NetworkInfo.cs` | Collects network adapter info (MAC, adapter type, driver) | `TextFormattingService`, WMI |
-| `ArpInfo.cs` | Collects dynamic ARP entries (IP + MAC) | `TextFormattingService`, `arp.exe` |
+The main window starts collection, receives sections and progress from workers, and displays the selected section. Refresh starts a new collection. Export serializes the complete report to `HWID-EXPORT-dd.MM.yyyy-HH;mm;ss.txt`. Output preserves CRLF line endings, UTF-16 width semantics, the 93-character main separator and 40-character item separator. Data and diagnostics are separate.
 
-### Services Layer (`Services/`)
+## Device and event-log cleaning
 
-| File | Purpose | Dependencies |
-|------|---------|-------------|
-| `TextFormattingService.cs` | **FORMATTER** - Formats all output text (headers, sections, separators) | None |
-| `FileExportService.cs` | Exports hardware data to timestamped TXT files | None |
-| `DeviceCleaningService.cs` | Scans and removes ghost (non-present) devices | `SetupApi` (Win32) |
-| `SystemCleaningService.cs` | Wrapper for async device cleaning operations | `DeviceCleaningService` |
-| `DeviceWhitelistService.cs` | Manages device whitelist for cleaning | None |
-| `EventLogCleaningService.cs` | Cleans Windows event logs | None |
-| `AutoUpdateService.cs` | Checks GitHub-hosted exe via SHA256 hash diff and auto-updates local exe | `HttpClient`, hashing, WinForms |
+`clean/devices.rs` scans through SetupAPI, keeps devices with unclear presence, and removes only confirmed non-present devices after whitelist filtering and confirmation. `clean/whitelist.rs` stores the whitelist in the temp directory. The UI provides details, review output, and whitelist management.
 
-### Services - Subdirectories
+`clean/eventlog/` processes standard and discovered event channels, requests security/backup privileges, skips missing/disabled/duplicate and known OS-locked channels, and uses native event-log APIs with bounded fallback processes. Analytic/Debug channels are restored after the disable-clear-re-enable cycle. The cleaner reports live progress and final totals. Log clearing removes event records; device cleaning is a separate action.
 
-| Subdir | Purpose |
-|--------|---------|
-| `Models/` | Data models (`DeviceDetail`) |
-| `Win32/` | Native Windows API P/Invoke declarations (`SetupApi`) |
+Debug builds guard destructive operations unless `HWID_ALLOW_DESTRUCTIVE=1` is set for an authorized child process. Release and dist builds perform confirmed actions normally.
 
-### UI Layer (`UI/`)
+## Updates
 
-| File | Purpose | Dependencies |
-|------|---------|-------------|
-| `Forms/SectionedViewForm.cs` | **MAIN UI** - Sidebar navigation + content display + all buttons | `HardwareInfoManager`, `FileExportService`, `AutoUpdateService` |
-| `Forms/CleanDevicesForm.cs` | Ghost device cleaning UI | `SystemCleaningService`, `DeviceWhitelistService` |
-| `Forms/CleanLogsForm.cs` | Event log cleaning UI | `EventLogCleaningService` |
-| `Forms/WhitelistDevicesForm.cs` | Device whitelist management UI | `DeviceWhitelistService` |
-| `Forms/DeviceRemovalConfirmationForm.cs` | Confirmation dialog for device removal | None |
-| `Components/Buttons.cs` | Button styling utilities | None |
-| `Components/ThemeColors.cs` | Color constants for dark theme | None |
+`update.rs` uses the unchanged channel `https://github.com/Fundryi/HWID-Privacy/raw/main/HWIDChecker.exe` through `win/http.rs`. It compares SHA-256 of the download and running exe, independent of version ordering. It retains the checked bytes, validates size/hash and x64 PE before installation, renames the running image to a unique sibling, creates the replacement, and starts it before exiting. Write/restart errors attempt rollback; startup removes old siblings. See [auto-update.md](auto-update.md).
 
----
+Deployed C# clients in `app/src/Services/AutoUpdateService.cs` use the same URL and hash comparison. They download to a temp exe and use a batch file to copy and restart. The payload has no managed-assembly requirement, so the native exe can replace the C# exe.
 
-## Critical Workflows
+## Editing routes
 
-### Adding a New Hardware Info Type
+| Change | Read and edit |
+|---|---|
+| Provider data | Existing `hw/` provider, `hw/mod.rs` contract, relevant `win/` wrapper |
+| Shared text/export | `report.rs`, export handler in `ui/main_window.rs` |
+| UI | Relevant `ui/` window, UI kit, `rust/DESIGN.md` |
+| Device/whitelist | `clean/devices.rs`, `clean/whitelist.rs`, related UI and SetupAPI wrappers |
+| Event logs | `clean/eventlog/`, `win/evt.rs`, `ui/clean_logs.rs` |
+| Updater | `update.rs`, `win/http.rs`, `ui/update_progress.rs` |
+| Build/staging | `HWIDChecker.Rust.proj`, `release.ps1`, `check.ps1`, Cargo config and resource manifest |
 
-**Example: Adding `SoundCardInfo.cs`**
-
-1. **Create the provider class** (`Hardware/SoundCardInfo.cs`):
-   - Implement `IHardwareInfo`
-   - Set `SectionTitle => "SOUND CARDS"`
-   - Use WMI to query `Win32_SoundDevice`
-   - Inject `TextFormattingService` in constructor
-   - Return formatted string from `GetInformation()`
-
-2. **Register in HardwareInfoManager** (`Hardware/HardwareInfoManager.cs`):
-   - Add to `InitializeProviders()` list:
-   ```csharp
-   new SoundCardInfo(textFormatter)
-   ```
-
-### Adding a New Property to Existing Hardware
-
-**Example: Adding "Temperature" to CPU info**
-
-1. **Modify the info class** (`Hardware/CpuInfo.cs`):
-   - Add WMI query for temperature (if available)
-   - Append to output string
-
-### Modifying Text Formatting
-
-**Location:** `Services/TextFormattingService.cs`
-
-- `FormatHeader()` - Main title formatting
-- `FormatSection()` - Section header + content wrapper
-- `AppendInfoLine()` - Single line: `Label: Value`
-- `AppendCombinedInfoLine()` - Multi-column with ` | ` separator
-- `AppendDeviceGroup()` - Multiple devices with separators
-
-Constants at top:
-- `LINE_WIDTH = 93` - Main separator width
-- `ITEM_SEPARATOR_WIDTH = 40` - Item separator width
-
-## Device Cleaning System
-
-**Flow:**
-1. `CleanDevicesForm` → `SystemCleaningService.ScanForGhostDevicesAsync()`
-2. `SystemCleaningService` → `DeviceCleaningService.ScanForGhostDevices()`
-3. `DeviceCleaningService` uses `SetupApi` (Win32) to enumerate devices
-4. Filters out whitelisted devices (`DeviceWhitelistService`)
-5. Shows confirmation dialog
-6. Removes via `SetupDiRemoveDevice()`
-
-**Win32 Integration:**
-- `Services/Win32/SetupApi.cs` - P/Invoke declarations
-- `SP_DEVINFO_DATA` struct - Device info structure
-- `SetupDiGetClassDevs()` - Get device list
-- `SetupDiEnumDeviceInfo()` - Enumerate devices
-- `SetupDiGetDeviceRegistryProperty()` - Get device properties
-- `SetupDiRemoveDevice()` - Remove device
-
----
-
-## Auto-Update System
-
-**Location:** `Services/AutoUpdateService.cs`
-
-**Flow:**
-1. Download GitHub `HWIDChecker.exe` (raw URL with cache-busting query)
-2. Compute SHA256 of GitHub file
-3. Compute SHA256 of current local executable
-4. If hashes differ, download update to temp file
-5. Create batch script to replace exe and restart app
-
-**Dependency:** `HttpClient` + hashing (`System.Security.Cryptography`)
-
----
-
-## Data Flow Diagram
-
-```mermaid
-graph TD
-    A[User Clicks Scan] --> B[SectionedViewForm]
-    B --> C[HardwareInfoManager.GetAllHardwareInfo]
-    C --> D[Parallel: GetInformation from each *Info]
-    D --> E[TextFormattingService.FormatSection]
-    E --> F[Combine all sections]
-    F --> G[Parse into sections]
-    G --> H[Create sidebar buttons]
-    H --> I[Display in content panel]
-    
-    J[User Clicks Export] --> K[FileExportService.ExportHardwareInfo]
-    K --> L[Save as HWID-EXPORT-DD.MM.YY-HH;mm;ss.txt]
-```
-
----
-
-## Important Constants & Config
-
-| Location | Constant | Value | Purpose |
-|----------|----------|-------|---------|
-| `TextFormattingService.cs` | `LINE_WIDTH` | 93 | Main separator width |
-| `TextFormattingService.cs` | `ITEM_SEPARATOR_WIDTH` | 40 | Item separator width |
-| `SectionedViewForm.cs` | `ENABLE_DEBUG_BUTTON` | `true` | Show/hide debug button |
-| `Program.cs` | Main form | `SectionedViewForm` | Entry point UI |
-
----
-
-## When to Update This File
-
-**Update architecture.md when:**
-
-1. Adding/removing hardware info types
-2. Changing service layer contracts
-3. Adding new UI forms or major UI restructuring
-4. Modifying the data flow between layers
-5. Adding new Win32 integrations or native API calls
-6. Changing the auto-update mechanism
-
-**DO NOT update for:**
-- Bug fixes in existing code
-- Minor UI tweaks
-- Performance optimizations
-- Code refactoring that doesn't change architecture
-
----
-
-## Quick Start for AI
-
-**Before making ANY changes:**
-
-1. Read this file (`architecture.md`)
-2. Identify the modification pattern from the Quick Reference table
-3. Read the relevant files listed in that pattern
-4. Make changes to ALL files listed in the pattern
-5. Test that the change works end-to-end
-
-**Example Prompt:**
-> "Read AI-README.md, then add a new property 'PowerState' to DiskDriveInfo. Update all necessary files according to the 'Add property to existing hardware' pattern."
-
----
-
-## File Structure Summary
-
-```
-source/
-├── Program.cs                          # Entry point
-├── HWIDChecker.csproj                  # Project file
-├── Hardware/
-│   ├── IHardwareInfo.cs                # Interface
-│   ├── HardwareInfoManager.cs          # ORCHESTRATOR
-│   └── *Info.cs                        # 12 hardware providers
-├── Services/
-│   ├── TextFormattingService.cs        # FORMATTER
-│   ├── FileExportService.cs            # Export to TXT
-│   ├── DeviceCleaningService.cs        # Ghost device removal
-│   ├── SystemCleaningService.cs        # Async wrapper
-│   ├── DeviceWhitelistService.cs       # Whitelist management
-│   ├── EventLogCleaningService.cs      # Log cleaning
-│   ├── AutoUpdateService.cs            # GitHub updates
-│   ├── Models/                         # Data models
-│   └── Win32/                          # Native Windows API
-└── UI/
-    ├── Forms/
-    │   ├── SectionedViewForm.cs         # MAIN UI
-    │   ├── CleanDevicesForm.cs         # Device cleaning
-    │   ├── CleanLogsForm.cs            # Log cleaning
-    │   ├── WhitelistDevicesForm.cs     # Whitelist UI
-    │   └── DeviceRemovalConfirmationForm.cs
-    ├── Components/                     # Reusable UI components
-    │   ├── Buttons.cs
-    │   └── ThemeColors.cs
-```
-
----
-
-**Last Updated:** 2026-02-09
+Read `AGENTS.md` first, preserve public contracts and established report text, then run `check.ps1` and check the actual changed behavior. Update this document when module ownership, contracts, data flow, or deployment changes.

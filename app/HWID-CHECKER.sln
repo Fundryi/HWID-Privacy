@@ -4,6 +4,10 @@ VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HWIDChecker", "src\HWIDChecker.csproj", "{ED5B2CF8-462D-3C30-3B21-D05D89E95ADC}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Rust", "Rust", "{4858C398-2873-471F-893D-C0C4C47353E3}"
+EndProject
+Project("{13B669BE-BB05-4DDF-9536-439F39A36129}") = "HWIDChecker.Rust", "rust\HWIDChecker.Rust.proj", "{761D022C-432A-4DAD-95A7-68716FAC1D48}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Release|x64 = Release|x64
@@ -11,11 +15,16 @@ Global
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{ED5B2CF8-462D-3C30-3B21-D05D89E95ADC}.Release|x64.ActiveCfg = Release|x64
 		{ED5B2CF8-462D-3C30-3B21-D05D89E95ADC}.Release|x64.Build.0 = Release|x64
+		{761D022C-432A-4DAD-95A7-68716FAC1D48}.Release|x64.ActiveCfg = Release|x64
+		{761D022C-432A-4DAD-95A7-68716FAC1D48}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {F11AC911-7131-40F4-BAD6-323C2651F463}
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{761D022C-432A-4DAD-95A7-68716FAC1D48} = {4858C398-2873-471F-893D-C0C4C47353E3}
 	EndGlobalSection
 EndGlobal

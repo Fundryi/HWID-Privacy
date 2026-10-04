@@ -1,0 +1,18 @@
+{
+  "names": { "7": "Ethernet", "9": "vEthernet (WSL)", "17": "Wi-Fi" },
+  "entries": [
+    { "interface_index": 9, "ip": "fe80::ab", "physical_address": [60, 253, 254, 100, 25, 130], "state": 4 },
+    { "interface_index": 7, "ip": "192.0.2.2", "physical_address": [60, 253, 254, 100, 25, 131], "state": 0 },
+    { "interface_index": 7, "ip": "192.0.2.100", "physical_address": [60, 253, 254, 100, 25, 132], "state": 6 },
+    { "interface_index": 7, "ip": "2001:db8::1", "physical_address": [60, 253, 254, 100, 25, 133], "state": 5 },
+    { "interface_index": 9, "ip": "fe80::2", "physical_address": [60, 253, 254, 100, 25, 134], "state": 2 },
+    { "interface_index": 8, "ip": "198.51.100.8", "physical_address": [236, 13, 154, 94, 114, 180], "state": 3 },
+    { "interface_index": 17, "ip": "2001:db8:1::7", "physical_address": [200, 127, 84, 228, 19, 146], "state": 5 },
+    { "interface_index": 7, "ip": "192.0.2.10", "physical_address": [60, 253, 254, 100, 25, 135], "state": 1 },
+    { "interface_index": 7, "ip": "192.0.2.11", "physical_address": [], "state": 5 },
+    { "interface_index": 7, "ip": "192.0.2.12", "physical_address": [0, 0, 0, 0, 0, 0], "state": 5 },
+    { "interface_index": 7, "ip": "192.0.2.13", "physical_address": [255, 255, 255, 255, 255, 255], "state": 5 },
+    { "interface_index": 7, "ip": "192.0.2.14", "physical_address": [1, 0, 94, 8, 3, 7], "state": 5 }
+  ],
+  "expected": "[Ethernet]\r\nMAC: 3C:FD:FE:64:19:84 | IP: 192.0.2.100\r\nMAC: 3C:FD:FE:64:19:83 | IP: 192.0.2.2\r\nMAC: 3C:FD:FE:64:19:85 | IPv6: 2001:db8::1\r\n\r\n[Interface #8]\r\nMAC: EC:0D:9A:5E:72:B4 | IP: 198.51.100.8\r\n\r\n[vEthernet (WSL)] (Virtual)\r\nMAC: 3C:FD:FE:64:19:86 | IPv6: fe80::2\r\nMAC: 3C:FD:FE:64:19:82 | IPv6: fe80::ab\r\n\r\n[Wi-Fi]\r\nMAC: C8:7F:54:E4:13:92 | IPv6: 2001:db8:1::7\r\n"
+}

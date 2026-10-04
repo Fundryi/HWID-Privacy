@@ -1,0 +1,14 @@
+Summary: 76 logs cleared successfully
+
+========== CLEAN LOGS OVERVIEW ==========
+Collected logs (standard)  : 84
+Collected logs (additional): 16
+Collected logs (total)     : 100
+Logs attempted             : 76
+Logs cleared               : 76
+Skipped (not found)        : 1
+Skipped (disabled)         : 0
+Skipped (duplicate)        : 0
+Skipped (OS-locked)        : 23
+Failed                     : 0
+=========================================

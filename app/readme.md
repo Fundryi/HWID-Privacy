@@ -1,6 +1,6 @@
 # HWID Checker Project
 
-> Windows desktop tool for inspecting hardware identifiers, viewing them in a sectioned UI, and exporting results to text files.
+> Native Rust Windows desktop tool for inspecting hardware identifiers, viewing them in a sectioned UI, and exporting results to text files. The C# app remains buildable in `app/src/` for legacy reference; the shipped exe comes from `app/rust/`.
 
 ## Table of Contents
 
@@ -24,25 +24,28 @@
 From repository root:
 
 ```bash
-dotnet publish "app/src/HWIDChecker.csproj" -c Release
+pwsh -NoProfile -File app/rust/check.ps1
+dotnet msbuild app/rust/HWIDChecker.Rust.proj -t:Publish
 ```
 
-Alternative:
+To build both Rust and the legacy C# app without changing the root exe:
 
 ```bash
-dotnet publish "app/HWID-CHECKER.sln" -c Release
+dotnet build "app/HWID-CHECKER.sln" -c Release -p:Platform=x64
 ```
 
 Output:
 
-- Published executable: `app/src/bin/RELEASE/win-x64/publish/HWIDChecker.exe`
-- Post-publish copy target: repository root (`HWIDChecker.exe`)
+- Published executable: `app/rust/target/dist/HWIDChecker.exe`
+- The Rust Publish target runs `release.ps1` (base checks, dist build, PE/import/manifest checks), then copies the dist exe to repository root (`HWIDChecker.exe`).
+- Ordinary Build leaves the root exe unchanged. The legacy C# PostPublish copy target has been removed.
 
 ## Requirements
 
-- .NET 10.0 SDK
 - Windows 10/11 (x64)
-- Administrator privileges only for cleaning features (device/log cleaning)
+- Administrator privileges on every launch
+- No .NET runtime or VC++ redistributable required to run the shipped exe
+- To build: pinned Rust toolchain, Visual Studio C++ build tools/Windows SDK, PowerShell 7; .NET 10 SDK for the MSBuild wrapper and legacy solution project
 
 ## Features
 
@@ -74,12 +77,12 @@ Current providers (14):
 
 ### System Services
 
-- Hardware collection orchestration (`HardwareInfoManager`)
-- Output formatting (`TextFormattingService`)
-- File export (`FileExportService`)
+- Parallel hardware collection (`src/hw/`)
+- Output formatting and export serialization (`src/report.rs`)
+- File export from the main window (`src/ui/main_window.rs`)
 - Device cleaning + whitelist management
-- Event log cleaning (P/Invoke-based discovery, privilege elevation, OS-locked log skipping)
-- Admin check helper (`SecurityHelper`)
+- Event log cleaning (native Windows API discovery, privilege elevation, OS-locked log skipping)
+- Admin check and native Windows helpers (`src/win/`)
 - Auto-update check/download for `HWIDChecker.exe` from GitHub (SHA256 hash comparison)
 
 ### Cleaning Actions
@@ -93,7 +96,7 @@ Current providers (14):
 
 `📝 Clean Logs`:
 - Clears a curated standard set of Windows event channels first.
-- Discovers additional active channels via Wevtapi.dll P/Invoke (zero process spawns).
+- Discovers additional active channels via native Wevtapi.dll calls (zero process spawns for discovery).
 - Elevates `SeSecurityPrivilege` and `SeBackupPrivilege` for protected log access.
 - Handles Analytic/Debug channels with a disable-clear-re-enable cycle.
 - Skips 23 OS-locked channels (kernel/driver/service-held) to avoid wasted fallback attempts.
@@ -116,7 +119,7 @@ Operational note:
 ### GUI Version
 
 1. Run `HWIDChecker.exe`.
-2. Wait for initial scan (main window loads into `SectionedViewForm`).
+2. Wait for the initial scan in the native main window.
 3. Use section buttons to inspect specific hardware outputs.
 4. Use:
    - `↻ Refresh` to rescan
@@ -140,32 +143,21 @@ hwid-check-w11.bat
 
 ```text
 app/
-├── src/
-│   ├── Program.cs
-│   ├── HWIDChecker.csproj
-│   ├── Hardware/
-│   │   ├── IHardwareInfo.cs
-│   │   ├── HardwareInfoManager.cs
-│   │   └── *Info.cs (14 providers)
-│   ├── Services/
-│   │   ├── AutoUpdateService.cs
-│   │   ├── DeviceCleaningService.cs
-│   │   ├── DeviceWhitelistService.cs
-│   │   ├── EventLogCleaningService.cs
-│   │   ├── FileExportService.cs
-│   │   ├── SecurityHelper.cs
-│   │   ├── SystemCleaningService.cs
-│   │   ├── TextFormattingService.cs
-│   │   ├── Models/DeviceDetail.cs
-│   │   └── Win32/{EventLogApi.cs, FirmwareTable.cs, IpHlpApi.cs, SetupApi.cs, StorageDeviceIdQuery.cs}
-│   ├── UI/
-│   │   ├── Forms/SectionedViewForm.cs            # Active main UI
-│   │   ├── Forms/CleanDevicesForm.cs
-│   │   ├── Forms/CleanLogsForm.cs
-│   │   ├── Forms/WhitelistDevicesForm.cs
-│   │   ├── Forms/DeviceRemovalConfirmationForm.cs
-│   │   └── Components/{Buttons.cs, ThemeColors.cs}
-│   └── Resources/app.ico
+├── rust/
+│   ├── HWIDChecker.Rust.proj                 # MSBuild Build/Publish wrapper
+│   ├── Cargo.toml
+│   ├── check.ps1                             # Formatting, lint, tests, release checks
+│   ├── release.ps1                           # Checked dist build
+│   └── src/
+│       ├── main.rs                           # GUI and read-only CLI entrypoint
+│       ├── hw/                               # 14 providers and collection
+│       ├── win/                              # Native OS wrappers and parsers
+│       ├── clean/                            # Devices, whitelist, event logs
+│       ├── ui/                               # Native Win32 windows and controls
+│       ├── update.rs                         # SHA-256 update/install/restart
+│       └── report.rs                         # Text and export formatting
+├── src/                                      # Legacy C# WinForms, still buildable
+├── scripts/                                  # Legacy read/export batch scripts
 └── HWID-CHECKER.sln
 ```
 

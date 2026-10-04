@@ -1,0 +1,2 @@
+# Rust port test fixtures are compared byte for byte; never convert line endings.
+app/rust/tests/fixtures/** -text
