@@ -72,6 +72,7 @@ pub struct Volume {
 // the wait; the worker retains ownership of its buffers/handles until it returns.
 const DISK_BUDGET: Duration = Duration::from_secs(5);
 const DISK_JOBS: usize = 4;
+pub const MAX_DISKS: usize = 256;
 // Four NVMe disks can issue five independent requests each. Reserve four slots
 // for overlapping volume work, and retain occupied slots across timed-out refreshes.
 const IO_JOBS: usize = 24;
@@ -95,6 +96,20 @@ impl Drop for AtaWorker {
     }
 }
 
+impl AtaWorker {
+    fn acquire(index: u32) -> Result<Self> {
+        let mut active = ATA_PASSTHROUGH.lock().unwrap_or_else(|e| e.into_inner());
+        if active.contains(&index) {
+            return Err(Error::msg(
+                "ATA Identify",
+                "ambiguous: previous ATA passthrough still running",
+            ));
+        }
+        active.push(index);
+        Ok(Self(index))
+    }
+}
+
 fn bounded<T: Send + 'static>(
     op: &'static str,
     deadline: Instant,
@@ -103,11 +118,12 @@ fn bounded<T: Send + 'static>(
     if Instant::now() >= deadline {
         return Err(Error::msg(op, "timed out after 5000 ms"));
     }
-    IO_ACTIVE
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-            (active < IO_JOBS).then_some(active + 1)
-        })
-        .map_err(|_| Error::msg(op, "previous storage queries still running"))?;
+    if !reserve_io_worker(&IO_ACTIVE) {
+        return Err(Error::msg(
+            op,
+            "timeout: previous storage queries still running",
+        ));
+    }
     let worker = IoWorker;
     let (send, receive) = mpsc::sync_channel(1);
     thread::Builder::new()
@@ -142,6 +158,14 @@ fn bounded<T: Send + 'static>(
         })?
 }
 
+fn reserve_io_worker(active: &AtomicUsize) -> bool {
+    active
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            (n < IO_JOBS).then(|| n.saturating_add(1))
+        })
+        .is_ok()
+}
+
 /// Independently retained field groups for one physical disk.
 pub struct PhysicalQueries {
     pub nvme: Result<NvmeIdentity>,
@@ -166,6 +190,54 @@ impl PhysicalQueries {
 /// deadline across protocol, VPD and layout, including ATA fallback. Scope joins
 /// only bounded callers; detached OS workers continue owning their own handles.
 pub fn physical_queries(indices: &[u32]) -> Vec<PhysicalQueries> {
+    if indices.len() > MAX_DISKS {
+        super::record(Error::msg(
+            "storage worker",
+            "implausible: disk count exceeds collection cap",
+        ));
+        return (0..indices.len())
+            .map(|_| PhysicalQueries::unavailable())
+            .collect();
+    }
+    disk_jobs(indices, &|index, deadline| {
+        thread::scope(|scope| {
+            let identifiers = scope.spawn(|| physical_identifier_until(index, deadline));
+            let layout = scope.spawn(|| physical_layout_until(index, deadline));
+            let nvme = physical_nvme_identity_until(index, deadline);
+            let ata = match &nvme {
+                Ok(NvmeIdentity {
+                    controller_serial: IdentifyOutcome::NotAttempted { bus },
+                    ..
+                }) => Some(physical_ata_identity_until(index, *bus, deadline)),
+                _ => None,
+            };
+            PhysicalQueries {
+                nvme,
+                ata,
+                identifiers: identifiers.join().unwrap_or_else(|_| {
+                    Err(Error::msg(
+                        "StorageDeviceIdProperty",
+                        "storage worker panicked",
+                    ))
+                }),
+                layout: layout.join().unwrap_or_else(|_| {
+                    Err(Error::msg(
+                        "IOCTL_DISK_GET_DRIVE_LAYOUT_EX",
+                        "storage worker panicked",
+                    ))
+                }),
+            }
+        })
+    })
+}
+
+// A large disk set must not keep a detached section worker scheduling IO forever.
+// Each disk keeps its own 5 s budget within a 50 s batch caller-wait ceiling.
+fn disk_jobs(
+    indices: &[u32],
+    query: &(impl Fn(u32, Instant) -> PhysicalQueries + Sync),
+) -> Vec<PhysicalQueries> {
+    let batch_deadline = Instant::now() + Duration::from_secs(50);
     let next = AtomicUsize::new(0);
     let results = Mutex::new((0..indices.len()).map(|_| None).collect::<Vec<_>>());
     thread::scope(|scope| {
@@ -176,37 +248,31 @@ pub fn physical_queries(indices: &[u32]) -> Vec<PhysicalQueries> {
                     let Some(&index) = indices.get(position) else {
                         break;
                     };
-                    let deadline = Instant::now() + DISK_BUDGET;
-                    let queries = thread::scope(|scope| {
-                        let identifiers =
-                            scope.spawn(|| physical_identifier_until(index, deadline));
-                        let layout = scope.spawn(|| physical_layout_until(index, deadline));
-                        let nvme = physical_nvme_identity_until(index, deadline);
-                        let ata = match &nvme {
-                            Ok(NvmeIdentity {
-                                controller_serial: IdentifyOutcome::NotAttempted { bus },
-                                ..
-                            }) => Some(physical_ata_identity_until(index, *bus, deadline)),
-                            _ => None,
-                        };
-                        PhysicalQueries {
-                            nvme,
-                            ata,
-                            identifiers: identifiers.join().unwrap_or_else(|_| {
-                                Err(Error::msg(
-                                    "StorageDeviceIdProperty",
-                                    "storage worker panicked",
-                                ))
-                            }),
-                            layout: layout.join().unwrap_or_else(|_| {
-                                Err(Error::msg(
-                                    "IOCTL_DISK_GET_DRIVE_LAYOUT_EX",
-                                    "storage worker panicked",
-                                ))
-                            }),
-                        }
-                    });
-                    results.lock().unwrap_or_else(|e| e.into_inner())[position] = Some(queries);
+                    let deadline = (Instant::now() + DISK_BUDGET).min(batch_deadline);
+                    let queries = if Instant::now() >= deadline {
+                        super::record(Error::msg(
+                            "storage worker",
+                            "timeout: disk batch budget exhausted",
+                        ));
+                        PhysicalQueries::unavailable()
+                    } else {
+                        catch_unwind(AssertUnwindSafe(|| query(index, deadline))).unwrap_or_else(
+                            |_| {
+                                super::record(Error::msg(
+                                    "storage worker",
+                                    "malformed: disk job panicked",
+                                ));
+                                PhysicalQueries::unavailable()
+                            },
+                        )
+                    };
+                    if let Some(slot) = results
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get_mut(position)
+                    {
+                        *slot = Some(queries);
+                    }
                 }
             });
         }
@@ -447,15 +513,7 @@ fn physical_ata_identity_until(index: u32, bus: u32, deadline: Instant) -> Resul
             // Hold exclusion inside the OS worker, even after its caller times out.
             // A subsequent refresh must never overlap passthrough on this disk.
             let _ata = if passthrough {
-                let mut active = ATA_PASSTHROUGH.lock().unwrap_or_else(|e| e.into_inner());
-                if active.contains(&index) {
-                    return Err(Error::msg(
-                        "ATA Identify",
-                        "previous ATA passthrough still running",
-                    ));
-                }
-                active.push(index);
-                Some(AtaWorker(index))
+                Some(AtaWorker::acquire(index)?)
             } else {
                 None
             };
@@ -550,7 +608,7 @@ fn ata_passthrough_payload(data: &[u8]) -> Result<&[u8]> {
             "IDENTIFY DEVICE did not complete successfully",
         ));
     }
-    data.get(offset..offset + ATA_IDENTIFY_SIZE)
+    data.get(offset..offset.saturating_add(ATA_IDENTIFY_SIZE))
         .ok_or_else(|| Error::msg("ATA Identify", "invalid truncated passthrough payload"))
 }
 
@@ -592,7 +650,9 @@ fn parse_ata_identity(payload: &[u8]) -> Result<AtaIdentity> {
         ));
     }
     // Word 255: optional integrity signature 0xA5, then checksum over all 512 bytes.
-    if payload[510] == 0xA5 && payload.iter().fold(0u8, |sum, b| sum.wrapping_add(*b)) != 0 {
+    if payload.get(510) == Some(&0xA5)
+        && payload.iter().fold(0u8, |sum, b| sum.wrapping_add(*b)) != 0
+    {
         return Err(Error::msg(
             "ATA Identify",
             "invalid Identify integrity checksum",
@@ -612,7 +672,16 @@ fn ata_string(
     length: usize,
     serial: bool,
 ) -> Result<Option<String>> {
-    let mut value = payload[start_word * 2..start_word * 2 + length].to_vec();
+    let start = start_word
+        .checked_mul(2)
+        .ok_or_else(|| Error::msg("ATA Identify", "invalid string offset"))?;
+    let end = start
+        .checked_add(length)
+        .ok_or_else(|| Error::msg("ATA Identify", "invalid string length"))?;
+    let mut value = payload
+        .get(start..end)
+        .ok_or_else(|| Error::msg("ATA Identify", "invalid string bounds"))?
+        .to_vec();
     for pair in value.as_chunks_mut::<2>().0 {
         pair.swap(0, 1);
     }
@@ -624,7 +693,9 @@ fn ata_string(
         .iter()
         .rposition(|b| !matches!(b, 0 | b' '))
         .map_or(start, |i| i + 1);
-    let value = &value[start..end];
+    let value = value
+        .get(start..end)
+        .ok_or_else(|| Error::msg("ATA Identify", "invalid trimmed string bounds"))?;
     if value.iter().any(|b| !(0x20..=0x7e).contains(b)) {
         return Err(Error::msg(
             "ATA Identify",
@@ -646,7 +717,29 @@ fn ata_string(
                 | "TO BE FILLED BY O.E.M."
         ) || value.iter().all(|&b| b == b'0')
             || value.iter().all(|&b| b == b'F' || b == b'f'));
-    Ok((!text.is_empty() && !placeholder).then_some(text))
+    if text.is_empty() || placeholder {
+        super::record(Error::msg(
+            "ATA Identify string",
+            if placeholder {
+                "placeholder: serial omitted"
+            } else {
+                "absent: string omitted"
+            },
+        ));
+        return Ok(None);
+    }
+    if serial
+        && value
+            .first()
+            .is_some_and(|first| value.iter().all(|b| b == first))
+    {
+        super::record(Error::msg(
+            "ATA Identify serial",
+            "implausible: repeated character",
+        ));
+        return Ok(None);
+    }
+    Ok(Some(text))
 }
 
 fn ata_wwn(payload: &[u8]) -> Result<Option<u64>> {
@@ -657,13 +750,24 @@ fn ata_wwn(payload: &[u8]) -> Result<Option<u64>> {
         || active & 0xC000 != 0x4000
         || active & 0x0100 == 0
     {
+        super::record(Error::msg(
+            "ATA WWN",
+            "unsupported: WWN support or validity bits absent",
+        ));
         return Ok(None);
     }
     let mut wwn = 0u64;
     for index in 108..112 {
         wwn = (wwn << 16) | u64::from(word(payload, index * 2)?);
     }
-    Ok((wwn != 0 && wwn != u64::MAX).then_some(wwn))
+    if wwn == 0 || wwn == u64::MAX {
+        super::record(Error::msg(
+            "ATA WWN",
+            "implausible: zero or all-FF identity",
+        ));
+        return Ok(None);
+    }
+    Ok(Some(wwn))
 }
 
 /// Reads NVMe Identify through storage property queries, gated by bus.
@@ -686,7 +790,12 @@ fn physical_nvme_identity_until(index: u32, deadline: Instant) -> Result<NvmeIde
     let bus = data.and_then(|data| {
         let size = dword(&data, offset_of!(STORAGE_DEVICE_DESCRIPTOR, Size))? as usize;
         let bus_end = offset_of!(STORAGE_DEVICE_DESCRIPTOR, BusType) + 4;
-        if size < bus_end || size > data.len() {
+        let version = dword(&data, offset_of!(STORAGE_DEVICE_DESCRIPTOR, Version))? as usize;
+        if size < size_of::<STORAGE_DEVICE_DESCRIPTOR>()
+            || size > data.len()
+            || version < bus_end
+            || version > size
+        {
             return Err(Error::msg(
                 "storage descriptor",
                 "invalid device descriptor size",
@@ -748,8 +857,23 @@ fn physical_nvme_identity_until(index: u32, deadline: Instant) -> Result<NvmeIde
             }),
         )
     });
+    validate_namespace_association(index, bus, started, &namespace, &mut namespace_descriptors);
+    Ok(NvmeIdentity {
+        controller_serial,
+        namespace,
+        namespace_descriptors,
+    })
+}
+
+fn validate_namespace_association(
+    index: u32,
+    bus: u32,
+    started: Instant,
+    namespace: &IdentifyOutcome<NvmeNamespace>,
+    namespace_descriptors: &mut IdentifyOutcome<NvmeNamespaceDescriptors>,
+) {
     let conflict = if let (IdentifyOutcome::Ok(namespace), IdentifyOutcome::Ok(ids)) =
-        (&namespace, &namespace_descriptors)
+        (namespace, &*namespace_descriptors)
     {
         [
             (&namespace.eui64, &ids.eui64),
@@ -761,7 +885,10 @@ fn physical_nvme_identity_until(index: u32, deadline: Instant) -> Result<NvmeIde
         false
     };
     if conflict {
-        let error = Error::msg("NVMe Identify", "invalid namespace identity association");
+        let error = Error::msg(
+            "NVMe Identify",
+            "ambiguous: conflicting namespace identity association",
+        );
         storage_diagnostic(
             index,
             Some(bus),
@@ -771,13 +898,8 @@ fn physical_nvme_identity_until(index: u32, deadline: Instant) -> Result<NvmeIde
             Some(&error),
             "ok",
         );
-        namespace_descriptors = IdentifyOutcome::Failed(error);
+        *namespace_descriptors = IdentifyOutcome::Failed(error);
     }
-    Ok(NvmeIdentity {
-        controller_serial,
-        namespace,
-        namespace_descriptors,
-    })
 }
 
 const NVME_IDENTIFY_SIZE: usize = 4096;
@@ -858,9 +980,16 @@ fn storage_diagnostic(
     status: &str,
 ) {
     let class = match error {
+        None if status == "empty" => "absent",
+        None if status == "not-attempted" => "unsupported",
         None => status,
+        Some(error) if error.detail.starts_with("implausible:") => "implausible",
+        Some(error) if error.detail.starts_with("ambiguous:") => "ambiguous",
+        Some(error) if error.detail.starts_with("placeholder:") => "placeholder",
         Some(error)
-            if matches!(error.code, 121 | 258 | 1460) || error.detail.contains("timed out") =>
+            if matches!(error.code, 121 | 258 | 1460)
+                || error.detail.contains("timed out")
+                || error.detail.starts_with("timeout:") =>
         {
             "timeout"
         }
@@ -868,7 +997,10 @@ fn storage_diagnostic(
         Some(error) if matches!(error.code, 1 | 50 | 87) => "unsupported",
         Some(error) if matches!(error.code, 21 | 1112 | 1167) => "absent",
         Some(error)
-            if matches!(error.op, "storage descriptor" | "storage parser") && error.code == 0
+            if matches!(
+                error.op,
+                "storage descriptor" | "storage parser" | "ATA task file"
+            ) && error.code == 0
                 || matches!(error.op, "NVMe Identify" | "ATA Identify")
                     && error.code == 0
                     && (error.detail.starts_with("invalid ")
@@ -902,7 +1034,7 @@ fn nvme_payload(data: &[u8]) -> Result<&[u8]> {
     }
     let offset = dword(data, 24)? as usize;
     let length = dword(data, 28)? as usize;
-    if offset < size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() || length < NVME_IDENTIFY_SIZE {
+    if offset < size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() || length != NVME_IDENTIFY_SIZE {
         return Err(Error::msg(
             "NVMe Identify",
             "invalid protocol payload size or offset",
@@ -931,26 +1063,68 @@ fn parse_nvme_serial(payload: &[u8]) -> Result<Option<String>> {
         .iter()
         .rposition(|b| !padding(b))
         .map_or(start, |i| i + 1);
-    let serial = &serial[start..end];
+    let serial = serial
+        .get(start..end)
+        .ok_or_else(|| Error::msg("NVMe Identify", "invalid trimmed serial bounds"))?;
     if serial.iter().any(|b| !(0x20..=0x7e).contains(b)) {
         return Err(Error::msg(
             "NVMe Identify",
             "invalid controller serial encoding",
         ));
     }
-    Ok((!serial.is_empty()).then(|| serial.iter().map(|&b| char::from(b)).collect()))
+    if serial.is_empty() {
+        return Ok(None);
+    }
+    if serial
+        .first()
+        .is_some_and(|first| serial.iter().all(|b| b == first))
+    {
+        return Err(Error::msg(
+            "NVMe Identify",
+            "implausible: repeated controller serial character",
+        ));
+    }
+    let text: String = serial.iter().map(|&b| char::from(b)).collect();
+    if matches!(
+        text.to_ascii_uppercase().as_str(),
+        "UNKNOWN"
+            | "UNKNOWN SERIAL"
+            | "NONE"
+            | "N/A"
+            | "NA"
+            | "NOT SPECIFIED"
+            | "NOT AVAILABLE"
+            | "DEFAULT STRING"
+            | "TO BE FILLED BY O.E.M."
+    ) {
+        return Err(Error::msg(
+            "NVMe Identify",
+            "placeholder: controller serial omitted",
+        ));
+    }
+    Ok(Some(text))
+}
+
+fn namespace_identifier(value: &[u8], source: &'static str) -> Option<String> {
+    if value.iter().all(|&b| b == 0) || value.iter().all(|&b| b == 0xFF) {
+        super::record(Error::msg(
+            source,
+            if value.iter().all(|&b| b == 0) {
+                "absent: zero identity"
+            } else {
+                "implausible: all-FF identity"
+            },
+        ));
+        None
+    } else {
+        Some(value.iter().map(|b| format!("{b:02X}")).collect())
+    }
 }
 
 fn parse_nvme_namespace(payload: &[u8]) -> Result<NvmeNamespace> {
-    let identifier = |value: &[u8]| {
-        value
-            .iter()
-            .any(|&b| b != 0)
-            .then(|| value.iter().map(|b| format!("{b:02X}")).collect())
-    };
     Ok(NvmeNamespace {
-        eui64: identifier(&bytes::<8>(payload, 120)?),
-        nguid: identifier(&bytes::<16>(payload, 104)?),
+        eui64: namespace_identifier(&bytes::<8>(payload, 120)?, "NVMe CNS 0 EUI-64"),
+        nguid: namespace_identifier(&bytes::<16>(payload, 104)?, "NVMe CNS 0 NGUID"),
     })
 }
 
@@ -965,16 +1139,14 @@ fn parse_nvme_namespace_descriptors(payload: &[u8]) -> Result<NvmeNamespaceDescr
     let mut seen = [false; 5];
     let mut offset = 0;
     while offset < payload.len() {
-        let header = payload.get(offset..offset + 4).ok_or_else(|| {
-            Error::msg(
-                "NVMe Identify",
-                "invalid truncated namespace descriptor header",
-            )
-        })?;
+        let header = bytes::<4>(payload, offset)?;
         let kind = header[0] as usize;
         let length = header[1] as usize;
         if length == 0 {
-            if payload[offset..].iter().any(|&b| b != 0) {
+            if payload
+                .get(offset..)
+                .is_none_or(|tail| tail.iter().any(|&b| b != 0))
+            {
                 return Err(Error::msg(
                     "NVMe Identify",
                     "invalid namespace descriptor terminator",
@@ -988,43 +1160,57 @@ fn parse_nvme_namespace_descriptors(payload: &[u8]) -> Result<NvmeNamespaceDescr
                 "invalid namespace descriptor header",
             ));
         }
-        let end = offset + 4 + length;
+        let start = offset
+            .checked_add(4)
+            .ok_or_else(|| Error::msg("NVMe Identify", "invalid descriptor offset"))?;
+        let end = start
+            .checked_add(length)
+            .ok_or_else(|| Error::msg("NVMe Identify", "invalid descriptor length"))?;
         let value = payload
-            .get(offset + 4..end)
+            .get(start..end)
             .ok_or_else(|| Error::msg("NVMe Identify", "invalid truncated namespace identifier"))?;
-        if kind < seen.len() {
+        if let Some(seen_kind) = seen.get_mut(kind) {
             let expected = match kind {
                 1 => 8,
                 2 | 3 => 16,
                 4 => 1,
-                _ => unreachable!(),
+                _ => {
+                    return Err(Error::msg(
+                        "NVMe Identify",
+                        "invalid namespace identifier type",
+                    ));
+                }
             };
-            if length != expected || seen[kind] {
+            if length != expected || *seen_kind {
                 return Err(Error::msg(
                     "NVMe Identify",
                     "invalid namespace identifier length or duplicate type",
                 ));
             }
-            seen[kind] = true;
-            let hex = || value.iter().map(|b| format!("{b:02X}")).collect::<String>();
-            let nonzero = value.iter().any(|&b| b != 0);
+            *seen_kind = true;
             match kind {
-                1 => ids.eui64 = nonzero.then(hex),
-                2 => ids.nguid = nonzero.then(hex),
-                3 if nonzero => {
-                    let hex = hex();
-                    ids.uuid = Some(format!(
-                        "{}-{}-{}-{}-{}",
-                        &hex[..8],
-                        &hex[8..12],
-                        &hex[12..16],
-                        &hex[16..20],
-                        &hex[20..]
-                    ));
+                1 => ids.eui64 = namespace_identifier(value, "NVMe CNS 3 EUI-64"),
+                2 => ids.nguid = namespace_identifier(value, "NVMe CNS 3 NGUID"),
+                3 => {
+                    if let Some(hex) = namespace_identifier(value, "NVMe CNS 3 UUID") {
+                        ids.uuid = Some(format!(
+                            "{}-{}-{}-{}-{}",
+                            &hex[..8],
+                            &hex[8..12],
+                            &hex[12..16],
+                            &hex[16..20],
+                            &hex[20..]
+                        ));
+                    }
                 }
-                4 => ids.csi = Some(value[0]),
+                4 => ids.csi = value.first().copied(),
                 _ => {}
             }
+        } else {
+            super::record(Error::msg(
+                "NVMe CNS 3",
+                "unsupported: unknown bounded namespace descriptor type omitted",
+            ));
         }
         // Unknown nonzero types are length-checked and skipped for future specs.
         offset = end;
@@ -1158,6 +1344,14 @@ fn parse_descriptor(data: &[u8]) -> Result<Option<Identifier>> {
 fn parse_identifier_list(data: &[u8]) -> Result<Vec<StorageIdentifier>> {
     const HEADER: usize = offset_of!(STORAGE_DEVICE_ID_DESCRIPTOR, Identifiers);
     const PAYLOAD: usize = offset_of!(STORAGE_IDENTIFIER, Identifier);
+    if dword(data, offset_of!(STORAGE_DEVICE_ID_DESCRIPTOR, Version))? as usize
+        != size_of::<STORAGE_DEVICE_ID_DESCRIPTOR>()
+    {
+        return Err(Error::msg(
+            "storage descriptor",
+            "invalid descriptor list version",
+        ));
+    }
     let size = dword(data, offset_of!(STORAGE_DEVICE_ID_DESCRIPTOR, Size))? as usize;
     if size < HEADER || size > data.len() {
         return Err(Error::msg(
@@ -1165,12 +1359,14 @@ fn parse_identifier_list(data: &[u8]) -> Result<Vec<StorageIdentifier>> {
             "invalid descriptor list size",
         ));
     }
-    let data = &data[..size];
+    let data = data
+        .get(..size)
+        .ok_or_else(|| Error::msg("storage descriptor", "invalid descriptor list bounds"))?;
     let count = dword(
         data,
         offset_of!(STORAGE_DEVICE_ID_DESCRIPTOR, NumberOfIdentifiers),
     )? as usize;
-    if count > (size - HEADER) / PAYLOAD || count == 0 && size != HEADER {
+    if count > 256 || count > (size - HEADER) / PAYLOAD || count == 0 && size != HEADER {
         return Err(Error::msg(
             "storage descriptor",
             "identifier count inconsistent with buffer",
@@ -1179,21 +1375,37 @@ fn parse_identifier_list(data: &[u8]) -> Result<Vec<StorageIdentifier>> {
     let mut ids = Vec::with_capacity(count);
     let mut offset = HEADER;
     for i in 0..count {
+        let payload_start = offset.checked_add(PAYLOAD).ok_or_else(|| {
+            Error::msg("storage descriptor", "invalid identifier offset overflow")
+        })?;
         let header = data
-            .get(offset..offset + PAYLOAD)
+            .get(offset..payload_start)
             .ok_or_else(|| Error::msg("storage descriptor", "truncated identifier list header"))?;
         let length = word(header, offset_of!(STORAGE_IDENTIFIER, IdentifierSize))? as usize;
         let next = word(header, offset_of!(STORAGE_IDENTIFIER, NextOffset))? as usize;
-        let span = PAYLOAD + length;
-        let end = offset + span;
-        let value = data.get(offset + PAYLOAD..end).ok_or_else(|| {
+        let span = PAYLOAD
+            .checked_add(length)
+            .ok_or_else(|| Error::msg("storage descriptor", "invalid identifier span overflow"))?;
+        let end = payload_start.checked_add(length).ok_or_else(|| {
+            Error::msg("storage descriptor", "invalid identifier length overflow")
+        })?;
+        let value = data.get(payload_start..end).ok_or_else(|| {
             Error::msg(
                 "storage descriptor",
                 "identifier size exceeds descriptor list",
             )
         })?;
         if i + 1 < count {
-            if next < span || offset + next + PAYLOAD > size {
+            let next_offset = offset
+                .checked_add(next)
+                .ok_or_else(|| Error::msg("storage descriptor", "invalid next offset overflow"))?;
+            if next < span
+                || next > span.next_multiple_of(8)
+                || next_offset.saturating_add(PAYLOAD) > size
+                || data
+                    .get(end..next_offset)
+                    .is_none_or(|padding| padding.iter().any(|&b| b != 0))
+            {
                 return Err(Error::msg(
                     "storage descriptor",
                     "invalid next identifier list offset or count",
@@ -1202,11 +1414,15 @@ fn parse_identifier_list(data: &[u8]) -> Result<Vec<StorageIdentifier>> {
         } else {
             // Drivers may put the final aligned record size in NextOffset. Accept
             // at most 7 bytes of terminal alignment slack, never another record.
-            let padding = &data[end..];
+            let padding = data
+                .get(end..)
+                .ok_or_else(|| Error::msg("storage descriptor", "invalid padding bounds"))?;
             if padding.len() >= 8
                 || padding.iter().any(|&b| b != 0)
                 || next != 0
-                    && (next < span || next > span.next_multiple_of(8) || offset + next < size)
+                    && (next < span
+                        || next > span.next_multiple_of(8)
+                        || offset.saturating_add(next) < size)
             {
                 return Err(Error::msg(
                     "storage descriptor",
@@ -1220,7 +1436,9 @@ fn parse_identifier_list(data: &[u8]) -> Result<Vec<StorageIdentifier>> {
             association: dword(header, offset_of!(STORAGE_IDENTIFIER, Association))?,
             value: value.to_vec(),
         });
-        offset += next;
+        offset = offset
+            .checked_add(next)
+            .ok_or_else(|| Error::msg("storage descriptor", "invalid next offset overflow"))?;
     }
     Ok(ids)
 }
@@ -1346,6 +1564,188 @@ mod tests {
     use serde_json::Value;
 
     #[test]
+    #[ignore = "shared helper diagnostic queue; run alone with --ignored --test-threads=1"]
+    fn failsafe_storage_diagnostics_are_value_free_and_classified() {
+        let _ = super::super::take_recorded();
+        let _ = physical_ata_identity(87654, 7).unwrap();
+        let mut data = ata_fixture();
+        data[216..224].fill(0xFF);
+        assert!(matches!(
+            parse_ata_identity(&data).unwrap().wwn,
+            IdentifyOutcome::Empty
+        ));
+        let mut fixed = [0; NVME_IDENTIFY_SIZE];
+        fixed[104..120].fill(0xFF);
+        let _ = parse_nvme_namespace(&fixed).unwrap();
+        let mut invalid = [0; NVME_IDENTIFY_SIZE];
+        invalid[..2].copy_from_slice(&[3, 15]);
+        let error = parse_nvme_namespace_descriptors(&invalid).unwrap_err();
+        storage_diagnostic(
+            87654,
+            Some(17),
+            "CNS 3 fixture",
+            Some(invalid.len()),
+            Instant::now(),
+            Some(&error),
+            "ok",
+        );
+        let fixed = IdentifyOutcome::Ok(NvmeNamespace {
+            eui64: Some("002538C86B1479A2".into()),
+            nguid: None,
+        });
+        let mut ids = IdentifyOutcome::Ok(NvmeNamespaceDescriptors {
+            eui64: Some("002538C86B1479B3".into()),
+            ..Default::default()
+        });
+        validate_namespace_association(87654, 17, Instant::now(), &fixed, &mut ids);
+        let records = super::super::take_recorded();
+        assert!(
+            records
+                .iter()
+                .any(|e| e.detail.contains("class=unsupported"))
+        );
+        assert!(records.iter().any(|e| e.detail.contains("implausible")));
+        assert!(records.iter().any(|e| e.detail.contains("class=malformed")));
+        assert!(records.iter().any(|e| e.detail.contains("class=ambiguous")));
+        assert!(records.iter().all(|e| !e.detail.contains("002538C8")));
+    }
+
+    #[test]
+    fn disk_jobs_over_four_keep_order_limit_and_isolate_panics() {
+        let indices = [9, 3, 7, 2, 5, 1, 4];
+        let active = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let result = disk_jobs(&indices, &|index, deadline| {
+            let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(count, Ordering::SeqCst);
+            assert!(deadline.saturating_duration_since(Instant::now()) <= DISK_BUDGET);
+            thread::sleep(Duration::from_millis(15));
+            active.fetch_sub(1, Ordering::SeqCst);
+            if index == 2 {
+                panic!("fabricated job panic");
+            }
+            PhysicalQueries {
+                nvme: Ok(NvmeIdentity {
+                    controller_serial: IdentifyOutcome::Ok(format!("disk-{index}")),
+                    namespace: IdentifyOutcome::Empty,
+                    namespace_descriptors: IdentifyOutcome::Empty,
+                }),
+                ata: None,
+                identifiers: Ok(StorageIdentifiers {
+                    selected: None,
+                    descriptors: IdentifyOutcome::Empty,
+                }),
+                layout: Ok(None),
+            }
+        });
+        assert_eq!(result.len(), indices.len());
+        assert!(peak.load(Ordering::SeqCst) <= DISK_JOBS);
+        for (index, result) in indices.into_iter().zip(result) {
+            if index == 2 {
+                assert!(result.nvme.is_err());
+                assert!(result.layout.is_err());
+            } else {
+                assert!(
+                    matches!(result.nvme.unwrap().controller_serial, IdentifyOutcome::Ok(s) if s == format!("disk-{index}"))
+                );
+            }
+        }
+        let slots = AtomicUsize::new(0);
+        for _ in 0..IO_JOBS {
+            assert!(reserve_io_worker(&slots));
+        }
+        assert!(!reserve_io_worker(&slots));
+        assert_eq!(slots.load(Ordering::SeqCst), IO_JOBS);
+        slots.store(usize::MAX, Ordering::SeqCst);
+        assert!(!reserve_io_worker(&slots));
+    }
+
+    #[test]
+    fn ata_exclusion_survives_timeout_until_worker_returns() {
+        let (release_tx, release_rx) = mpsc::channel();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let error = bounded(
+            "ATA exclusion fixture",
+            Instant::now() + Duration::from_millis(100),
+            move || {
+                let guard = AtaWorker::acquire(87654)?;
+                let _ = acquired_tx.send(());
+                let _ = release_rx.recv_timeout(Duration::from_secs(5));
+                drop(guard);
+                let _ = finished_tx.send(());
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        acquired_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(error.detail.contains("timed out"));
+        assert!(AtaWorker::acquire(87654).is_err());
+        assert!(AtaWorker::acquire(87655).is_ok());
+        release_tx.send(()).unwrap();
+        finished_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(AtaWorker::acquire(87654).is_ok());
+    }
+
+    #[test]
+    fn namespace_sentinels_conflicts_and_partial_success() {
+        let mut fixed = [0; NVME_IDENTIFY_SIZE];
+        fixed[120..128].copy_from_slice(&[0x00, 0x25, 0x38, 0xC8, 0x6B, 0x14, 0x79, 0xA2]);
+        fixed[104..120].fill(0xFF);
+        let namespace = parse_nvme_namespace(&fixed).unwrap();
+        assert!(namespace.nguid.is_none());
+        assert_eq!(namespace.eui64.as_deref(), Some("002538C86B1479A2"));
+        let mut list = [0; NVME_IDENTIFY_SIZE];
+        list[..2].copy_from_slice(&[1, 8]);
+        list[4..12].copy_from_slice(&fixed[120..128]);
+        list[12..14].copy_from_slice(&[3, 16]);
+        list[16..32].fill(0xFF);
+        let ids = parse_nvme_namespace_descriptors(&list).unwrap();
+        assert!(ids.uuid.is_none());
+        let namespace = IdentifyOutcome::Ok(namespace);
+        let mut descriptor = IdentifyOutcome::Ok(ids);
+        validate_namespace_association(87654, 17, Instant::now(), &namespace, &mut descriptor);
+        assert!(matches!(descriptor, IdentifyOutcome::Ok(_)));
+        list[11] ^= 1;
+        descriptor = IdentifyOutcome::Ok(parse_nvme_namespace_descriptors(&list).unwrap());
+        validate_namespace_association(87654, 17, Instant::now(), &namespace, &mut descriptor);
+        assert!(
+            matches!(descriptor, IdentifyOutcome::Failed(ref e) if e.detail.contains("ambiguous") && !e.detail.contains("002538"))
+        );
+        assert!(matches!(namespace, IdentifyOutcome::Ok(ref n) if n.eui64.is_some()));
+        descriptor = IdentifyOutcome::Ok(parse_nvme_namespace_descriptors(&list).unwrap());
+        validate_namespace_association(
+            87654,
+            17,
+            Instant::now(),
+            &IdentifyOutcome::Failed(Error::msg("NVMe Identify", "timeout: fabricated")),
+            &mut descriptor,
+        );
+        assert!(matches!(descriptor, IdentifyOutcome::Ok(_))); // CNS 3 can backfill.
+        let mut controller = [b' '; 64];
+        controller[4..24].fill(b'A');
+        assert!(
+            parse_nvme_serial(&controller)
+                .unwrap_err()
+                .detail
+                .contains("implausible")
+        );
+        assert!(ata_string(&[], usize::MAX, usize::MAX, true).is_err());
+        assert!(ata_string(&[], 10, 20, true).is_err());
+    }
+
+    #[test]
+    fn unsupported_disk_buses_never_issue_ata_or_emit_fields() {
+        for bus in [0, 7, 8, 16, 17] {
+            // Unknown, USB, RAID, Storage Spaces, NVMe.
+            let result = physical_ata_identity(87654, bus).unwrap();
+            assert!(matches!(result.serial, IdentifyOutcome::NotAttempted { bus: b } if b == bus));
+            assert!(matches!(result.model, IdentifyOutcome::NotAttempted { .. }));
+            assert!(matches!(result.wwn, IdentifyOutcome::NotAttempted { .. }));
+        }
+    }
+
+    #[test]
     fn deadline_retains_running_worker_and_refuses_later_work() {
         // A real healthy disk cannot exercise an indefinitely blocked driver.
         // This owned allocation stands in for that worker's handles/buffers.
@@ -1443,6 +1843,18 @@ mod tests {
         // A count that ends before another real descriptor cannot silently truncate.
         invalid[8..12].copy_from_slice(&2u32.to_le_bytes());
         assert!(parse_identifier_list(&invalid).is_err());
+        // A next offset cannot skip a nonzero hidden record or arbitrary slack.
+        let mut hidden = data.clone();
+        hidden[22..24].copy_from_slice(&40u16.to_le_bytes());
+        assert!(parse_identifier_list(&hidden).is_err());
+        let mut unknown_version = data.clone();
+        unknown_version[..4].copy_from_slice(&0u32.to_le_bytes());
+        assert!(parse_identifier_list(&unknown_version).is_err());
+        // Full-list failure cannot erase the legacy selector's selected value.
+        assert_eq!(
+            parse_descriptor(&unknown_version).unwrap(),
+            parse_descriptor(&data).unwrap()
+        );
         let mut terminal = fixture_bytes(&fixture["descriptors"][15]);
         for next in [1u16, 35, 41, u16::MAX] {
             terminal[22..24].copy_from_slice(&next.to_le_bytes());

@@ -76,7 +76,13 @@ pub(super) fn add_storage_identifiers(
     for descriptor in descriptors {
         let value = match descriptor_value(descriptor) {
             Ok(Some(value)) => value,
-            Ok(None) => continue,
+            Ok(None) => {
+                out.fallback_failed(
+                    "Storage Identifier",
+                    &crate::win::Error::msg("storage descriptor", "absent: no usable identity"),
+                );
+                continue;
+            }
             Err(error) => {
                 out.fallback_failed(&format!("{} Storage Identifier", disk.device_id), &error);
                 disk.failures
@@ -85,6 +91,13 @@ pub(super) fn add_storage_identifiers(
             }
         };
         if identity_displayed(disk, &value) {
+            out.fallback_failed(
+                "Storage Identifier",
+                &crate::win::Error::msg(
+                    "storage descriptor",
+                    "ambiguous: duplicate displayed identity omitted",
+                ),
+            );
             continue;
         }
         // SCSI association 0 / Windows Device identifies a logical unit, 1 a
@@ -111,7 +124,7 @@ pub(super) fn add_storage_identifiers(
             1 => "binary",
             2 => "ASCII",
             3 => "UTF-8",
-            _ => unreachable!(),
+            _ => continue, // descriptor_value already rejects unknown code sets.
         };
         disk.details.push((
             format!("Storage ID ({association}, {kind}, {code})"),
@@ -137,9 +150,72 @@ pub(super) fn identity_displayed(disk: &DiskInfo, value: &str) -> bool {
             .is_some_and(|(old, id)| *id && same(old))
 }
 
+/// Reject only added unit identities; adapter/controller/port identities can be
+/// shared by several disks or namespaces. Keep every legacy field untouched.
+pub(super) fn reject_repeated_identities(out: &mut Out, disks: &mut [DiskInfo]) {
+    use std::collections::{HashMap, HashSet};
+    let unit = |label: &str| {
+        label.starts_with("NVMe Namespace ")
+            || matches!(label, "ATA Serial (Identify)" | "ATA WWN")
+            || label.starts_with("Storage ID (device / logical unit,")
+                && [", EUI-64,", ", NAA,", ", MD5 logical unit,", ", SCSI name,"]
+                    .iter()
+                    .any(|kind| label.contains(kind))
+    };
+    let key = |value: &str| hex_identity(value).unwrap_or_else(|| value.to_owned());
+    let mut counts = HashMap::new();
+    for disk in disks.iter() {
+        let values: HashSet<_> = disk
+            .nvme_ids
+            .iter()
+            .filter(|(label, _)| unit(label))
+            .map(|(_, value)| key(value))
+            .chain(
+                disk.details
+                    .iter()
+                    .filter(|(label, _, id)| *id && unit(label))
+                    .map(|(_, value, _)| key(value)),
+            )
+            .collect();
+        for value in values {
+            *counts.entry(value).or_insert(0usize) += 1;
+        }
+    }
+    for disk in disks {
+        let mut retain = |label: &str, value: &str| {
+            if unit(label) && counts.get(&key(value)).is_some_and(|&n| n > 1) {
+                out.fallback_failed(
+                    label,
+                    &crate::win::Error::msg(
+                        "disk identity",
+                        "implausible: unit identity repeated on different disks",
+                    ),
+                );
+                false
+            } else {
+                true
+            }
+        };
+        disk.nvme_ids.retain(|(label, value)| retain(label, value));
+        disk.details
+            .retain(|(label, value, _)| retain(label, value));
+    }
+}
+
 fn descriptor_value(descriptor: &storage::StorageIdentifier) -> crate::win::Result<Option<String>> {
     let value = &descriptor.value;
     if value.is_empty() || value.iter().all(|&b| b == 0) {
+        crate::win::record(crate::win::Error::msg(
+            "Storage Identifier",
+            "absent: empty or zero identity",
+        ));
+        return Ok(None);
+    }
+    if descriptor.code_set == 1 && value.iter().all(|&b| b == 0xFF) {
+        crate::win::record(crate::win::Error::msg(
+            "Storage Identifier",
+            "implausible: all-FF identity",
+        ));
         return Ok(None);
     }
     if descriptor.code_set == 1 {
@@ -148,21 +224,35 @@ fn descriptor_value(descriptor: &storage::StorageIdentifier) -> crate::win::Resu
     if !matches!(descriptor.code_set, 2 | 3) {
         return Err(crate::win::Error::msg(
             "storage descriptor",
-            "invalid identifier code set",
+            "unsupported: identifier code set",
         ));
     }
     let end = value.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
-    let value = &value[..end];
+    let value = value
+        .get(..end)
+        .ok_or_else(|| crate::win::Error::msg("storage descriptor", "malformed: text bounds"))?;
     let text = std::str::from_utf8(value).map_err(|_| {
         crate::win::Error::msg("storage descriptor", "invalid identifier text encoding")
     })?;
     if text.chars().any(char::is_control) || descriptor.code_set == 2 && !text.is_ascii() {
         return Err(crate::win::Error::msg(
             "storage descriptor",
-            "invalid identifier text encoding",
+            "malformed: identifier text encoding",
         ));
     }
-    Ok((!trim_net(text).is_empty()).then(|| text.to_owned()))
+    let sentinel = hex_identity(text)
+        .is_some_and(|hex| hex.bytes().all(|b| b == b'0') || hex.bytes().all(|b| b == b'F'));
+    let placeholder = text
+        .chars()
+        .next()
+        .is_some_and(|first| text.chars().all(|c| c == first));
+    if sentinel || placeholder {
+        crate::win::record(crate::win::Error::msg(
+            "Storage Identifier",
+            "implausible: placeholder identity",
+        ));
+    }
+    Ok((!trim_net(text).is_empty() && !sentinel && !placeholder).then(|| text.to_owned()))
 }
 
 // Compare only explicit hex encodings; arbitrary serial punctuation/case stays.
@@ -286,6 +376,57 @@ fn guid_x(text: &str) -> Option<[u8; 16]> {
 #[cfg(test)]
 mod descriptor_tests {
     use super::*;
+
+    #[test]
+    fn descriptor_sentinels_unknown_codes_and_associations_are_isolated() {
+        let mut disk = DiskInfo {
+            device_id: "PHYSICALDRIVE7".into(),
+            model: "Example SSD".into(),
+            serial: "S6PUNF0R812345X".into(),
+            nvme_ids: vec![],
+            firmware: "SVT02B6Q".into(),
+            hardware_id: None,
+            volumes: vec![],
+            details: vec![],
+            failures: vec![],
+        };
+        let descriptor = |code_set, association, value: &[u8]| storage::StorageIdentifier {
+            code_set,
+            identifier_type: 0x80,
+            association,
+            value: value.to_vec(),
+        };
+        let mut out = Out::new();
+        add_storage_identifiers(
+            &mut out,
+            &mut disk,
+            &[
+                descriptor(1, 0, &[0xFF; 16]),
+                descriptor(1, 0, &[0; 8]),
+                descriptor(2, 0, b"FFFF"),
+                descriptor(3, 0, b"uuid.00000000-0000-0000-0000-000000000000"),
+                descriptor(99, 0, b"SECRET-7F29"),
+                descriptor(3, 81, b"EXAMPLE-7F29"),
+                descriptor(3, 81, b"EXAMPLE-7F29"),
+            ],
+        );
+        assert_eq!(disk.details.len(), 1);
+        assert_eq!(
+            disk.details[0].0,
+            "Storage ID (association 81, type 128, UTF-8)"
+        );
+        assert_eq!(disk.failures.len(), 1);
+        render_disks(&mut out, &[disk]);
+        let section = out.finish();
+        assert_eq!(section.failures.len(), 6);
+        assert!(!section.body.contains("SECRET"));
+        assert!(
+            section
+                .failures
+                .iter()
+                .all(|e| !e.contains("SECRET") && !e.contains("EXAMPLE"))
+        );
+    }
 
     #[test]
     fn descriptor_text_safety_duplicate_suppression_and_masked_rendering() {

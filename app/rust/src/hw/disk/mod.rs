@@ -14,7 +14,8 @@ use crate::{
     },
 };
 use formatting::{
-    add_storage_identifiers, convert_unique_id_to_hex, identity_displayed, nonempty, render_disks,
+    add_storage_identifiers, convert_unique_id_to_hex, identity_displayed, nonempty,
+    reject_repeated_identities, render_disks,
 };
 #[cfg(test)]
 use sources::unique_ids_wmi;
@@ -44,15 +45,13 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         out.text("No disk drives detected.").trim_end();
         return Ok(());
     }
-    let indices: Vec<_> = rows
-        .iter()
-        .filter_map(|row| {
-            row.str("Index")
-                .and_then(|v| trim_net(&v).parse::<i32>().ok())
-                .filter(|&n| n >= 0)
-                .map(|n| n as u32)
-        })
-        .collect();
+    let row_indices = proven_disk_indices(
+        &rows
+            .iter()
+            .map(|row| (row.str("Index"), row.str("DeviceID")))
+            .collect::<Vec<_>>(),
+    );
+    let indices: Vec<_> = row_indices.iter().copied().flatten().collect();
     // Native disk queries do not depend on volume, WMI identity or SetupAPI
     // snapshots. Start them while those independent sources are collected.
     let native_queries = std::thread::Builder::new()
@@ -117,7 +116,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         }
     };
     let mut queries = queries.into_iter();
-    for row in rows {
+    for (row, index) in rows.into_iter().zip(row_indices) {
         // C# parity: Hardware/DiskDriveInfo.cs:134-138. Null differs from empty;
         // OEM placeholders and whitespace-trimmed empty strings are preserved.
         let device_id = row
@@ -151,10 +150,6 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             failures: Vec::new(),
         };
         // C# parity: Hardware/DiskDriveInfo.cs:140-144 (signed Int32 index).
-        let index = row
-            .str("Index")
-            .and_then(|v| trim_net(&v).parse::<i32>().ok())
-            .filter(|&n| n >= 0);
         if let Some(index) = index {
             let storage::PhysicalQueries {
                 nvme,
@@ -251,9 +246,11 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                     out.fallback_failed(&format!("{} NVMe Identify", disk.device_id), &error);
                 }
             }
-            if let Some(serial) = unique_ids.adapter_serials.get(&(index as u32)) {
+            if let Some(serial) = unique_ids.adapter_serials.get(&index)
+                && serial.matches_disk(&disk.serial)
+            {
                 disk.details
-                    .push(("Adapter Serial".into(), serial.clone(), true));
+                    .push(("Adapter Serial".into(), serial.value.clone(), true));
             }
             match identifiers {
                 Ok(ids) => {
@@ -284,7 +281,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                 }
                 Err(error) => disk_error(out, &mut disk, "UniqueId (IOCTL)", &error),
             }
-            if let Some(id) = unique_ids.unique_ids.get(&(index as u32)) {
+            if let Some(id) = unique_ids.unique_ids.get(&index) {
                 disk.details
                     .push(("UniqueId (WMI)".into(), convert_unique_id_to_hex(id), true));
                 disk.details.push((
@@ -332,6 +329,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         }
         disks.push(disk);
     }
+    reject_repeated_identities(out, &mut disks);
     render_disks(out, &disks);
     for failure in failures {
         out.text(&failure);
@@ -345,6 +343,49 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     }
     out.source(&distinct.join("; "));
     Ok(())
+}
+
+fn proven_disk_indices(rows: &[(Option<String>, Option<String>)]) -> Vec<Option<u32>> {
+    if rows.len() > storage::MAX_DISKS {
+        win::record(Error::msg(
+            "Win32 disk index join",
+            "implausible: disk count exceeds collection cap",
+        ));
+        return vec![None; rows.len()];
+    }
+    let parsed: Vec<_> = rows
+        .iter()
+        .map(|(index, device)| {
+            index
+                .as_deref()
+                .and_then(|s| trim_net(s).parse::<i32>().ok())
+                .filter(|&n| n >= 0)
+                .map(|n| n as u32)
+                .filter(|n| {
+                    device
+                        .as_deref()
+                        .is_some_and(|s| s.eq_ignore_ascii_case(&format!(r"\\.\PHYSICALDRIVE{n}")))
+                })
+        })
+        .collect();
+    let mut counts = std::collections::HashMap::new();
+    for index in parsed.iter().flatten() {
+        *counts.entry(*index).or_insert(0usize) += 1;
+    }
+    parsed
+        .into_iter()
+        .map(|index| {
+            if index.is_some_and(|n| counts.get(&n) == Some(&1)) {
+                index
+            } else {
+                win::record(Error::msg(
+                    "Win32 disk index join",
+                    "ambiguous: invalid path/index or duplicate disk index",
+                ));
+                None
+            }
+        })
+        .collect()
 }
 
 /// Win32 codes a healthy disk returns when it lacks a feature or has no media:
