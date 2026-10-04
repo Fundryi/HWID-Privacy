@@ -31,6 +31,10 @@ pub(super) fn render_disks(out: &mut Out, disks: &[DiskInfo]) {
         out.text(&format!("    ├── Model: {}", disk.model));
         out.text(&format!("    ├── Serial: {}", disk.serial))
             .id_value(&disk.serial);
+        for (label, value) in &disk.nvme_ids {
+            out.text(&format!("    ├── {label}: {value}"))
+                .id_value(value);
+        }
         if let Some((id, identifier)) = &disk.hardware_id {
             out.text(&format!("    ├── Hardware ID: {id}"));
             // An error is display text, not an identifier.

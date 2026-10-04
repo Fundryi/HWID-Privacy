@@ -1,0 +1,328 @@
+{
+  "description": "Fabricated STORAGE_PROTOCOL_DATA_DESCRIPTOR and NVMe Identify replies. Allocate length zero bytes then overlay segments in order; omitted bytes are zero. No captured hardware identifiers.",
+  "cases": [
+    {
+      "name": "payload offset is relative to protocol data",
+      "kind": "controller",
+      "length": 4160,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000380000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 68,
+          "hex": "53365A324E533057383437323631502020202020"
+        }
+      ],
+      "expected": "S6Z2NS0W847261P"
+    },
+    {
+      "name": "controller space padded",
+      "kind": "controller",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 52,
+          "hex": "53365A324E533057383437323631502020202020"
+        }
+      ],
+      "expected": "S6Z2NS0W847261P"
+    },
+    {
+      "name": "controller NUL padded",
+      "kind": "controller",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 52,
+          "hex": "53365A324E53305738343732363150"
+        }
+      ],
+      "expected": "S6Z2NS0W847261P"
+    },
+    {
+      "name": "controller blank",
+      "kind": "controller",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000280000000010000000000000000000000000000000000000"
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "controller embedded control rejected",
+      "kind": "controller",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 52,
+          "hex": "53365A324E533057383437323631502020202020"
+        },
+        {
+          "offset": 55,
+          "hex": "0A"
+        }
+      ],
+      "expected": "S6Z2NS0W847261P",
+      "error": true
+    },
+    {
+      "name": "namespace both identifiers",
+      "kind": "namespace",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000000000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 152,
+          "hex": "6AB193E852CD4F70A4319027DB658CE2"
+        },
+        {
+          "offset": 168,
+          "hex": "002538B49C7216D0"
+        }
+      ],
+      "expected": {
+        "eui64": "002538B49C7216D0",
+        "nguid": "6AB193E852CD4F70A4319027DB658CE2"
+      }
+    },
+    {
+      "name": "zero NGUID suppressed",
+      "kind": "namespace",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000000000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 168,
+          "hex": "002538B49C7216D0"
+        }
+      ],
+      "expected": {
+        "eui64": "002538B49C7216D0",
+        "nguid": null
+      }
+    },
+    {
+      "name": "both zero suppressed",
+      "kind": "namespace",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000000000000000000280000000010000000000000000000000000000000000000"
+        }
+      ],
+      "expected": {
+        "eui64": null,
+        "nguid": null
+      }
+    },
+    {
+      "name": "wrong version",
+      "kind": "controller",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 52,
+          "hex": "53365A324E533057383437323631502020202020"
+        },
+        {
+          "offset": 0,
+          "hex": "2C000000"
+        }
+      ],
+      "expected": "S6Z2NS0W847261P",
+      "error": true
+    },
+    {
+      "name": "wrong size",
+      "kind": "controller",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 52,
+          "hex": "53365A324E533057383437323631502020202020"
+        },
+        {
+          "offset": 4,
+          "hex": "2C000000"
+        }
+      ],
+      "expected": "S6Z2NS0W847261P",
+      "error": true
+    },
+    {
+      "name": "wrong protocol",
+      "kind": "controller",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 52,
+          "hex": "53365A324E533057383437323631502020202020"
+        },
+        {
+          "offset": 8,
+          "hex": "02000000"
+        }
+      ],
+      "expected": "S6Z2NS0W847261P",
+      "error": true
+    },
+    {
+      "name": "wrong data type",
+      "kind": "controller",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 52,
+          "hex": "53365A324E533057383437323631502020202020"
+        },
+        {
+          "offset": 12,
+          "hex": "02000000"
+        }
+      ],
+      "expected": "S6Z2NS0W847261P",
+      "error": true
+    },
+    {
+      "name": "offset inside header",
+      "kind": "controller",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 52,
+          "hex": "53365A324E533057383437323631502020202020"
+        },
+        {
+          "offset": 24,
+          "hex": "24000000"
+        }
+      ],
+      "expected": "S6Z2NS0W847261P",
+      "error": true
+    },
+    {
+      "name": "offset beyond returned buffer",
+      "kind": "controller",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 52,
+          "hex": "53365A324E533057383437323631502020202020"
+        },
+        {
+          "offset": 24,
+          "hex": "FFFFFFFF"
+        }
+      ],
+      "expected": "S6Z2NS0W847261P",
+      "error": true
+    },
+    {
+      "name": "length exceeds returned buffer",
+      "kind": "controller",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 52,
+          "hex": "53365A324E533057383437323631502020202020"
+        },
+        {
+          "offset": 28,
+          "hex": "FFFFFFFF"
+        }
+      ],
+      "expected": "S6Z2NS0W847261P",
+      "error": true
+    },
+    {
+      "name": "short Identify payload",
+      "kind": "controller",
+      "length": 4144,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 52,
+          "hex": "53365A324E533057383437323631502020202020"
+        },
+        {
+          "offset": 28,
+          "hex": "FF0F0000"
+        }
+      ],
+      "expected": "S6Z2NS0W847261P",
+      "error": true
+    },
+    {
+      "name": "truncated response",
+      "kind": "controller",
+      "length": 4143,
+      "segments": [
+        {
+          "offset": 0,
+          "hex": "300000003000000003000000010000000100000000000000280000000010000000000000000000000000000000000000"
+        },
+        {
+          "offset": 52,
+          "hex": "53365A324E533057383437323631502020202020"
+        }
+      ],
+      "expected": "S6Z2NS0W847261P",
+      "error": true
+    }
+  ]
+}
