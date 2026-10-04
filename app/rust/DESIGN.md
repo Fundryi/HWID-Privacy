@@ -120,6 +120,7 @@ Control sizes and paddings come from the C# layout (section 1), not from the han
 - **Destructive:** outline button with `DANGER` text. No red fill.
 - **Sidebar item:** no fill at rest, `SECONDARY` text. Hover: `HOVER` fill, `SECONDARY` text. Active: `HOVER` fill, `TEXT` text, and a 2 px `TEXT` bar on the left edge inside the item (item height minus 2 x 4 px, radius 1). While a load runs, an item whose section is not collected yet shows `FAINT` text (section 13). No status color: `TEXT` carries "you are here", not a meaning.
 - **Copy section:** a small outline button `Copy` (72 x 28, icon `Copy`) at the right edge of the section header, vertically centered. It copies the shown section body as CRLF text. Always enabled.
+- **C1 Mask IDs.** Outline toggle `Mask IDs` (icon Hide `ED1A`, min 96 x 28) in the section header card, 8 px left of `Copy`. On: identifiers recorded by the providers (`Section.ids`, 4 characters or longer) are replaced in the view, Copy, Export, and Old View by `X` per ASCII alphanumeric character; separators and length stay (`XX:XX:XX:XX:XX:XX`, `{XXXXXXXX-XXXX-...}`). Not persisted; off at every start. Masked exports are named `-MASKED`.
 - **Focus:** keyboard focus shows the ring from section 5. A click also focuses the control, so focus is never lost.
 - A disabled button needs a visible reason next to it or in its own text (for example `Loading...` with the History glyph on the Old View button).
 - A disabled outline button keeps its `CARD` fill and `BORDER` outline; only the text turns `FAINT`.
@@ -193,6 +194,8 @@ Paddings and margins are multiples of 4: content 12, header card 12/8 with an 8 
 - **Loaded:** the header card (title 18/600 `TEXT`, meta `Section {i} of {n}` 11/600, the `Copy` button at the right) and the text well.
 - **Section meta color** by the body (status map): `INFO` while the body is `Loading...` (a load that failed leaves it so, like C#); `DANGER` when any line starts with `Error retrieving`; `WARNING` when a line contains `Unavailable (` or starts with `Error:` or `Error in`, and for the empty body `No data available`; otherwise `FAINT`. The title stays `TEXT`; the body is never colored.
 - **Error:** a failed load shows its error in a message box (section 15) and leaves the loaded view with the `Loading...` bodies, as C# does.
+- **Masking:** the header has three columns (titles fill, mask and Copy auto-size). The toggle stays enabled, hides with the header during loading and survives refreshes. Toggling re-renders the current section while retaining its first visible line. Whole-token matches use the provider's identifiers, de-duplicated and longest first; values shorter than four characters stay unchanged. Loading/error bodies without IDs stay unchanged. Old View applies the same mask to its fresh collection.
+- **C3 JSON export.** `Export` writes the `.txt` and a `.json` with the same stamp in one click; the success text gains `JSON: {path}`. No new control, no dialog, no footer change. Text bytes are unchanged when masking is off. JSON is pretty (two spaces), CRLF, UTF-8 without BOM: `app`, `version`, local ISO `exported`, `masked`, provider-ordered `sections` with `title`, CRLF-split `lines` (one trailing empty line dropped, empty body gives `[]`) and `ids` (order and duplicates retained). No diagnostic fields. The single clock snapshot names both files. Text is written first; a JSON failure keeps it and shows the existing Export Error box. With masking on, both files use masked sections and the `-MASKED` filename suffix.
 
 ## 14. Icons
 
@@ -228,7 +231,7 @@ Icons are glyphs of the Windows icon font, tinted like the text they sit next to
 | error | StatusCircleErrorX | `F13D` |
 | question | StatusCircleQuestionMark | `F142` |
 | toggle on-state | CheckMark | `E73E` |
-| Mask IDs (off; kit glyph reserved for step 2a) | Hide | `ED1A` |
+| Mask IDs (off) | Hide | `ED1A` |
 | Compare Exports | Switch | `E8AB` |
 | Startup Update Check | Sync | `E895` |
 | find: previous (kit glyph for step 2b) | ChevronUp | `E70E` |
@@ -269,9 +272,7 @@ The rules below are binding for the features C1, C2, C3, C4, C5 and C8 of `docs/
 
 ### 18.3 Per feature
 
-- **C1 Mask IDs.** Outline toggle `Mask IDs` (icon Hide `ED1A`, min 96 x 28) in the section header card, 8 px left of `Copy`. On: identifiers recorded by the providers (`Section.ids`, 4 characters or longer) are replaced in the view, Copy, Export, and Old View by `X` per ASCII alphanumeric character; separators and length stay (`XX:XX:XX:XX:XX:XX`, `{XXXXXXXX-XXXX-...}`). Not persisted; off at every start. Masked exports are named `-MASKED`.
 - **C2 Compare Exports.** Two open-file dialogs (before, after), then a modal window `Compare Exports` (1000 x 700 scaled, minimum 640 x 400): the header card with `Before`/`After` file names (11/600 `SECONDARY` labels, 13/400 `TEXT` names, ellipsis), the summary `Changed n · Added n · Removed n · Same n` in 11/600 `FAINT`, `Copy` 72 x 28; the well (`CARD`, Consolas 10 pt, no wrap) lists rows per section with a kind column `changed` / `removed` / `added` / `same`. No colors in rows (section 3) and none on the summary: a count is not a status and the tool cannot know whether a change is good. Esc closes.
-- **C3 JSON export.** `Export` writes the `.txt` and a `.json` with the same stamp in one click; the success text gains `JSON: {path}`. No new control, no dialog, no footer change.
 - **C4 Find.** A 28 px bar between the header card and the well (main) or above the well (Old View), 8 px gap below, hidden until `Ctrl+F`: input (fills, min 160), count `{i} of {n}` / `No matches` in 12/400 `SECONDARY`, icon-only `Previous match` (ChevronUp `E70E`), `Next match` (ChevronDown `E70D`) 4 px apart, `Close find` (Cancel `E711`); gaps 8. A match is the well's selection (the system highlight, section 5 exception). Previous/Next are disabled at 0 matches; the count label is the reason.
 
 ### 18.5 Status map additions (section 3)
