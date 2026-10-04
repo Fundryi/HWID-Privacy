@@ -135,6 +135,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                                 bus,
                                 windows::Win32::Storage::FileSystem::BusTypeNvme.0 as u32
                             );
+                            collect_ata(index as u32, bus, out, &mut disk, &mut sources);
                         }
                         storage::IdentifyOutcome::Failed(error) => {
                             out.fallback_failed(
@@ -255,6 +256,49 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
 /// Win32 codes a healthy disk returns when it lacks a feature or has no media:
 /// invalid function, not ready, not supported, no media in drive.
 const EXPECTED_UNSUPPORTED: [u32; 4] = [1, 21, 50, 1112];
+
+fn collect_ata(index: u32, bus: u32, out: &mut Out, disk: &mut DiskInfo, sources: &mut Vec<&str>) {
+    let identity = match storage::physical_ata_identity(index, bus) {
+        Ok(identity) => identity,
+        Err(error) => {
+            out.fallback_failed(&format!("{} ATA Identify", disk.device_id), &error);
+            disk.failures
+                .push(format!("    ATA Identify: Unavailable ({error})"));
+            return;
+        }
+    };
+    let wwn = match identity.wwn {
+        storage::IdentifyOutcome::Ok(wwn) => storage::IdentifyOutcome::Ok(format!("{wwn:016X}")),
+        storage::IdentifyOutcome::Failed(error) => storage::IdentifyOutcome::Failed(error),
+        storage::IdentifyOutcome::Empty => storage::IdentifyOutcome::Empty,
+        storage::IdentifyOutcome::NotAttempted { bus } => {
+            storage::IdentifyOutcome::NotAttempted { bus }
+        }
+    };
+    for (label, value, identifier) in [
+        ("ATA Serial (Identify)", identity.serial, true),
+        ("ATA Model (Identify)", identity.model, false),
+        ("ATA Firmware (Identify)", identity.firmware, false),
+        ("ATA WWN", wwn, true),
+    ] {
+        match value {
+            storage::IdentifyOutcome::Ok(value) => {
+                disk.details.push((label.into(), value, identifier));
+                sources.push("native (ATA Identify)");
+            }
+            storage::IdentifyOutcome::Failed(error) => {
+                out.fallback_failed(&format!("{} {label}", disk.device_id), &error);
+                disk.failures
+                    .push(format!("    {label}: Unavailable ({error})"));
+            }
+            storage::IdentifyOutcome::Empty if identifier && label == "ATA Serial (Identify)" => {
+                disk.failures
+                    .push("    ATA Identify Serial: Empty or placeholder serial".into());
+            }
+            storage::IdentifyOutcome::Empty | storage::IdentifyOutcome::NotAttempted { .. } => {}
+        }
+    }
+}
 
 fn disk_error(out: &mut Out, disk: &mut DiskInfo, label: &str, error: &Error) {
     out.fallback_failed(&format!("{} {label}", disk.device_id), error);

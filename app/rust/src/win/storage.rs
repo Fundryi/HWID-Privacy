@@ -9,10 +9,10 @@ use std::{
     time::{Duration, Instant},
 };
 use windows::Win32::{
-    Foundation::GENERIC_READ,
+    Foundation::{GENERIC_READ, GENERIC_WRITE},
     Storage::FileSystem::{
-        BusTypeNvme, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
-        IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+        BusTypeAta, BusTypeNvme, BusTypeSata, GetDriveTypeW, GetLogicalDrives,
+        GetVolumeInformationW, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
     },
     System::{
         Diagnostics::Debug::{SEM_FAILCRITICALERRORS, SetThreadErrorMode},
@@ -190,6 +190,270 @@ pub struct NvmeNamespace {
     pub nguid: Option<String>,
 }
 
+/// ATA fields are independent: malformed text cannot hide a valid WWN or model.
+pub struct AtaIdentity {
+    /// Word-swapped serial; padding and recognized placeholders are omitted.
+    pub serial: IdentifyOutcome<String>,
+    /// Independently parsed model context.
+    pub model: IdentifyOutcome<String>,
+    /// Independently parsed firmware context.
+    pub firmware: IdentifyOutcome<String>,
+    /// Numeric words 108–111, present only when WWN support/validity permit it.
+    pub wwn: IdentifyOutcome<u64>,
+}
+
+const ATA_IDENTIFY_SIZE: usize = 512;
+// ntddscsi.h: CTL_CODE(IOCTL_SCSI_BASE=4, 0x040b, METHOD_BUFFERED, READ|WRITE).
+const ATA_PASS_THROUGH_IOCTL: u32 = 0x0004_D02C;
+
+// ATA_PASS_THROUGH_EX from ntddscsi.h. The SDK type is in an unenabled WDK
+// feature; this layout supplies checked offsets, never a cast into a byte buffer.
+#[repr(C)]
+struct AtaPassThrough {
+    length: u16,
+    flags: u16,
+    path: u8,
+    target: u8,
+    lun: u8,
+    reserved_byte: u8,
+    transfer_length: u32,
+    timeout: u32,
+    reserved: u32,
+    data_offset: usize,
+    previous_task_file: [u8; 8],
+    current_task_file: [u8; 8],
+}
+
+/// Reads ATA IDENTIFY using the already validated StorageDeviceProperty bus.
+/// Only the fallback opens read/write access, and its sole command is read-only 0xEC.
+pub fn physical_ata_identity(index: u32, bus: u32) -> Result<AtaIdentity> {
+    if bus != BusTypeAta.0 as u32 && bus != BusTypeSata.0 as u32 {
+        storage_diagnostic(
+            index,
+            Some(bus),
+            "ATA Identify (native ATA/SATA only; USB/SAT and RAID excluded)",
+            None,
+            Instant::now(),
+            None,
+            "not-attempted",
+        );
+        return Ok(AtaIdentity {
+            serial: IdentifyOutcome::NotAttempted { bus },
+            model: IdentifyOutcome::NotAttempted { bus },
+            firmware: IdentifyOutcome::NotAttempted { bus },
+            wwn: IdentifyOutcome::NotAttempted { bus },
+        });
+    }
+    let read = |passthrough| {
+        let started = Instant::now();
+        let data = bounded("ATA Identify", move || {
+            let access = if passthrough {
+                GENERIC_READ.0 | GENERIC_WRITE.0
+            } else {
+                GENERIC_READ.0
+            };
+            let handle = ioctl::open_device(&format!(r"\\.\PHYSICALDRIVE{index}"), access)?;
+            if passthrough {
+                let query = ata_passthrough_query();
+                ioctl::device_io_control(&handle, ATA_PASS_THROUGH_IOCTL, &query, 1024)
+            } else {
+                let mut query = [0; PROTOCOL_START + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>()];
+                for (offset, value) in [
+                    (0, StorageDeviceProtocolSpecificProperty.0 as u32),
+                    (4, PropertyStandardQuery.0 as u32),
+                    (8, ProtocolTypeAta.0 as u32),
+                    (12, AtaDataTypeIdentify.0 as u32),
+                    (24, size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32),
+                    (28, ATA_IDENTIFY_SIZE as u32),
+                ] {
+                    query[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                ioctl::device_io_control(&handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, 1024)
+            }
+        });
+        let returned = data.as_ref().ok().map(Vec::len);
+        let result = data.and_then(|data| {
+            let payload = if passthrough {
+                ata_passthrough_payload(&data)?
+            } else {
+                ata_protocol_payload(&data)?
+            };
+            parse_ata_identity(payload)
+        });
+        storage_diagnostic(
+            index,
+            Some(bus),
+            if passthrough {
+                "IOCTL_ATA_PASS_THROUGH command=0xEC"
+            } else {
+                "StorageDeviceProtocolSpecificProperty ATA Identify"
+            },
+            returned,
+            started,
+            result.as_ref().err(),
+            "ok",
+        );
+        result
+    };
+    // Preserve the first failure in helper diagnostics even if fallback succeeds.
+    // A field-level parse failure does not discard other fields or reread the disk.
+    read(false).or_else(|_| read(true))
+}
+
+fn ata_passthrough_query() -> Vec<u8> {
+    let header = size_of::<AtaPassThrough>();
+    let mut query = vec![0; header];
+    query[..2].copy_from_slice(&(header as u16).to_le_bytes());
+    // ATA_FLAGS_DRDY_REQUIRED | ATA_FLAGS_DATA_IN. No DATA_OUT or DMA flag.
+    query[2..4].copy_from_slice(&3u16.to_le_bytes());
+    let offset = offset_of!(AtaPassThrough, transfer_length);
+    query[offset..offset + 4].copy_from_slice(&(ATA_IDENTIFY_SIZE as u32).to_le_bytes());
+    let offset = offset_of!(AtaPassThrough, timeout);
+    query[offset..offset + 4].copy_from_slice(&3u32.to_le_bytes());
+    let offset = offset_of!(AtaPassThrough, data_offset);
+    query[offset..offset + size_of::<usize>()].copy_from_slice(&header.to_le_bytes());
+    let task = offset_of!(AtaPassThrough, current_task_file);
+    query[task + 1] = 1; // One 512-byte sector.
+    query[task + 6] = 0xEC; // IDENTIFY DEVICE; never accept a caller-supplied command.
+    query
+}
+
+fn ata_passthrough_payload(data: &[u8]) -> Result<&[u8]> {
+    let header = size_of::<AtaPassThrough>();
+    let offset = usize::from_le_bytes(bytes(data, offset_of!(AtaPassThrough, data_offset))?);
+    if word(data, 0)? as usize != header
+        || dword(data, offset_of!(AtaPassThrough, transfer_length))? as usize != ATA_IDENTIFY_SIZE
+        || offset != header
+    {
+        return Err(Error::msg(
+            "ATA Identify",
+            "invalid passthrough length or offset",
+        ));
+    }
+    let task = bytes::<8>(data, offset_of!(AtaPassThrough, current_task_file))?;
+    // ATA status: reject BSY, DF, DRQ and ERR, and require device-ready completion.
+    if task[6] & 0xA9 != 0 || task[6] & 0x40 == 0 {
+        return Err(Error::msg(
+            "ATA task file",
+            "IDENTIFY DEVICE did not complete successfully",
+        ));
+    }
+    data.get(offset..offset + ATA_IDENTIFY_SIZE)
+        .ok_or_else(|| Error::msg("ATA Identify", "invalid truncated passthrough payload"))
+}
+
+fn ata_protocol_payload(data: &[u8]) -> Result<&[u8]> {
+    let header = size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32;
+    let offset = dword(data, 24)? as usize;
+    if dword(data, 0)? != header
+        || dword(data, 4)? != header
+        || dword(data, 8)? != ProtocolTypeAta.0 as u32
+        || dword(data, 12)? != AtaDataTypeIdentify.0 as u32
+        || offset < size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>()
+        || dword(data, 28)? as usize != ATA_IDENTIFY_SIZE
+    {
+        return Err(Error::msg("ATA Identify", "invalid protocol descriptor"));
+    }
+    PROTOCOL_START
+        .checked_add(offset)
+        .and_then(|start| {
+            start
+                .checked_add(ATA_IDENTIFY_SIZE)
+                .and_then(|end| data.get(start..end))
+        })
+        .ok_or_else(|| Error::msg("ATA Identify", "invalid protocol payload bounds"))
+}
+
+fn identify_outcome<T>(result: Result<Option<T>>) -> IdentifyOutcome<T> {
+    match result {
+        Ok(Some(value)) => IdentifyOutcome::Ok(value),
+        Ok(None) => IdentifyOutcome::Empty,
+        Err(error) => IdentifyOutcome::Failed(error),
+    }
+}
+
+fn parse_ata_identity(payload: &[u8]) -> Result<AtaIdentity> {
+    if payload.len() != ATA_IDENTIFY_SIZE {
+        return Err(Error::msg(
+            "ATA Identify",
+            "invalid Identify payload length",
+        ));
+    }
+    // Word 255: optional integrity signature 0xA5, then checksum over all 512 bytes.
+    if payload[510] == 0xA5 && payload.iter().fold(0u8, |sum, b| sum.wrapping_add(*b)) != 0 {
+        return Err(Error::msg(
+            "ATA Identify",
+            "invalid Identify integrity checksum",
+        ));
+    }
+    Ok(AtaIdentity {
+        serial: identify_outcome(ata_string(payload, 10, 20, true)),
+        model: identify_outcome(ata_string(payload, 27, 40, false)),
+        firmware: identify_outcome(ata_string(payload, 23, 8, false)),
+        wwn: identify_outcome(ata_wwn(payload)),
+    })
+}
+
+fn ata_string(
+    payload: &[u8],
+    start_word: usize,
+    length: usize,
+    serial: bool,
+) -> Result<Option<String>> {
+    let mut value = payload[start_word * 2..start_word * 2 + length].to_vec();
+    for pair in value.as_chunks_mut::<2>().0 {
+        pair.swap(0, 1);
+    }
+    let start = value
+        .iter()
+        .position(|b| !matches!(b, 0 | b' '))
+        .unwrap_or(length);
+    let end = value
+        .iter()
+        .rposition(|b| !matches!(b, 0 | b' '))
+        .map_or(start, |i| i + 1);
+    let value = &value[start..end];
+    if value.iter().any(|b| !(0x20..=0x7e).contains(b)) {
+        return Err(Error::msg(
+            "ATA Identify",
+            "invalid Identify string encoding",
+        ));
+    }
+    let text: String = value.iter().map(|&b| char::from(b)).collect();
+    let placeholder = serial
+        && (matches!(
+            text.to_ascii_uppercase().as_str(),
+            "UNKNOWN"
+                | "UNKNOWN SERIAL"
+                | "NONE"
+                | "N/A"
+                | "NA"
+                | "NOT SPECIFIED"
+                | "NOT AVAILABLE"
+                | "DEFAULT STRING"
+                | "TO BE FILLED BY O.E.M."
+        ) || value.iter().all(|&b| b == b'0')
+            || value.iter().all(|&b| b == b'F' || b == b'f'));
+    Ok((!text.is_empty() && !placeholder).then_some(text))
+}
+
+fn ata_wwn(payload: &[u8]) -> Result<Option<u64>> {
+    let support = word(payload, 84 * 2)?;
+    let active = word(payload, 87 * 2)?;
+    if support & 0xC000 != 0x4000
+        || support & 0x0100 == 0
+        || active & 0xC000 != 0x4000
+        || active & 0x0100 == 0
+    {
+        return Ok(None);
+    }
+    let mut wwn = 0u64;
+    for index in 108..112 {
+        wwn = (wwn << 16) | u64::from(word(payload, index * 2)?);
+    }
+    Ok((wwn != 0 && wwn != u64::MAX).then_some(wwn))
+}
+
 /// Reads NVMe Identify through storage property queries, gated by bus.
 pub fn physical_nvme_identity(index: u32) -> Result<NvmeIdentity> {
     let started = Instant::now();
@@ -338,7 +602,7 @@ fn storage_diagnostic(
         Some(error) if matches!(error.code, 21 | 1112 | 1167) => "absent",
         Some(error)
             if matches!(error.op, "storage descriptor" | "storage parser") && error.code == 0
-                || error.op == "NVMe Identify"
+                || matches!(error.op, "NVMe Identify" | "ATA Identify")
                     && error.code == 0
                     && (error.detail.starts_with("invalid ")
                         || error.detail.starts_with("protocol payload ")) =>
@@ -661,6 +925,169 @@ fn guid_text(bytes: [u8; 16]) -> String {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    fn ata_fixture() -> [u8; ATA_IDENTIFY_SIZE] {
+        let mut data = [0; ATA_IDENTIFY_SIZE];
+        for (start, length, text) in [
+            (10, 20, "S6PUNF0R812345X"),
+            (23, 8, "SVT02B6Q"),
+            (27, 40, "Samsung SSD 870 EVO 1TB"),
+        ] {
+            let field = &mut data[start * 2..start * 2 + length];
+            field.fill(b' ');
+            field[..text.len()].copy_from_slice(text.as_bytes());
+            for pair in field.as_chunks_mut::<2>().0 {
+                pair.swap(0, 1);
+            }
+        }
+        for (index, value) in [
+            (84, 0x4100u16),
+            (87, 0x4100),
+            (108, 0x5002),
+            (109, 0x538E),
+            (110, 0xA1B2),
+            (111, 0xC3D4),
+        ] {
+            data[index * 2..index * 2 + 2].copy_from_slice(&value.to_le_bytes());
+        }
+        data
+    }
+
+    #[test]
+    fn ata_identify_word_order_validity_placeholders_and_partial_fields() {
+        let mut data = ata_fixture();
+        let identity = parse_ata_identity(&data).expect("fabricated Identify block");
+        assert!(matches!(identity.serial, IdentifyOutcome::Ok(ref s) if s == "S6PUNF0R812345X"));
+        assert!(
+            matches!(identity.model, IdentifyOutcome::Ok(ref s) if s == "Samsung SSD 870 EVO 1TB")
+        );
+        assert!(matches!(identity.firmware, IdentifyOutcome::Ok(ref s) if s == "SVT02B6Q"));
+        assert!(matches!(
+            identity.wwn,
+            IdentifyOutcome::Ok(0x5002_538E_A1B2_C3D4)
+        ));
+        for end in 0..ATA_IDENTIFY_SIZE {
+            assert!(parse_ata_identity(&data[..end]).is_err());
+        }
+        for index in [84, 87] {
+            for value in [0u16, 0x4000, 0x0100, 0xC100] {
+                let mut invalid = data;
+                invalid[index * 2..index * 2 + 2].copy_from_slice(&value.to_le_bytes());
+                assert!(matches!(
+                    parse_ata_identity(&invalid).unwrap().wwn,
+                    IdentifyOutcome::Empty
+                ));
+            }
+        }
+        for sentinel in [0, 0xFF] {
+            let mut invalid = data;
+            invalid[216..224].fill(sentinel);
+            assert!(matches!(
+                parse_ata_identity(&invalid).unwrap().wwn,
+                IdentifyOutcome::Empty
+            ));
+        }
+        for serial in [
+            "",
+            "UNKNOWN",
+            "Default String",
+            "00000000000000000000",
+            "FFFFFFFFFFFFFFFFFFFF",
+            "N/A",
+        ] {
+            let mut invalid = data;
+            invalid[20..40].fill(b' ');
+            invalid[20..20 + serial.len()].copy_from_slice(serial.as_bytes());
+            for pair in invalid[20..40].as_chunks_mut::<2>().0 {
+                pair.swap(0, 1);
+            }
+            let identity = parse_ata_identity(&invalid).unwrap();
+            assert!(matches!(identity.serial, IdentifyOutcome::Empty));
+            assert!(matches!(identity.wwn, IdentifyOutcome::Ok(_)));
+        }
+        // A corrupt serial cannot erase the independently valid model/WWN.
+        data[21] = 0x80;
+        let identity = parse_ata_identity(&data).unwrap();
+        assert!(
+            matches!(identity.serial, IdentifyOutcome::Failed(ref e) if !e.detail.contains("S6PU"))
+        );
+        assert!(matches!(identity.model, IdentifyOutcome::Ok(_)));
+        assert!(matches!(identity.wwn, IdentifyOutcome::Ok(_)));
+        data = ata_fixture();
+        data[510] = 0xA5;
+        data[511] = 0u8.wrapping_sub(data.iter().fold(0u8, |sum, b| sum.wrapping_add(*b)));
+        assert!(parse_ata_identity(&data).is_ok());
+        data[511] = data[511].wrapping_add(1);
+        assert!(parse_ata_identity(&data).is_err());
+    }
+
+    #[test]
+    fn ata_reply_envelopes_and_task_file_status_are_checked() {
+        // x64 ntddscsi.h ABI; protect the local layout against accidental changes.
+        assert_eq!(size_of::<AtaPassThrough>(), 48);
+        assert_eq!(offset_of!(AtaPassThrough, data_offset), 24);
+        assert_eq!(offset_of!(AtaPassThrough, current_task_file), 40);
+        assert_eq!(ATA_PASS_THROUGH_IOCTL, 0x4D02C);
+        let header = size_of::<AtaPassThrough>();
+        let mut reply = ata_passthrough_query();
+        assert_eq!(reply[46], 0xEC);
+        assert_eq!(word(&reply, 2).unwrap(), 3); // DATA_IN only, never DATA_OUT.
+        reply[46] = 0x50;
+        reply.extend_from_slice(&ata_fixture());
+        assert_eq!(ata_passthrough_payload(&reply).unwrap(), ata_fixture());
+        for status in [0x00, 0x51, 0x70, 0xD0, 0x58] {
+            let mut invalid = reply.clone();
+            invalid[46] = status;
+            assert!(ata_passthrough_payload(&invalid).is_err());
+        }
+        for (offset, bytes) in [
+            (0, 47u16.to_le_bytes().to_vec()),
+            (8, 511u32.to_le_bytes().to_vec()),
+            (24, 40usize.to_le_bytes().to_vec()),
+        ] {
+            let mut invalid = reply.clone();
+            invalid[offset..offset + bytes.len()].copy_from_slice(&bytes);
+            assert!(ata_passthrough_payload(&invalid).is_err());
+        }
+        for end in 0..reply.len() {
+            assert!(ata_passthrough_payload(&reply[..end]).is_err());
+        }
+        let mut protocol = vec![0; PROTOCOL_START + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>()];
+        for (offset, value) in [
+            (0, header as u32),
+            (4, header as u32),
+            (8, ProtocolTypeAta.0 as u32),
+            (12, AtaDataTypeIdentify.0 as u32),
+            (24, 40),
+            (28, 512),
+        ] {
+            protocol[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        protocol.extend_from_slice(&ata_fixture());
+        assert_eq!(ata_protocol_payload(&protocol).unwrap(), ata_fixture());
+        for end in 0..protocol.len() {
+            assert!(ata_protocol_payload(&protocol[..end]).is_err());
+        }
+        for (offset, value) in [
+            (0, 0),
+            (4, 0),
+            (8, ProtocolTypeNvme.0 as u32),
+            (12, 0),
+            (24, 0),
+            (24, u32::MAX),
+            (28, 511),
+            (28, 513),
+        ] {
+            let mut invalid = protocol.clone();
+            invalid[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            assert!(ata_protocol_payload(&invalid).is_err());
+        }
+        let skipped = physical_ata_identity(9999, BusTypeNvme.0 as u32).unwrap();
+        assert!(matches!(
+            skipped.serial,
+            IdentifyOutcome::NotAttempted { .. }
+        ));
+    }
 
     fn fixture_bytes(case: &Value) -> Vec<u8> {
         let hex = case["hex"].as_str().expect("fixture hex");
