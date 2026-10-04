@@ -237,3 +237,48 @@ Outer 400 x 150 (scaled by DPI, AD-39), fixed. Padding 16. The app icon (32 px; 
 - Whitelist: header label 12 px above the list, the list in a 12 px panel, the same action row.
 - Confirm Device Removal: message 13/400 `TEXT`, warning 12/400 `WARNING`, the three buttons centered; `Yes (Autoclose)` is the primary and accept button.
 - Old View: the well in a 12 px panel, minimum 640 x 400, opens unselected at the top.
+
+## 18. Features in design (2026-10-04; not in code yet)
+
+The rules below are binding for the features C1, C2, C3, C4, C5 and C8 of `docs/rust-port/IMPROVEMENTS.md`. The detail (sizes, texts, flows, states) is in `docs/rust-port/features-design.md`. When a feature lands, move its rules into the sections above and delete them here, so code and this file never disagree (line 7). Until then, nothing in this section describes the shipped build.
+
+### 18.1 New kit rules
+
+- **Toggle.** A button can carry an on/off state. On: the CheckMark glyph (`E73E`) replaces the button's icon. Outline host adds the held look (`HOVER` fill, `BORDER_STRONG` outline). Sidebar host adds `TEXT` text and shows the CheckMark right-aligned, 12 px inset. Off: the host's rest look with its own icon. The accessible name is `{caption}, on` or `{caption}, off`; the drawn caption never changes. Space, Enter and click toggle. No status color: a toggle's state is not a status.
+- **Icon-only button.** 28 x 28, icon centered, the text is the accessible name only (8.3).
+- **Input (single-line edit).** 28 px tall, `CARD` fill, 1 px `BORDER` frame with radius 6 painted by the container (like the focus ring, offset 0), focus ring outside it, 13/400 `TEXT`, 10 px inner margins, cue text in the system gray (close to `FAINT`; accepted). The only editable text control of the app.
+- **Button text color override.** A button's text and icon can take a status color (today: `INFO` for the `Update available` notice). Fills and the disabled `FAINT` are unchanged.
+- **Two wells keep their selection visible when unfocused** (`EditSpec::keep_selection()`, `ES_NOHIDESEL`): the main section well and the Old View well, so a find match stays visible while the find edit has the focus. Every other well keeps the C# `HideSelection = true` default.
+- **Keys:** `Ctrl+F` opens the find bar, `F3`/`Shift+F3` step through matches, `Esc` inside the bar closes it. `Enter`/`Esc` never collide with `accept`/`cancel` (the main window and the Old View set neither).
+
+### 18.2 Sidebar tools block (C2, C8)
+
+Under the section list, outside its scroll flow: a 1 device px `BORDER` divider (margins 12 left/right, 8 above/below), then rows in the sidebar item look (13/400, icon at inset 12, 28 px tall, 2 px gap, same width as section items): the toggle `Startup Update Check` (icon Sync) and the action `Compare Exports` (icon Switch `E8AB`). No accent bar on tools rows. The block (75 px) is subtracted before the tier is chosen; resulting tiers per listed work area are in `features-design.md` 0.2 (1536x816 goes A to B, 1280x672 C to D, the minimum window B to C). All 14 entries stay visible without a scrollbar everywhere; the two captions never elide.
+
+### 18.3 Per feature
+
+- **C1 Mask IDs.** Outline toggle `Mask IDs` (icon Hide `ED1A`, min 96 x 28) in the section header card, 8 px left of `Copy`. On: identifiers recorded by the providers (`Section.ids`, 4 characters or longer) are replaced in the view, Copy, Export, and Old View by `X` per ASCII alphanumeric character; separators and length stay (`XX:XX:XX:XX:XX:XX`, `{XXXXXXXX-XXXX-...}`). Not persisted; off at every start. Masked exports are named `-MASKED`.
+- **C2 Compare Exports.** Two open-file dialogs (before, after), then a modal window `Compare Exports` (1000 x 700 scaled, minimum 640 x 400): the header card with `Before`/`After` file names (11/600 `SECONDARY` labels, 13/400 `TEXT` names, ellipsis), the summary `Changed n · Added n · Removed n · Same n` in 11/600 `FAINT`, `Copy` 72 x 28; the well (`CARD`, Consolas 10 pt, no wrap) lists rows per section with a kind column `changed` / `removed` / `added` / `same`. No colors in rows (section 3) and none on the summary: a count is not a status and the tool cannot know whether a change is good. Esc closes.
+- **C3 JSON export.** `Export` writes the `.txt` and a `.json` with the same stamp in one click; the success text gains `JSON: {path}`. No new control, no dialog, no footer change.
+- **C4 Find.** A 28 px bar between the header card and the well (main) or above the well (Old View), 8 px gap below, hidden until `Ctrl+F`: input (fills, min 160), count `{i} of {n}` / `No matches` in 12/400 `SECONDARY`, icon-only `Previous match` (ChevronUp `E70E`), `Next match` (ChevronDown `E70D`) 4 px apart, `Close find` (Cancel `E711`); gaps 8. A match is the well's selection (the system highlight, section 5 exception). Previous/Next are disabled at 0 matches; the count label is the reason.
+- **C5 Version.** Main window title `HWID Checker {CARGO_PKG_VERSION}`. `Cargo.toml` is the single source; `check.ps1` fails when `app.rc` differs.
+- **C8 Startup update check.** Opt-in through the sidebar toggle, stored in `HWIDChecker.settings.json` next to the exe. A start check runs in parallel with the load, never shows a box, and on success turns the `Updates` footer button into `Update available` in `INFO` (status map: notice). The click skips the check and continues at the existing `Update Available` box with the kept download. Row width at the minimum window stays one footer row (about 861 of 884 px).
+
+### 18.4 Glyphs added to section 14
+
+| Where | Glyph | Code |
+|---|---|---|
+| toggle on-state | CheckMark | `E73E` |
+| Mask IDs (off) | Hide | `ED1A` |
+| Compare Exports | Switch | `E8AB` |
+| Startup Update Check | Sync | `E895` |
+| find: previous | ChevronUp | `E70E` |
+| find: next | ChevronDown | `E70D` |
+| find: close | Cancel | `E711` |
+
+### 18.5 Status map additions (section 3)
+
+| Meaning | Color |
+|---|---|
+| update available (footer button notice) | `INFO` |
+| compare counts, find counts, toggle states | none (`FAINT` / `SECONDARY` text) |
