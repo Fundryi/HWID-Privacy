@@ -44,6 +44,20 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         out.text("No disk drives detected.").trim_end();
         return Ok(());
     }
+    let indices: Vec<_> = rows
+        .iter()
+        .filter_map(|row| {
+            row.str("Index")
+                .and_then(|v| trim_net(&v).parse::<i32>().ok())
+                .filter(|&n| n >= 0)
+                .map(|n| n as u32)
+        })
+        .collect();
+    // Native disk queries do not depend on volume, WMI identity or SetupAPI
+    // snapshots. Start them while those independent sources are collected.
+    let native_queries = std::thread::Builder::new()
+        .name("disk queries".into())
+        .spawn(move || storage::physical_queries(&indices));
     let mut sources = vec!["WMI (Win32_DiskDrive)"];
     let mut failures = Vec::new();
     let volumes = logical_drives(out, &mut sources, &mut failures);
@@ -84,6 +98,25 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         }
     }
     let mut disks = Vec::new();
+    // Native work completes independently; consume results in the original WMI
+    // order so rendering, identity precedence and source/failure order stay intact.
+    let queries = match native_queries {
+        Ok(worker) => worker.join().unwrap_or_else(|_| {
+            out.fallback_failed(
+                "native disk jobs",
+                &Error::msg("storage worker", "disk jobs panicked"),
+            );
+            Vec::new()
+        }),
+        Err(error) => {
+            out.fallback_failed(
+                "native disk jobs",
+                &Error::msg("storage worker", format!("start worker: {error}")),
+            );
+            Vec::new()
+        }
+    };
+    let mut queries = queries.into_iter();
     for row in rows {
         // C# parity: Hardware/DiskDriveInfo.cs:134-138. Null differs from empty;
         // OEM placeholders and whitespace-trimmed empty strings are preserved.
@@ -123,9 +156,17 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             .and_then(|v| trim_net(&v).parse::<i32>().ok())
             .filter(|&n| n >= 0);
         if let Some(index) = index {
+            let storage::PhysicalQueries {
+                nvme,
+                ata,
+                identifiers,
+                layout,
+            } = queries
+                .next()
+                .unwrap_or_else(storage::PhysicalQueries::unavailable);
             let mut storage_descriptors = Vec::new();
             let mut namespace_descriptor_ids = Vec::new();
-            match storage::physical_nvme_identity(index as u32) {
+            match nvme {
                 Ok(identity) => {
                     match identity.controller_serial {
                         storage::IdentifyOutcome::Ok(serial) => {
@@ -139,7 +180,9 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                                 bus,
                                 windows::Win32::Storage::FileSystem::BusTypeNvme.0 as u32
                             );
-                            collect_ata(index as u32, bus, out, &mut disk, &mut sources);
+                            if let Some(ata) = ata {
+                                collect_ata(ata, out, &mut disk, &mut sources);
+                            }
                         }
                         storage::IdentifyOutcome::Failed(error) => {
                             out.fallback_failed(
@@ -212,7 +255,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                 disk.details
                     .push(("Adapter Serial".into(), serial.clone(), true));
             }
-            match storage::physical_identifier(index as u32) {
+            match identifiers {
                 Ok(ids) => {
                     sources.push("native (storage)");
                     if let Some(id) = ids.selected
@@ -250,7 +293,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                     !id.is_empty(),
                 ));
             }
-            match storage::physical_layout(index as u32) {
+            match layout {
                 Ok(Some(layout)) => {
                     sources.push("native (storage)");
                     let label = if layout.is_gpt {
@@ -308,8 +351,13 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
 /// invalid function, not ready, not supported, no media in drive.
 const EXPECTED_UNSUPPORTED: [u32; 4] = [1, 21, 50, 1112];
 
-fn collect_ata(index: u32, bus: u32, out: &mut Out, disk: &mut DiskInfo, sources: &mut Vec<&str>) {
-    let identity = match storage::physical_ata_identity(index, bus) {
+fn collect_ata(
+    result: win::Result<storage::AtaIdentity>,
+    out: &mut Out,
+    disk: &mut DiskInfo,
+    sources: &mut Vec<&str>,
+) {
+    let identity = match result {
         Ok(identity) => identity,
         Err(error) => {
             out.fallback_failed(&format!("{} ATA Identify", disk.device_id), &error);

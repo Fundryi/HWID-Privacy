@@ -2,9 +2,10 @@
 
 use super::{Error, OwnedHandle, Result, catch_panic, ioctl, record};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc,
     },
     time::{Duration, Instant},
@@ -24,6 +25,8 @@ const CONNECTION_EX: u32 = 0x220448;
 const DESCRIPTOR: u32 = 0x220410;
 const DRIVER_KEY: u32 = 0x220420;
 const BUDGET: Duration = Duration::from_millis(750);
+const HUB_JOBS: usize = 2;
+const SCAN_JOBS: usize = 4;
 static BUSY: AtomicBool = AtomicBool::new(false);
 
 struct Worker;
@@ -67,7 +70,8 @@ pub fn descriptors() -> HashMap<String, DeviceStrings> {
     let deadline = Instant::now() + BUDGET;
     let (tx, rx) = mpsc::channel();
     // Synchronous driver calls cannot safely be forcibly terminated. The worker owns
-    // every buffer/handle until the call returns; BUSY caps stuck workers at one.
+    // every buffer/handle until the call returns. BUSY covers the coordinator AND
+    // its scoped lanes, so later scans cannot accumulate stuck driver workers.
     let worker = Worker;
     let spawned = std::thread::Builder::new()
         .name("usb-serial".into())
@@ -185,33 +189,68 @@ fn query(
 }
 
 fn scan(deadline: Instant, tx: &mpsc::Sender<Result<ScanValue>>) -> Result<()> {
+    let mut jobs = VecDeque::new();
     for path in hubs()? {
+        let port = Arc::new(AtomicU32::new(1));
+        for _ in 0..HUB_JOBS {
+            jobs.push_back((path.clone(), Arc::clone(&port)));
+        }
+    }
+    let jobs = Mutex::new(jobs);
+    std::thread::scope(|scope| {
+        for _ in 0..SCAN_JOBS {
+            let jobs = &jobs;
+            scope.spawn(move || {
+                loop {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    let Some((path, next_port)) =
+                        jobs.lock().unwrap_or_else(|e| e.into_inner()).pop_front()
+                    else {
+                        break;
+                    };
+                    let result = catch_panic(|| scan_hub(&path, &next_port, deadline, tx));
+                    let error = match result {
+                        Ok(Ok(())) => continue,
+                        Ok(Err(error)) => error,
+                        Err(_) => Error::msg("USB hub serial", "worker panicked"),
+                    };
+                    if tx.send(Err(error)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    Ok(())
+}
+
+fn scan_hub(
+    path: &str,
+    next_port: &AtomicU32,
+    deadline: Instant,
+    tx: &mpsc::Sender<Result<ScanValue>>,
+) -> Result<()> {
+    // USBView uses GENERIC_WRITE for read-only hub IOCTL requests.
+    // Each lane opens and owns its own handle; no handle crosses threads.
+    let hub = ioctl::open_device(path, 0x40000000)?;
+    let info = query(&hub, deadline, NODE_INFO, &[0; 76], 76)?;
+    let ports = *info
+        .get(6)
+        .ok_or_else(|| Error::msg("USB hub info", "short descriptor"))?;
+    loop {
         if Instant::now() >= deadline {
             break;
         }
-        let result = (|| {
-            // USBView uses GENERIC_WRITE for read-only hub IOCTL requests.
-            let hub = ioctl::open_device(&path, 0x40000000)?;
-            let info = query(&hub, deadline, NODE_INFO, &[0; 76], 76)?;
-            let ports = *info
-                .get(6)
-                .ok_or_else(|| Error::msg("USB hub info", "short descriptor"))?;
-            for port in 1..=u32::from(ports) {
-                if Instant::now() >= deadline {
-                    break;
-                }
-                if let Err(error) = port_strings(&hub, port, deadline, tx)
-                    && tx.send(Err(error)).is_err()
-                {
-                    return Ok(());
-                }
-            }
-            Ok(())
-        })();
-        if let Err(error) = result
+        let port = next_port.fetch_add(1, Ordering::Relaxed);
+        if port > u32::from(ports) {
+            break;
+        }
+        if let Err(error) = port_strings(&hub, port, deadline, tx)
             && tx.send(Err(error)).is_err()
         {
-            break;
+            return Ok(());
         }
     }
     Ok(())

@@ -4,7 +4,11 @@ use super::{Error, Result, ioctl, wide};
 use std::{
     mem::{offset_of, size_of},
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::mpsc,
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -66,19 +70,58 @@ pub struct Volume {
 
 // The frozen synchronous IOCTL helper cannot cancel a driver call. Abandon only
 // the wait; the worker retains ownership of its buffers/handles until it returns.
+const DISK_BUDGET: Duration = Duration::from_secs(5);
+const DISK_JOBS: usize = 4;
+// Four NVMe disks can issue five independent requests each. Reserve four slots
+// for overlapping volume work, and retain occupied slots across timed-out refreshes.
+const IO_JOBS: usize = 24;
+static IO_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+static ATA_PASSTHROUGH: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+struct IoWorker;
+impl Drop for IoWorker {
+    fn drop(&mut self) {
+        IO_ACTIVE.fetch_sub(1, Ordering::Release);
+    }
+}
+
+struct AtaWorker(u32);
+impl Drop for AtaWorker {
+    fn drop(&mut self) {
+        ATA_PASSTHROUGH
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|index| *index != self.0);
+    }
+}
+
 fn bounded<T: Send + 'static>(
     op: &'static str,
+    deadline: Instant,
     work: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
+    if Instant::now() >= deadline {
+        return Err(Error::msg(op, "timed out after 5000 ms"));
+    }
+    IO_ACTIVE
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+            (active < IO_JOBS).then_some(active + 1)
+        })
+        .map_err(|_| Error::msg(op, "previous storage queries still running"))?;
+    let worker = IoWorker;
     let (send, receive) = mpsc::sync_channel(1);
     thread::Builder::new()
         .name(format!("storage {op}"))
         .spawn(move || {
+            let _worker = worker;
             let result = catch_unwind(AssertUnwindSafe(|| {
                 // SAFETY: This is a dedicated, short-lived OS-query thread. Its error
                 // mode disappears with it; no caller or pooled thread is modified.
                 unsafe { SetThreadErrorMode(SEM_FAILCRITICALERRORS, None) }
                     .map_err(|e| Error::from_win("SetThreadErrorMode", e))?;
+                if Instant::now() >= deadline {
+                    return Err(Error::msg(op, "timed out after 5000 ms"));
+                }
                 work()
             }))
             .unwrap_or_else(|_| Err(Error::msg(op, "storage worker panicked")));
@@ -86,15 +129,94 @@ fn bounded<T: Send + 'static>(
             let _ = send.send(result);
         })
         .map_err(|e| Error::msg(op, format!("start worker: {e}")))?;
-    receive.recv_timeout(Duration::from_secs(5)).map_err(|e| {
-        Error::msg(
-            op,
-            match e {
-                mpsc::RecvTimeoutError::Timeout => "timed out after 5000 ms",
-                mpsc::RecvTimeoutError::Disconnected => "storage worker disconnected",
-            },
-        )
-    })?
+    receive
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|e| {
+            Error::msg(
+                op,
+                match e {
+                    mpsc::RecvTimeoutError::Timeout => "timed out after 5000 ms",
+                    mpsc::RecvTimeoutError::Disconnected => "storage worker disconnected",
+                },
+            )
+        })?
+}
+
+/// Independently retained field groups for one physical disk.
+pub struct PhysicalQueries {
+    pub nvme: Result<NvmeIdentity>,
+    pub ata: Option<Result<AtaIdentity>>,
+    pub identifiers: Result<StorageIdentifiers>,
+    pub layout: Result<Option<DiskLayout>>,
+}
+
+impl PhysicalQueries {
+    pub fn unavailable() -> Self {
+        let error = Error::msg("storage worker", "disk job did not complete");
+        Self {
+            nvme: Err(error.clone()),
+            ata: None,
+            identifiers: Err(error.clone()),
+            layout: Err(error),
+        }
+    }
+}
+
+/// Four disk jobs at a time, returned in input order. Every job shares one 5 s
+/// deadline across protocol, VPD and layout, including ATA fallback. Scope joins
+/// only bounded callers; detached OS workers continue owning their own handles.
+pub fn physical_queries(indices: &[u32]) -> Vec<PhysicalQueries> {
+    let next = AtomicUsize::new(0);
+    let results = Mutex::new((0..indices.len()).map(|_| None).collect::<Vec<_>>());
+    thread::scope(|scope| {
+        for _ in 0..DISK_JOBS.min(indices.len()) {
+            scope.spawn(|| {
+                loop {
+                    let position = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(&index) = indices.get(position) else {
+                        break;
+                    };
+                    let deadline = Instant::now() + DISK_BUDGET;
+                    let queries = thread::scope(|scope| {
+                        let identifiers =
+                            scope.spawn(|| physical_identifier_until(index, deadline));
+                        let layout = scope.spawn(|| physical_layout_until(index, deadline));
+                        let nvme = physical_nvme_identity_until(index, deadline);
+                        let ata = match &nvme {
+                            Ok(NvmeIdentity {
+                                controller_serial: IdentifyOutcome::NotAttempted { bus },
+                                ..
+                            }) => Some(physical_ata_identity_until(index, *bus, deadline)),
+                            _ => None,
+                        };
+                        PhysicalQueries {
+                            nvme,
+                            ata,
+                            identifiers: identifiers.join().unwrap_or_else(|_| {
+                                Err(Error::msg(
+                                    "StorageDeviceIdProperty",
+                                    "storage worker panicked",
+                                ))
+                            }),
+                            layout: layout.join().unwrap_or_else(|_| {
+                                Err(Error::msg(
+                                    "IOCTL_DISK_GET_DRIVE_LAYOUT_EX",
+                                    "storage worker panicked",
+                                ))
+                            }),
+                        }
+                    });
+                    results.lock().unwrap_or_else(|e| e.into_inner())[position] = Some(queries);
+                }
+            });
+        }
+    });
+    results
+        .into_inner()
+        .unwrap_or_else(|e| e.into_inner())
+        .into_iter()
+        .map(|result| result.unwrap_or_else(PhysicalQueries::unavailable))
+        .collect()
 }
 
 /// Enumerates drive letters in ascending order without probing network volumes.
@@ -115,7 +237,7 @@ pub fn volume(letter: char) -> Result<Option<Volume>> {
     if !letter.is_ascii_uppercase() {
         return Err(Error::msg("volume", "invalid drive letter"));
     }
-    bounded("volume", move || {
+    bounded("volume", Instant::now() + DISK_BUDGET, move || {
         let root = wide::to_wide(&format!("{letter}:\\"));
         // SAFETY: root is a live, NUL-terminated UTF-16 path.
         let kind = unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) };
@@ -162,8 +284,12 @@ pub fn volume(letter: char) -> Result<Option<Volume>> {
 
 /// Reads the selected VPD identifier through the shared device/IOCTL helpers.
 pub fn physical_identifier(index: u32) -> Result<StorageIdentifiers> {
+    physical_identifier_until(index, Instant::now() + DISK_BUDGET)
+}
+
+fn physical_identifier_until(index: u32, deadline: Instant) -> Result<StorageIdentifiers> {
     let started = Instant::now();
-    let data = bounded("StorageDeviceIdProperty", move || {
+    let data = bounded("StorageDeviceIdProperty", deadline, move || {
         // C# parity: Services/Win32/StorageDeviceIdQuery.cs:202-211 (read access).
         let handle = ioctl::open_device(&format!(r"\\.\PHYSICALDRIVE{index}"), GENERIC_READ.0)?;
         // Include the SDK AdditionalParameters tail, with zero-initialized padding.
@@ -294,6 +420,10 @@ struct AtaPassThrough {
 /// Reads ATA IDENTIFY using the already validated StorageDeviceProperty bus.
 /// Only the fallback opens read/write access, and its sole command is read-only 0xEC.
 pub fn physical_ata_identity(index: u32, bus: u32) -> Result<AtaIdentity> {
+    physical_ata_identity_until(index, bus, Instant::now() + DISK_BUDGET)
+}
+
+fn physical_ata_identity_until(index: u32, bus: u32, deadline: Instant) -> Result<AtaIdentity> {
     if bus != BusTypeAta.0 as u32 && bus != BusTypeSata.0 as u32 {
         storage_diagnostic(
             index,
@@ -313,7 +443,22 @@ pub fn physical_ata_identity(index: u32, bus: u32) -> Result<AtaIdentity> {
     }
     let read = |passthrough| {
         let started = Instant::now();
-        let data = bounded("ATA Identify", move || {
+        let data = bounded("ATA Identify", deadline, move || {
+            // Hold exclusion inside the OS worker, even after its caller times out.
+            // A subsequent refresh must never overlap passthrough on this disk.
+            let _ata = if passthrough {
+                let mut active = ATA_PASSTHROUGH.lock().unwrap_or_else(|e| e.into_inner());
+                if active.contains(&index) {
+                    return Err(Error::msg(
+                        "ATA Identify",
+                        "previous ATA passthrough still running",
+                    ));
+                }
+                active.push(index);
+                Some(AtaWorker(index))
+            } else {
+                None
+            };
             let access = if passthrough {
                 GENERIC_READ.0 | GENERIC_WRITE.0
             } else {
@@ -523,8 +668,12 @@ fn ata_wwn(payload: &[u8]) -> Result<Option<u64>> {
 
 /// Reads NVMe Identify through storage property queries, gated by bus.
 pub fn physical_nvme_identity(index: u32) -> Result<NvmeIdentity> {
+    physical_nvme_identity_until(index, Instant::now() + DISK_BUDGET)
+}
+
+fn physical_nvme_identity_until(index: u32, deadline: Instant) -> Result<NvmeIdentity> {
     let started = Instant::now();
-    let data = bounded("StorageDeviceProperty", move || {
+    let data = bounded("StorageDeviceProperty", deadline, move || {
         let handle = ioctl::open_device(&format!(r"\\.\PHYSICALDRIVE{index}"), GENERIC_READ.0)?;
         ioctl::device_io_control(
             &handle,
@@ -571,33 +720,59 @@ pub fn physical_nvme_identity(index: u32) -> Result<NvmeIdentity> {
             namespace_descriptors: IdentifyOutcome::NotAttempted { bus },
         });
     }
-    // Separate bounded calls retain a successful identity if the other query fails
-    // or times out. Keep SubValue=0; multi-namespace association is unverified.
-    let controller_serial = nvme_identify(index, 1, parse_nvme_serial);
-    let namespace = nvme_identify(index, 0, |data| {
-        let namespace = parse_nvme_namespace(data)?;
-        Ok((namespace.eui64.is_some() || namespace.nguid.is_some()).then_some(namespace))
-    });
-    let namespace_descriptors = nvme_identify(index, 3, |data| {
-        let ids = parse_nvme_namespace_descriptors(data)?;
-        if let IdentifyOutcome::Ok(namespace) = &namespace {
-            for (fixed, descriptor) in [
-                (&namespace.eui64, &ids.eui64),
-                (&namespace.nguid, &ids.nguid),
-            ] {
-                if matches!((fixed, descriptor), (Some(a), Some(b)) if a != b) {
-                    return Err(Error::msg(
-                        "NVMe Identify",
-                        "invalid namespace identity association",
-                    ));
-                }
-            }
-        }
-        Ok(
-            (ids.eui64.is_some() || ids.nguid.is_some() || ids.uuid.is_some() || ids.csi.is_some())
-                .then_some(ids),
+    // Start independent groups together; one hung request cannot consume another
+    // group's wait. Keep SubValue=0; multi-namespace association is unverified.
+    let (controller_serial, namespace, mut namespace_descriptors) = thread::scope(|scope| {
+        let controller = scope.spawn(|| nvme_identify(index, 1, deadline, parse_nvme_serial));
+        let descriptors = scope.spawn(|| {
+            nvme_identify(index, 3, deadline, |data| {
+                let ids = parse_nvme_namespace_descriptors(data)?;
+                Ok((ids.eui64.is_some()
+                    || ids.nguid.is_some()
+                    || ids.uuid.is_some()
+                    || ids.csi.is_some())
+                .then_some(ids))
+            })
+        });
+        let namespace = nvme_identify(index, 0, deadline, |data| {
+            let namespace = parse_nvme_namespace(data)?;
+            Ok((namespace.eui64.is_some() || namespace.nguid.is_some()).then_some(namespace))
+        });
+        (
+            controller.join().unwrap_or_else(|_| {
+                IdentifyOutcome::Failed(Error::msg("NVMe Identify", "storage worker panicked"))
+            }),
+            namespace,
+            descriptors.join().unwrap_or_else(|_| {
+                IdentifyOutcome::Failed(Error::msg("NVMe Identify", "storage worker panicked"))
+            }),
         )
     });
+    let conflict = if let (IdentifyOutcome::Ok(namespace), IdentifyOutcome::Ok(ids)) =
+        (&namespace, &namespace_descriptors)
+    {
+        [
+            (&namespace.eui64, &ids.eui64),
+            (&namespace.nguid, &ids.nguid),
+        ]
+        .into_iter()
+        .any(|(fixed, descriptor)| matches!((fixed, descriptor), (Some(a), Some(b)) if a != b))
+    } else {
+        false
+    };
+    if conflict {
+        let error = Error::msg("NVMe Identify", "invalid namespace identity association");
+        storage_diagnostic(
+            index,
+            Some(bus),
+            "StorageDeviceProtocolSpecificProperty CNS=3 association",
+            None,
+            started,
+            Some(&error),
+            "ok",
+        );
+        namespace_descriptors = IdentifyOutcome::Failed(error);
+    }
     Ok(NvmeIdentity {
         controller_serial,
         namespace,
@@ -611,10 +786,11 @@ const PROTOCOL_START: usize = offset_of!(STORAGE_PROTOCOL_DATA_DESCRIPTOR, Proto
 fn nvme_identify<T>(
     index: u32,
     cns: u32,
+    deadline: Instant,
     parse: impl FnOnce(&[u8]) -> Result<Option<T>>,
 ) -> IdentifyOutcome<T> {
     let started = Instant::now();
-    let data = bounded("NVMe Identify", move || {
+    let data = bounded("NVMe Identify", deadline, move || {
         let handle = ioctl::open_device(&format!(r"\\.\PHYSICALDRIVE{index}"), GENERIC_READ.0)?;
         // STORAGE_PROPERTY_QUERY.AdditionalParameters starts at byte 8, not
         // sizeof(STORAGE_PROPERTY_QUERY): the SDK includes a one-byte tail.
@@ -858,7 +1034,11 @@ fn parse_nvme_namespace_descriptors(payload: &[u8]) -> Result<NvmeNamespaceDescr
 
 /// Reads GPT/MBR identity through the shared device/IOCTL helpers.
 pub fn physical_layout(index: u32) -> Result<Option<DiskLayout>> {
-    bounded("IOCTL_DISK_GET_DRIVE_LAYOUT_EX", move || {
+    physical_layout_until(index, Instant::now() + DISK_BUDGET)
+}
+
+fn physical_layout_until(index: u32, deadline: Instant) -> Result<Option<DiskLayout>> {
+    bounded("IOCTL_DISK_GET_DRIVE_LAYOUT_EX", deadline, move || {
         // C# parity: Services/Win32/StorageDeviceIdQuery.cs:354-363.
         let handle = ioctl::open_device(&format!(r"\\.\PHYSICALDRIVE{index}"), GENERIC_READ.0)?;
         parse_layout(&ioctl::device_io_control(
@@ -1164,6 +1344,60 @@ fn guid_text(bytes: [u8; 16]) -> String {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn deadline_retains_running_worker_and_refuses_later_work() {
+        // A real healthy disk cannot exercise an indefinitely blocked driver.
+        // This owned allocation stands in for that worker's handles/buffers.
+        struct OwnedQuery(mpsc::Sender<()>);
+        impl Drop for OwnedQuery {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        let owned = OwnedQuery(dropped_tx);
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let error = bounded("deadline fixture", deadline, move || {
+            let _owned = owned;
+            let _ = started_tx.send(());
+            let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            Ok(())
+        })
+        .unwrap_err();
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(error.detail.contains("timed out"));
+        assert!(
+            dropped_rx.try_recv().is_err(),
+            "worker still owns the query"
+        );
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran_worker = std::sync::Arc::clone(&ran);
+        assert!(
+            bounded("expired fixture", deadline, move || {
+                ran_worker.store(true, Ordering::Relaxed);
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!ran.load(Ordering::Relaxed));
+        // A successful independent query is still possible after another caller
+        // abandoned its wait; it cannot drop the blocked query's allocation.
+        assert_eq!(
+            bounded(
+                "healthy fixture",
+                Instant::now() + Duration::from_secs(1),
+                || Ok(17)
+            )
+            .unwrap(),
+            17
+        );
+        assert!(dropped_rx.try_recv().is_err());
+        release_tx.send(()).unwrap();
+        dropped_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    }
 
     #[test]
     fn full_storage_identifier_list_checks_count_offsets_and_metadata() {
