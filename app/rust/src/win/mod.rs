@@ -19,6 +19,7 @@ pub mod setupapi;
 pub mod storage;
 pub mod time;
 pub mod tpm;
+pub mod usbhub;
 pub mod wide;
 pub mod wmi;
 
