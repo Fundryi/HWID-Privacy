@@ -188,3 +188,94 @@ fn tree() -> Vec<Node> {
         .fill(),
     ]
 }
+
+#[cfg(all(test, debug_assertions))]
+mod tests {
+    use super::super::{controls, window::Form};
+    use super::*;
+    use windows::Win32::{
+        Foundation::{LPARAM, WPARAM},
+        UI::WindowsAndMessaging::{
+            LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_GETTOPINDEX, LB_SETCURSEL, LB_SETTOPINDEX,
+            SendMessageW, WM_CHAR, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        },
+    };
+
+    fn message(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) -> isize {
+        // SAFETY: Synchronous messages to the live test list; pointer arguments below
+        // reference buffers that remain alive for the complete call.
+        unsafe { SendMessageW(hwnd, msg, Some(WPARAM(wparam)), Some(LPARAM(lparam))).0 }
+    }
+
+    fn native_name(hwnd: HWND, index: usize) -> String {
+        let len = message(hwnd, LB_GETTEXTLEN, index, 0);
+        assert!(len >= 0);
+        let mut text = vec![0u16; len as usize + 1];
+        assert_eq!(
+            message(hwnd, LB_GETTEXT, index, text.as_mut_ptr() as isize),
+            len
+        );
+        crate::win::wide::from_wide(&text)
+    }
+
+    #[test]
+    #[ignore = "opens a fixture whitelist; reads native accessible names without saving"]
+    fn checked_list_native_accessibility() {
+        assert!(super::super::dpi::set_per_monitor_v2_for_tests());
+        let form = Form::create(
+            HWND::default(),
+            FormSpec::new(TITLE, WindowSize::Client(theme::WHITELIST_CLIENT_SIZE)),
+            tree(),
+            |_, _| true,
+        )
+        .expect("fixture whitelist");
+        form.show();
+        let list = form.control(LIST).expect("checked list");
+        let items: Vec<_> = (0..80)
+            .map(|i| (format!("Fixture {i} (USB), checked"), i == 1))
+            .collect();
+        form.list_set_items(LIST, &items);
+        assert_eq!(native_name(list, 0), "Fixture 0 (USB), checked, unchecked");
+        assert_eq!(native_name(list, 1), "Fixture 1 (USB), checked, checked");
+        message(list, LB_SETCURSEL, 0, 0);
+        for checked in [true, false] {
+            message(list, WM_CHAR, usize::from(b' '), 0);
+            assert_eq!(form.list_checked(LIST)[0], checked);
+            assert_eq!(
+                native_name(list, 0),
+                format!(
+                    "Fixture 0 (USB), checked, {}",
+                    if checked { "checked" } else { "unchecked" }
+                )
+            );
+            assert_eq!(message(list, LB_GETCURSEL, 0, 0), 0);
+        }
+        // A native mouse click exercises selection notification and CheckOnClick.
+        message(list, WM_LBUTTONDOWN, 1, 5 | (5 << 16));
+        message(list, WM_LBUTTONUP, 0, 5 | (5 << 16));
+        assert!(form.list_checked(LIST)[0]);
+        assert_eq!(native_name(list, 0), "Fixture 0 (USB), checked, checked");
+        message(list, LB_SETCURSEL, 40, 0);
+        message(list, LB_SETTOPINDEX, 35, 0);
+        let top = message(list, LB_GETTOPINDEX, 0, 0);
+        form.list_set_checked(LIST, 0, false);
+        assert_eq!(native_name(list, 0), "Fixture 0 (USB), checked, unchecked");
+        assert_eq!(message(list, LB_GETCURSEL, 0, 0), 40);
+        assert_eq!(message(list, LB_GETTOPINDEX, 0, 0), top);
+        // The same setter is used by Reset; idempotent updates retain name and state.
+        for i in 0..items.len() {
+            form.list_set_checked(LIST, i, false);
+        }
+        assert!(form.list_checked(LIST).iter().all(|checked| !checked));
+        assert_eq!(native_name(list, 1), "Fixture 1 (USB), checked, unchecked");
+        controls::list_set_items(list, &items[..2]);
+        let directory = std::path::Path::new("D:/GIT/HWID-Privacy/app/rust/golden/minors-2-ui");
+        std::fs::create_dir_all(directory).expect("evidence directory");
+        msgbox::testing::capture(form.hwnd(), &directory.join("whitelist.png"))
+            .expect("whitelist capture");
+        form.destroy();
+        println!(
+            "PASS LB_GETTEXT: initial, Space twice, mouse, setter/reset; selection/top preserved"
+        );
+    }
+}

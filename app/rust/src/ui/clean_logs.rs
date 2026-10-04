@@ -138,6 +138,10 @@ fn drain(form: &Form, lines: &Lines) {
 }
 
 fn button_text(form: &Form, text: &str) {
+    // An unchanged AutoSize caption would add a layout inside the outer resize pass.
+    if form.text(CLOSE) == text {
+        return;
+    }
     form.set_text(CLOSE, text);
     // Keep autosizing and DPI rescaling in sync with the native button's caption.
     form.with_tree(|tree| {
@@ -482,6 +486,104 @@ mod tests {
         outcome
     }
 
+    fn verify_resize(form: &Form) {
+        use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_DPICHANGED};
+        let caption = form.text(CLOSE);
+        for dpi in [96, 144, 96] {
+            let mut rect = RECT::default();
+            // SAFETY: Reads and resizes only this test's live window, on its owning thread.
+            unsafe { GetWindowRect(form.hwnd(), &mut rect) }.expect("test rectangle");
+            let old_dpi = form.dpi();
+            rect.right = rect.left + (rect.right - rect.left) * dpi as i32 / old_dpi as i32;
+            rect.bottom = rect.top + (rect.bottom - rect.top) * dpi as i32 / old_dpi as i32;
+            let before = form.layout_count();
+            // SAFETY: Synchronous DPI message with a live suggested RECT for our own form.
+            unsafe {
+                SendMessageW(
+                    form.hwnd(),
+                    WM_DPICHANGED,
+                    Some(WPARAM((dpi | (dpi << 16)) as usize)),
+                    Some(LPARAM(&rect as *const RECT as isize)),
+                );
+            }
+            assert_eq!(form.dpi(), dpi);
+            assert_eq!(form.layout_count() - before, 1, "one DPI layout");
+            let before = form.layout_count();
+            // SAFETY: Resize our own window; the resulting WM_SIZE follows the real path.
+            unsafe {
+                SetWindowPos(
+                    form.hwnd(),
+                    None,
+                    0,
+                    0,
+                    rect.right - rect.left + 32,
+                    rect.bottom - rect.top + 16,
+                    SWP_NOMOVE | windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER,
+                )
+            }
+            .expect("resize test form");
+            assert_eq!(form.layout_count() - before, 1, "one resize layout");
+            assert_eq!(form.text(CLOSE), caption);
+            let client = form.client_size();
+            form.with_tree(|tree| {
+                let output_node = tree.find(OUTPUT_PANEL).expect("output panel");
+                let actions_node = tree.find(ACTION_PANEL).expect("action panel");
+                let output = output_node.bounds;
+                let actions = actions_node.bounds;
+                let button = tree.find(CLOSE).expect("close button").bounds;
+                assert_eq!(
+                    output.y + output.h + output_node.margin.b + actions_node.margin.t,
+                    actions.y,
+                    "panels keep their declared margins"
+                );
+                assert_eq!(
+                    actions.y + actions.h + actions_node.margin.b,
+                    client.h,
+                    "footer reaches bottom"
+                );
+                assert!(button.x >= 0 && button.y >= 0);
+                assert!(button.x + button.w <= actions.w);
+                assert!(button.y + button.h <= actions.h);
+            })
+            .expect("live tree");
+            let mut native_button = RECT::default();
+            let mut native_form = RECT::default();
+            // SAFETY: Read-only rectangles and a synchronous repaint of this test's form.
+            unsafe {
+                GetWindowRect(form.control(CLOSE).expect("close HWND"), &mut native_button)
+                    .expect("button rectangle");
+                GetWindowRect(form.hwnd(), &mut native_form).expect("form rectangle");
+                windows::Win32::Graphics::Gdi::RedrawWindow(
+                    Some(form.hwnd()),
+                    None,
+                    None,
+                    windows::Win32::Graphics::Gdi::RDW_INVALIDATE
+                        | windows::Win32::Graphics::Gdi::RDW_ALLCHILDREN
+                        | windows::Win32::Graphics::Gdi::RDW_UPDATENOW,
+                )
+                .ok()
+                .expect("paint test window");
+            }
+            assert!(
+                native_button.left >= native_form.left && native_button.right <= native_form.right
+            );
+            assert!(
+                native_button.top >= native_form.top && native_button.bottom <= native_form.bottom
+            );
+            let name = if caption == "Close" {
+                "close"
+            } else {
+                "running"
+            };
+            let path = PathBuf::from("D:/GIT/HWID-Privacy/app/rust/golden/minors-2-ui")
+                .join(format!("logs-{name}-{dpi}dpi.png"));
+            msgbox::testing::capture(form.hwnd(), &path).expect("layout capture");
+            println!(
+                "PASS Log Cleaning {caption:?}: {dpi} DPI, one layout per DPI/resize, bounds fit"
+            );
+        }
+    }
+
     #[test]
     #[ignore = "opens the debug dry-run window; private owner-PC UI verification"]
     fn wp16_test_window() {
@@ -538,6 +640,8 @@ mod tests {
         let cancelled_at = Cell::new(None);
         let label = case.clone();
         let full_output = case == "done";
+        let geometry_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let completed_geometry = geometry_done.clone();
         let form = Form::create(HWND::default(), spec(), layout(), move |form, event| {
             let completion = matches!(&event, Event::Worker(_));
             let destroyed = matches!(&event, Event::Destroyed);
@@ -583,6 +687,8 @@ mod tests {
             }
             fs::write(directory.join(format!("{label}-geometry.txt")), geometry).expect("geometry");
             if full_output && completion && !observed.running.get() && form.is_alive() {
+                verify_resize(form);
+                completed_geometry.store(true, std::sync::atomic::Ordering::Release);
                 assert!(
                     form.text(OUTPUT).encode_utf16().count() > 40_000,
                     "unlimited append"
@@ -596,6 +702,11 @@ mod tests {
         })
         .expect("test window");
         form.show();
+        if full_output {
+            fs::create_dir_all("D:/GIT/HWID-Privacy/app/rust/golden/minors-2-ui")
+                .expect("minor UI evidence directory");
+            verify_resize(&form);
+        }
         let hwnd = form.hwnd().0 as isize;
         let close = form.control(CLOSE).expect("close button").0 as isize;
         let driver_case = case.clone();
@@ -619,6 +730,9 @@ mod tests {
                 }
                 if driver_case == "done" || driver_case == "failed" || driver_case == "panic" {
                     wait_for(|| super::super::controls::text(close) == "Close");
+                    if driver_case == "done" {
+                        wait_for(|| geometry_done.load(std::sync::atomic::Ordering::Acquire));
+                    }
                     screenshot(hwnd, &format!("{driver_case}-final"));
                     click(close);
                 } else {
