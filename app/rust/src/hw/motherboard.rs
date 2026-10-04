@@ -16,7 +16,10 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     }
 
     // C# parity: MotherboardInfo.cs:43-51. No Version, Source or separators in WMI output.
-    let rows = wmi::query(wmi::Namespace::Cimv2, "SELECT * FROM Win32_BaseBoard")?;
+    let rows = wmi::query(
+        wmi::Namespace::Cimv2,
+        "SELECT Manufacturer, Product, Model, SKU, SerialNumber FROM Win32_BaseBoard",
+    )?;
     // AD-03: an empty fallback cannot hide a firmware failure behind an empty section.
     if rows.is_empty()
         && let Some(error) = firmware_error

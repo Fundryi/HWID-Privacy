@@ -16,3 +16,10 @@ Provider tests use the shared SMBIOS parser and exercise exact CRLF text,
 optional fields, last-present-field overwrite behavior, manufacturer gates,
 UUID byte order on old and new SMBIOS versions, sentinel UUIDs, and BIOS
 enrichment failures. Test mutations represent repeated and short records.
+
+Phase 7 also checks selective WMI fallback properties and the Type 3 SKU
+offset after variable-length contained elements, including truncated arrays
+and invalid element widths. `oem-identifiers.hex` is a wholly fabricated
+Type 11 table: one explicitly labeled serial, one placeholder asset tag,
+one non-identifier message, and a SKU already in `smbios.hex`. It verifies
+the count byte, suppression and identifier registration without live IDs.

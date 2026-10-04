@@ -1,7 +1,7 @@
 //! Chassis identifiers and the legacy chassis type names from shared SMBIOS data.
 
 use crate::{hw::Ctx, report::Out, win};
-use win::firmware::Smbios;
+use win::firmware::{Smbios, Structure};
 
 /// Collects CHASSIS from SMBIOS, retaining the C# unavailable and optional-field texts.
 pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
@@ -51,6 +51,32 @@ fn write_smbios(smbios: &Smbios, out: &mut Out) {
             }
         }
     }
+    // Associate the new SKU with the last chassis rather than borrowing one from
+    // an earlier record when a short repeat supplied the legacy primary fields.
+    if (smbios.major, smbios.minor) >= (2, 7)
+        && let Some(chassis) = smbios
+            .structures
+            .iter()
+            .rev()
+            .find(|record| record.kind == 3)
+        && let Some(sku) = chassis_sku(chassis)
+        && super::bios::useful_new_value(sku)
+        && !fields.contains(&sku)
+    {
+        out.id("SKU", sku);
+    }
+}
+
+fn chassis_sku(chassis: &Structure) -> Option<&str> {
+    // DSP0134 7.4: SKU follows n contained elements, each m bytes long.
+    let count = usize::from(chassis.byte(0x13)?);
+    let width = usize::from(chassis.byte(0x14)?);
+    if count > 0 && width < 3 {
+        return None;
+    }
+    chassis
+        .byte(0x15 + count * width)
+        .map(|index| chassis.string(index))
 }
 
 fn decode_chassis_type(value: u8) -> String {
@@ -116,9 +142,30 @@ mod tests {
                 "Manufacturer: Micro-Star International Co., Ltd.\r\n",
                 "Type: Desktop\r\nVersion: 1.0\r\n",
                 "Serial Number: CHS2410B937462\r\nAsset Tag: ASSET24100372\r\n",
+                "SKU: Desktop Chassis\r\n",
             )
         );
-        assert_eq!(section.ids, ["CHS2410B937462", "ASSET24100372"]);
+        assert_eq!(
+            section.ids,
+            ["CHS2410B937462", "ASSET24100372", "Desktop Chassis"]
+        );
+        // Outside-format bounds: SKU must follow the entire element array.
+        let mut variable = repeated.clone();
+        variable.formatted[0x13] = 2;
+        variable
+            .formatted
+            .splice(0x15..0x15, [0x82, 1, 1, 0x83, 1, 1]);
+        assert_eq!(chassis_sku(&variable), Some("Desktop Chassis"));
+        for end in 0..variable.formatted.len() {
+            let mut short = variable.clone();
+            short.formatted.truncate(end);
+            assert_eq!(chassis_sku(&short), None);
+        }
+        variable.formatted[0x14] = 0;
+        assert_eq!(chassis_sku(&variable), None);
+        variable.formatted[0x14] = 255;
+        assert_eq!(chassis_sku(&variable), None);
+        repeated.formatted[0x15] = 0;
         repeated.formatted[5] = 0x92;
         repeated.formatted[6..9].fill(0);
         smbios.structures.push(repeated.clone());
