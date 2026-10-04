@@ -5,7 +5,7 @@ Read this file first when changing collection or planning a new identifier. Ever
 ## Global behavior
 
 - **Administrator only.** The manifest requires elevation; the entrypoint also rejects a non-admin process before collection. A non-admin launch may start, but collection need not work; do not add non-admin fallbacks or change handles for that purpose. Each section below inherits this requirement. Prefer firmware tables, device protocol commands and descriptors when they preserve the existing information.
-- **15 parallel sections.** [Provider order and `Ctx`](src/hw/mod.rs), [collection](src/hw/collection.rs): all selected workers start before waiting, each with a 60-second deadline from its own start. Results return in app order. Timeout replaces that section with a timeout body; late results cannot replace it. Workers are detached, so abandoning a wait does not cancel an in-flight OS call.
+- **16 parallel sections.** [Provider order and `Ctx`](src/hw/mod.rs), [collection](src/hw/collection.rs): all selected workers start before waiting, each with a 60-second deadline from its own start. Results return in app order. Timeout replaces that section with a timeout body; late results cannot replace it. Workers are detached, so abandoning a wait does not cancel an in-flight OS call.
 - **Shared snapshots, per collection.** `Ctx` lazily caches the parsed RSMB SMBIOS table, a present-device instance-ID → first SetupAPI hardware-ID map, and a separate present-instance-ID set. Successes and failures are cached. USB and Bluetooth also perform their own SetupAPI scans. WMI connections are cached per thread and namespace, not shared across workers.
 - **Values are source reports.** Firmware strings, driver replies and registry data do not prove uniqueness or authenticity. A Windows disk serial, controller serial, namespace ID, filesystem serial and partition GUID identify different layers. Preserve differing values with distinct labels.
 - **Identifier means marked, not necessarily unique.** The tables' **ID** column means the provider records the value in `Section.ids`. `Out::id`, `id_value`, or `combined` with `true` supplies that marking. Unmarked names, model/part codes and status text remain visible.
@@ -51,6 +51,7 @@ These are order-of-magnitude observations, not guarantees or a new benchmark. Th
 | NETWORK ADAPTERS (NIC's) | 123 ms; candidate 120 ms rejected as noise | ~0.1 s; existing WMI path retained. |
 | BLUETOOTH ADAPTERS | 349 → 52 ms | ~50 ms empty-radio path, not a successful radio benchmark. |
 | AUDIO DEVICES | Round 2: 11 ms five-run median (2026-10-04) | New Rust-only section; synchronous COM/topology and shared SetupAPI snapshot costs vary. |
+| BATTERY | No prior section | Elevated desktop no-battery five-run median 0 ms (integer-ms resolution, 2026-10-04); battery-equipped timing unverified. |
 | ARP INFO/CACHE | Native 2–3 ms; `arp.exe` 43 ms (2026-10-03 entry) | Milliseconds native, tens of ms process; cache varies. |
 
 ## DISK DRIVES
@@ -600,6 +601,46 @@ Endpoint ID: {0.0.0.00000000}.{6d73e082-684f-4130-a0cb-fb538d1c3279}
 **Admin/timing/limits.** Admin app; synchronous COM calls run under the collector's existing 60-second provider deadline. Endpoint/property strings are limited to 32767 UTF-16 units and reject malformed UTF-16. `VT_EMPTY`, `VT_NULL`, empty strings and null GUIDs omit optional fields with diagnostics; unsupported types, access-denied, timeout, and other failures retain separate diagnostics and do not remove successful endpoints. Inactive (disabled, not-present, unplugged) endpoint counts appear only in diagnostics, separately for render/capture. Empty successful active enumeration gives `No active audio endpoints detected.` Incomplete empty enumeration reports an error instead. Endpoint IDs and stable IDs are OS/driver identities, not guaranteed immutable physical serial numbers; virtual devices can appear. Hardware-ID/ContainerID joins can be absent independently. Elevated owner-PC round 2 capture on 2026-10-04: 25 active endpoints (15 render, 10 capture), grouped as BEACN Studio (22), NVIDIA Broadcast (2), and HyperX Cloud II Wireless (1); all three adapters supply instance, hardware and container IDs. Endpoint property InstanceId is absent, so every adapter uses the topology fallback. 24 inactive render and one inactive capture endpoint are excluded. Section-only dump 13 ms; five-run median 16 → 11 ms from round 1, not a general speed claim. The real `report::masked` function masked all 34 captured identity values; fabricated-fixture verification covers optional Stable ID. Earlier development captures exercised endpoint-container reads and one final unresolved group. **Untested:** `PKEY_AudioEndpoint_StableId` (absent on every endpoint on this Windows build), successful endpoint-property-first adapter join, naturally unavailable adapter/container, no-endpoint hardware, older Windows, access-denied, COM/enumeration/property failures, malformed UTF-16/property types, and provider timeout. Captures remain in session temp.
 
 **AD:** 01–03, 46, 116. The C# app has no audio section; `check.ps1` lists it in `$RustOnlyTitles`.
+
+## BATTERY
+
+[Provider](src/hw/battery.rs), [battery helper](src/win/battery.rs), [type-22 decoder](src/win/firmware.rs).
+
+```text
+Battery: #1
+Battery Name: L18M3P73
+Battery Manufacturer: SMP
+Battery Manufacture Date: 2024-02-29
+Battery Serial: BAT2402A7381
+Battery Unique ID: SMP-L18M3P73-20240229-4A37
+----------------------------------------
+SMBIOS Battery: #1
+Battery Name (SMBIOS): L18M3P73
+Battery Manufacturer (SMBIOS): SMP
+Battery Manufacture Date (SMBIOS): 2024-02-29
+Battery Serial (SMBIOS): 4A37
+```
+
+| Line/label | Meaning | ID | Appears when |
+|---|---|---|---|
+| Battery: #n | Present battery interface, in exact interface-path sort order | No | A nonzero tag or unresolved per-interface failure. Paths/tags are not displayed. |
+| Battery Name / Battery Manufacturer | Driver-reported device and manufacturer names | No | Independent `BatteryDeviceName` / `BatteryManufactureName` queries return nonempty strings. |
+| Battery Manufacture Date | Driver-reported date, `YYYY-MM-DD` | No | `BatteryManufactureDate` returns a valid nonzero calendar date. |
+| Battery Serial / Battery Unique ID | Driver serial / complete case-sensitive tracking token | Yes | `BatterySerialNumber` / `BatteryUniqueID` returns a nonempty string. |
+| SMBIOS Battery: #n | Independent firmware record, in SMBIOS table order | No | Each type-22 record; no guessed interface association. |
+| Battery Name (SMBIOS) / Battery Manufacturer (SMBIOS) | Type-22 string-index fields at 08h / 05h | No | Referenced string is nonempty. |
+| Battery Manufacture Date (SMBIOS) | Type-22 manufacture-date string, or decoded SBDS date | No | String index at 06h is nonzero, or SMBIOS 2.2+ index zero selects the valid packed date at 12h. SBDS uses bits 15:9 = year minus 1980, 8:5 = month, 4:0 = day; decoded format is `YYYY-MM-DD`. |
+| Battery Serial (SMBIOS) | Type-22 serial string, or four uppercase SBDS hex digits | Yes | Serial index at 07h is nonzero, or SMBIOS 2.2+ index zero selects the 16-bit word at 10h (including `0000`). Omitted only when byte-identical to a successful IOCTL serial. |
+| No batteries detected. | Successful empty interface/tag inventory and no type-22 records | No | Both sources succeed with no battery records. |
+| {Label}: Unavailable ({E}) | Independent field/source failure | No | Unresolved battery field, `Battery Information`, `Battery Tag Verification`, `Battery Enumeration`, or `SMBIOS Battery` failure. Other successful fields/records remain. |
+
+**Sources/order.** CfgMgr32 present interface list for `GUID_DEVICE_BATTERY` (not the setup-class GUID) → read-only `GENERIC_READ` handle → `IOCTL_BATTERY_QUERY_TAG` with zero requested wait → five independent `IOCTL_BATTERY_QUERY_INFORMATION` queries, then tag recheck. The manufacturer information-level name in the SDK is `BatteryManufactureName`. A stale-tag response (`ERROR_NO_SUCH_DEVICE`, or `ERROR_FILE_NOT_FOUND` on Windows 10 1809 and earlier), or changed final tag, discards that attempt's snapshot and retries the entire pack once; retry failures remain diagnostic. This prevents mixing fields from different packs. A missing/zero tag omits an empty battery slot. The shared cached RSMB snapshot independently supplies every type-22 record even if interface enumeration/open/query fails. String serial/date take priority over SBDS; nonzero invalid string indexes report malformed data rather than falling through to SBDS. Other SMBIOS types and decoding remain unchanged. No WMI or process fallback, battery writes, charging changes or kernel driver. Serial, unique ID and SMBIOS serial use `Out::id`; the full tracking token retains its casing and punctuation for the existing minimum-four-character, whole-token masking rules.
+
+**Admin/timing/limits.** Admin app; each IOCTL caller waits at most 500 ms. A detached worker retains the handle and buffers until a late driver call returns; timeout does not cancel the OS call. The section inherits the 60-second provider deadline. Interface list limited to 65536 UTF-16 units, 64 interfaces and three growth attempts; string replies limited to 65536 bytes. Empty strings/zero dates omit optional fields with diagnostics. Unsupported optional queries, access-denied, timeout, malformed UTF-16/control characters, bad lengths/indexes/dates and other errors preserve their distinct diagnostics and show `Unavailable` independently. No identifier values appear in generated error text. Four-digit SBDS serials are not individually unique; manufacturer/name/date provide context. Firmware records need not represent currently installed packs; no documented join binds them to Windows interfaces. **Untested:** battery-equipped hardware, successful IOCTL fields, replacement/stale-tag retries (including older Windows), access denial, unsupported queries, driver timeout, and real type-22/SBDS data. Fabricated parser checks cover string priority, SBDS serial/date encoding, leap years, bad indexes and truncated records.
+
+Elevated desktop verification on 2026-10-04: exact body `No batteries detected.` plus CRLF, no fallback/helper diagnostics, and zero type-22 records in the raw RSMB capture. Section-only dump 0 ms; existing `--time` mode five-run median 0 ms at integer-ms resolution. These observations verify absence on this desktop, not a successful battery-query benchmark. All real captures remain in session temp.
+
+**AD:** 01–03, 46, 123.
 
 ## ARP INFO/CACHE
 

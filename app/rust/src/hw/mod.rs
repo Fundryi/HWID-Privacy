@@ -2,6 +2,7 @@
 
 pub mod arp;
 pub mod audio;
+pub mod battery;
 pub mod bios;
 pub mod bluetooth;
 pub mod chassis;
@@ -37,7 +38,7 @@ pub struct Provider {
 }
 
 // C# parity: HardwareInfoManager.cs:23-38.
-pub static PROVIDERS: [Provider; 15] = [
+pub static PROVIDERS: [Provider; 16] = [
     Provider {
         title: "DISK DRIVES",
         collect: disk::collect,
@@ -93,6 +94,10 @@ pub static PROVIDERS: [Provider; 15] = [
     Provider {
         title: "AUDIO DEVICES",
         collect: audio::collect,
+    },
+    Provider {
+        title: "BATTERY",
+        collect: battery::collect,
     },
     Provider {
         title: "ARP INFO/CACHE",

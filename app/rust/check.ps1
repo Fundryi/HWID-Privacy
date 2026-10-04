@@ -16,10 +16,10 @@ $SectionTitles = @(
     'DISK DRIVES', 'MOTHERBOARD', 'CHASSIS', '(SM)BIOS',
     'SYSTEM INFORMATION', 'RAM MODULES', 'CPU', 'TPM MODULES',
     'USB DEVICES', 'GPU INFO', 'MONITOR INFORMATION',
-    "NETWORK ADAPTERS (NIC's)", 'BLUETOOTH ADAPTERS', 'AUDIO DEVICES', 'ARP INFO/CACHE'
+    "NETWORK ADAPTERS (NIC's)", 'BLUETOOTH ADAPTERS', 'AUDIO DEVICES', 'BATTERY', 'ARP INFO/CACHE'
 )
 # Sections the C# app never had; golden and timing compares skip them.
-$RustOnlyTitles = @('AUDIO DEVICES')
+$RustOnlyTitles = @('AUDIO DEVICES', 'BATTERY')
 $Utf8 = [System.Text.UTF8Encoding]::new($false, $true)
 
 function Invoke-Checked([string]$Exe, [string[]]$Arguments) {
