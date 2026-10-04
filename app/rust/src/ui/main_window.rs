@@ -226,8 +226,10 @@ fn on_click(form: &Form, state: &State, id: u16) {
     }
 }
 
-// Step 2d owns this entry point; the scaffold deliberately performs no file operations.
-fn compare_exports(_form: &Form) {}
+// Step 2d owns the picker, worker and modal result flow.
+fn compare_exports(form: &Form) {
+    super::compare::show(form, COMPARE_EXPORTS);
+}
 
 // Step 2c owns these two hooks; the trunk never checks on start.
 fn start_update_check(form: &Form, state: &State) {

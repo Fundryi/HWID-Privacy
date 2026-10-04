@@ -273,19 +273,6 @@ Outer 400 x 150 (scaled by DPI, AD-39), fixed. Padding 16. The app icon (32 px; 
 - Confirm Device Removal: message 13/400 `TEXT`, warning 12/400 `WARNING`, the three buttons centered; `Yes (Autoclose)` is the primary and accept button.
 - Old View: the well in a 12 px panel, minimum 640 x 400, opens unselected at the top.
 - Native open-file picker: `win::dialog::open_file(owner, title, filters, initial_dir)` uses `IFileOpenDialog`; cancel does nothing, errors are recorded. Native chrome keeps the Windows theme (section 9).
-- Portable settings: `HWIDChecker.settings.json` next to the exe; pretty JSON, CRLF, UTF-8 without BOM, atomic replacement, unknown keys retained. `check_updates_on_start` defaults false on missing/corrupt/unreadable data (record the error). The sidebar reads on creation and saves immediately; failure reverts the toggle and shows `Settings Error` / `Could not save settings: {error}` / error icon / OK. Turning it on affects the next start only; `Updates` checks now. Compare Exports is a no-op scaffold until step 2d.
-
-## 18. Features in design (2026-10-04; not in code yet)
-
-The rules below are binding for the features C1, C2, C3, C4, C5 and C8 of `docs/rust-port/IMPROVEMENTS.md`. The detail (sizes, texts, flows, states) is in `docs/rust-port/features-design.md`. When a feature lands, move its rules into the sections above and delete them here, so code and this file never disagree (line 7). Until then, nothing in this section describes the shipped build.
-
-### 18.3 Per feature
-
-- **C2 Compare Exports.** Two open-file dialogs (before, after), then a modal window `Compare Exports` (1000 x 700 scaled, minimum 640 x 400): the header card with `Before`/`After` file names (11/600 `SECONDARY` labels, 13/400 `TEXT` names, ellipsis), the summary `Changed n · Added n · Removed n · Same n` in 11/600 `FAINT`, `Copy` 72 x 28; the well (`CARD`, Consolas 10 pt, no wrap) lists rows per section with a kind column `changed` / `removed` / `added` / `same`. No colors in rows (section 3) and none on the summary: a count is not a status and the tool cannot know whether a change is good. Esc closes.
-
-### 18.5 Status map additions (section 3)
-
-| Meaning | Color |
-|---|---|
-| update available (footer button notice) | `INFO` |
-| compare counts | none (`FAINT` text) |
+- Portable settings: `HWIDChecker.settings.json` next to the exe; pretty JSON, CRLF, UTF-8 without BOM, atomic replacement, unknown keys retained. `check_updates_on_start` defaults false on missing/corrupt/unreadable data (record the error). The sidebar reads on creation and saves immediately; failure reverts the toggle and shows `Settings Error` / `Could not save settings: {error}` / error icon / OK. Step 1 stores the setting only; no startup check yet.
+- **C2 Compare Exports.** Two open-file dialogs (`Select the BEFORE export`, `Select the AFTER export`; text/JSON and all-files filters), starting in the exe folder then the first file's folder. Cancel does nothing. Parse on a worker while the main window stays usable; the row is disabled with `Comparing...`, then restored. A modal `Compare Exports` window (1000 x 700 scaled, minimum 640 x 400) has a header card with `Before`/`After` file names (56 px label column, 20 px rows, 11/600 `SECONDARY` labels, 13/400 `TEXT` names, ellipsis), an 18 px summary `Changed n · Added n · Removed n · Same n` in 11/600 `FAINT`, and `Copy` auto-sized with minimum 72 x 28 (the main header's sizing; exact 72 wraps its caption at 96 DPI). Standard 12 px panel, 12/8 card padding, 8 px gap to the well (`CARD`, Consolas 10 pt, no wrap, 10 px inner margins, unselected at top). Copy copies the whole well; Tab visits Copy then the well; Esc closes. No find bar or primary button.
+- Compare reads exports only. Well text: both full paths, then section headings and rows grouped `changed`, `removed`, `added`, `same`, preserving occurrence order within each kind. Unchanged sections collapse to `same     n values, none changed`; changed values use `before  ->  after`; CRLF. No colors in rows (section 3) and none on the summary: a count is not a status. Matching uses case-insensitive section titles, exact labels and their occurrence; reordered devices appear changed. No parsed values produces `Compare Error` / `No hardware values found in: {path}` / warning; unreadable or invalid JSON produces `Compare Error` / `Error reading {path}: {error}` / error. Both use OK and open no result window.

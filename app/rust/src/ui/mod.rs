@@ -2,6 +2,7 @@
 
 pub mod clean_devices;
 pub mod clean_logs;
+pub mod compare;
 pub mod confirm_removal;
 pub mod controls;
 pub mod dpi;

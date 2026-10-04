@@ -2,6 +2,8 @@
 
 use crate::win::Error;
 
+pub mod compare;
+
 #[derive(Clone, Debug, Default)]
 pub struct Section {
     pub title: &'static str,
