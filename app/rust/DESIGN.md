@@ -121,7 +121,7 @@ Control sizes and paddings come from the C# layout (section 1), not from the han
 
 ## 7. Window frame
 
-- Native title bar, not frameless. On Windows 11: `DwmSetWindowAttribute` sets the caption color to `BG`, the border color to `BORDER`, and the caption text color to `TEXT` (attributes 35, 34, 36), plus immersive dark mode. On Windows 10: immersive dark mode only.
+- Native title bar, not frameless. On Windows 11: `DwmSetWindowAttribute` sets the caption color to `BG`, the border color to `BORDER`, and the caption text color to `TEXT` (attributes 35, 34, 36), plus immersive dark mode. The border stays `BORDER` when active, inactive, and when the mouse enters or leaves; never switch it to the system default or repaint the frame for hover. On Windows 10: immersive dark mode only.
 - Windows 11 rounds the window corners itself.
 - Every window shows the app icon, large and small (`hIcon` and `hIconSm`, the small one loaded at the small-icon size so it stays sharp).
 - A failed `DwmSetWindowAttribute` call is recorded (`win::record`) and the window keeps the system frame; it never stops the window from opening.
@@ -135,7 +135,7 @@ Control sizes and paddings come from the C# layout (section 1), not from the han
 5. **Message boxes belong to the active window.** If another modal window is open, the box uses it as owner, so closing the box never re-enables a disabled window. `msgbox::active_window()` is the owner for every box raised after async work (load results, the update flow, cleaner results); a box raised directly from a click keeps the form as owner.
 6. **Hidden means idle.** No timer runs and nothing repaints while a window is minimized. The kit kills every form timer on minimize and restarts it with the same interval on restore; a timer set while minimized starts on restore. Owned windows (the update progress window, the modal cleaners) are hidden with their owner but not minimized themselves, so an update install never stalls.
 7. **Long text never breaks the layout.** Labels and sidebar items elide with `...`. Paragraphs word-wrap. Data text areas scroll.
-8. **No flicker.** Buffered paint, one layout pass per resize and per DPI change (the main window's resize handler edits the tree only; the kit lays out once after it), no background erase under owner-drawn controls.
+8. **No flicker.** Buffered paint, one layout pass per resize and per DPI change (the main window's resize handler edits the tree only; the kit lays out once after it), no background erase under owner-drawn controls. Forms and panels paint their background, card and focus ring together in one buffer during `WM_PAINT`; their `WM_ERASEBKGND` only acknowledges the request. Painted labels retain native text for accessibility, but bypass the native STATIC's synchronous drawing on `WM_SETTEXT`, so system colors never appear between buffered frames. Native EDIT painting and selection stay native; no `WS_EX_COMPOSITED` (it exposes stale child surfaces during a DPI move).
 9. **Motion:** one loading indicator only (section 13), driven by a form timer. State changes are instant. The indicator stops when Windows "Show animations" is off (`SPI_GETCLIENTAREAANIMATION`, read when the control is created; the arc then stays at its start) and while the window is minimized (the kit kills every form timer on minimize). The progress marquee of the update window keeps its 30 ms clock (it is the native control's own timer and shows for less than a second).
 10. **Nothing is larger than the screen.** Section 11.
 

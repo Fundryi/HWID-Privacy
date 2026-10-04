@@ -823,7 +823,7 @@ fn draw_glyph(hdc: HDC, glyph: char, font: HFONT, bounds: Rect, color: Color) {
 }
 
 /// Paints into an off-screen buffer and copies it to `hdc` in one step (no flicker).
-fn buffered(hdc: HDC, area: Rect, paint: impl FnOnce(HDC)) {
+pub(crate) fn buffered(hdc: HDC, area: Rect, paint: impl FnOnce(HDC)) {
     BUFFERED_PAINT.with(|_| {});
     let rc = rect(area);
     let mut mem = HDC::default();
@@ -1351,6 +1351,7 @@ fn ctrl_down() -> bool {
 impl CtlState {
     /// Handles one message for the control; `None` = default processing.
     fn message(&self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+        use windows::Win32::UI::WindowsAndMessaging::{DefWindowProcW, WM_SETTEXT};
         let hwnd = self.hwnd;
         match (&self.data, msg) {
             (Data::Button(_), WM_SETFOCUS) => {
@@ -1377,6 +1378,15 @@ impl CtlState {
             (Data::Label(_), WM_PAINT) => {
                 self.paint_label();
                 Some(LRESULT(0))
+            }
+            (Data::Label(_), WM_SETTEXT) => {
+                // STATIC paints synchronously inside WM_SETTEXT, bypassing our WM_PAINT
+                // and briefly showing its system colors. Keep the native accessible text,
+                // but let only our buffered paint draw the label.
+                // SAFETY: The unchanged WM_SETTEXT parameters carry the caller's live text.
+                let result = unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                invalidate(hwnd);
+                Some(result)
             }
             (Data::Progress(p), WM_PAINT) => {
                 self.paint_progress(p);
