@@ -33,25 +33,25 @@ Fenced examples show fabricated section bodies. Optional fields illustrate their
 
 ### Timing reference (milliseconds)
 
-These are order-of-magnitude observations, not guarantees or a new benchmark. The latest relevant entries in the local `PLANNING-LOG.md` (2026-10-04) take precedence. Where that log has no current figure, the older direct-source research provides context only; it used serial, often warm, non-admin probes before the later additions. Parallel wall time is not the sum of section times, and shared snapshot initialization can charge time to whichever worker reaches it first.
+These are order-of-magnitude observations, not guarantees or a new benchmark. The "P1 final" figures are single elevated `--time` medians from the dev PC after the P1 collection wave (2026-10-04); the local `PLANNING-LOG.md` holds the detail. Where that log has no current figure, the older direct-source research provides context only; it used serial, often warm, non-admin probes before the later additions. Parallel wall time is not the sum of section times, and shared snapshot initialization can charge time to whichever worker reaches it first.
 
 | Section | Latest planning-log figure | Older context / current uncertainty |
 |---|---|---|
-| DISK DRIVES | No current figure | ~43 ms before NVMe additions; current timing unverified. |
+| DISK DRIVES | 36 ms (P1 final, 2026-10-04); WP-C2 runs 22 to 41 ms | Per-disk 5 s budget, up to 4 disks in parallel; adds NVMe CNS 3, ATA Identify and descriptor-list queries. |
 | MOTHERBOARD | No current figure | ~0.03 ms direct firmware; shared snapshot cost varies. |
-| CHASSIS | No current figure | ~0.03 ms before SKU addition; current timing unverified. |
-| (SM)BIOS | No current figure | ~4 ms before explicit WMI properties/OEM additions. |
-| SYSTEM INFORMATION | No current figure | ~78 ms with licensing WMI fallback; firmware-key path differs. |
+| CHASSIS | 0 ms (P1 final, 2026-10-04) | ~0.03 ms before SKU addition; current timing unverified. |
+| (SM)BIOS | 5 ms (P1 final, 2026-10-04) | ~4 ms before explicit WMI properties/OEM additions. |
+| SYSTEM INFORMATION | 8 ms (P1 final, 2026-10-04); 85 ms before WP-A6 | ~78 ms with licensing WMI fallback; firmware-key path differs. |
 | RAM MODULES | Direct type 17 merged, no new figure | ~2 ms formerly WMI; current direct timing unverified. |
-| CPU | 1038 → 0 ms (integer-ms measurement) | Direct path below ms resolution here; fallback still can take ~1 s. |
-| TPM MODULES | 554 → 292 ms | ~0.3 s on one tested Intel TPM; fallback differs. |
-| USB DEVICES | No current figure | ~3 ms before hub serial enrichment; whole hub scan wait capped at 750 ms. |
-| GPU INFO | No current figure | ~30 ms with NVIDIA; other vendors/fallbacks unverified. |
-| MONITOR INFORMATION | No current figure | ~3 ms before expanded EDID enrichment. |
-| NETWORK ADAPTERS (NIC's) | 123 ms; candidate 120 ms rejected as noise | ~0.1 s; existing WMI path retained. |
+| CPU | 0 ms (P1 final, 2026-10-04) | Direct path below ms resolution here; fallback still can take ~1 s. |
+| TPM MODULES | 282 ms (P1 final, 2026-10-04) | ~0.3 s on one tested Intel TPM; fallback differs. |
+| USB DEVICES | 9 ms (P1 final, 2026-10-04) | Descriptor strings and Container ID added; two lanes per hub, four total, 750 ms cap. |
+| GPU INFO | 30 ms (P1 final, 2026-10-04) | ~30 ms with NVIDIA; other vendors/fallbacks unverified. |
+| MONITOR INFORMATION | 25 ms (P1 final, 2026-10-04); 4 ms before WP-A4 | EDID extension blocks read through WMI with a 2 s section budget. |
+| NETWORK ADAPTERS (NIC's) | 113 ms (P1 final, 2026-10-04) | NDIS OID read waits at most 750 ms. |
 | BLUETOOTH ADAPTERS | 349 → 52 ms | ~50 ms empty-radio path, not a successful radio benchmark. |
-| AUDIO DEVICES | Round 2: 11 ms five-run median (2026-10-04) | New Rust-only section; synchronous COM/topology and shared SetupAPI snapshot costs vary. |
-| BATTERY | No prior section | Elevated desktop no-battery five-run median 0 ms (integer-ms resolution, 2026-10-04); battery-equipped timing unverified. |
+| AUDIO DEVICES | 9 ms (P1 final, 2026-10-04) | New Rust-only section; synchronous COM/topology and shared SetupAPI snapshot costs vary. |
+| BATTERY | 0 ms (P1 final, 2026-10-04, desktop without battery) | Elevated desktop no-battery five-run median 0 ms (integer-ms resolution, 2026-10-04); battery-equipped timing unverified. |
 | ARP INFO/CACHE | Native 2–3 ms; `arp.exe` 43 ms (2026-10-03 entry) | Milliseconds native, tens of ms process; cache varies. |
 
 ## DISK DRIVES
