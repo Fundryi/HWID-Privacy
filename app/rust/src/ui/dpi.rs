@@ -85,7 +85,7 @@ pub fn icon_face() -> &'static str {
         const FLUENT: &str = "Segoe Fluent Icons";
         let spec = FontSpec {
             face: FLUENT,
-            points: 12.0,
+            points: theme::ICON_PROBE_POINTS,
             weight: theme::REGULAR,
         };
         let Ok(font) = Font::new(spec, BASE_DPI) else {
@@ -137,6 +137,67 @@ pub fn window_dpi(hwnd: HWND) -> u32 {
     // SAFETY: GetDpiForWindow only reads window state; an invalid handle returns 0.
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     if dpi == 0 { BASE_DPI } else { dpi }
+}
+
+/// The DPI of the monitor under the cursor: where `Form::create` opens an ownerless form
+/// (it places the window there and reads its DPI). Measured the same way, through a hidden
+/// throwaway window at the cursor, because `GetDpiForMonitor` lives in shcore, which the exe
+/// does not import. Falls back to the system DPI when the probe cannot be created.
+pub fn cursor_dpi() -> u32 {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::HiDpi::GetDpiForSystem;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, GetCursorPos, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    };
+    use windows::core::{PCWSTR, w};
+    struct Probe(HWND);
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            // SAFETY: This guard owns the hidden window, created and destroyed on this thread.
+            if let Err(e) = unsafe { DestroyWindow(self.0) } {
+                win::record(win::Error::from_win("DestroyWindow", e));
+            }
+        }
+    }
+    let system_dpi = || {
+        // SAFETY: Plain value query.
+        let system = unsafe { GetDpiForSystem() };
+        if system == 0 { BASE_DPI } else { system }
+    };
+    let mut pt = POINT::default();
+    // SAFETY: Writable POINT lives through the query.
+    if let Err(e) = unsafe { GetCursorPos(&mut pt) } {
+        win::record(win::Error::from_win("GetCursorPos", e));
+        return system_dpi();
+    }
+    // SAFETY: Static class name; no borrowed creation data or parent. No WS_VISIBLE and
+    // explicit no-activation/tool-window styles keep the probe hidden and off the taskbar.
+    let probe = unsafe {
+        CreateWindowExW(
+            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_POPUP,
+            pt.x,
+            pt.y,
+            1,
+            1,
+            None,
+            None,
+            None,
+            None,
+        )
+    };
+    match probe {
+        Ok(h) => {
+            let probe = Probe(h);
+            window_dpi(probe.0)
+        }
+        Err(e) => {
+            win::record(win::Error::from_win("CreateWindowExW", e));
+            system_dpi()
+        }
+    }
 }
 
 /// `GetSystemMetricsForDpi`, for example the vertical scroll bar width at `dpi`.

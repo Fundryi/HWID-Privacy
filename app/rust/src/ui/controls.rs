@@ -1623,7 +1623,14 @@ impl CtlState {
                     w: dpi::scale(theme::SIDEBAR_ACCENT_WIDTH, dpi),
                     h: (area.h - 2 * inset).max(0),
                 };
-                rounded_rect(hdc, bar, 1, fill_color, Some(theme::TEXT), None);
+                rounded_rect(
+                    hdc,
+                    bar,
+                    theme::SIDEBAR_ACCENT_RADIUS,
+                    fill_color,
+                    Some(theme::TEXT),
+                    None,
+                );
             }
             // Text layout: Client = client - Padding; Face = Client - border; Field = Face - 2.
             // A sidebar item has no border and no WinForms image inset: its padding is the
