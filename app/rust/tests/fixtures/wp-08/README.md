@@ -15,3 +15,15 @@ header, a corrupt checksum with retained data, descriptor ordering/ASCII quirks,
 and WMI UTF-16 strings with interior zeros. Registry presence appears after all
 legacy fields and only when a successful SetupAPI present snapshot excludes the
 instance. A failed snapshot never asserts disconnection.
+
+Phase 7 extends the same tests with little-endian product codes, explicit
+manufacture dates, EDID 1.3/1.4 week boundaries, unspecified weeks, model years,
+reserved dates, the fourth descriptor slot, and detailed-timing exclusion.
+Fabricated WMI disagreements verify that original values survive and registry
+identity fields fill gaps without replacing matching WMI fields. Numeric serial
+sentinels and legacy descriptor decoding are unchanged.
+
+The follow-up verifies that equal WMI/registry identities add no lines, text
+serials appear only when missing or byte-different in WMI (including whitespace),
+and neither enrichment nor registry fallback prints a separate EDID source line.
+Registry fallback retains its legacy fields and labeled registry additions.

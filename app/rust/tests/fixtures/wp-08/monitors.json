@@ -5,21 +5,27 @@
       "edid_hex": "00ffffffffffff0010ac2143219c6b4a0c210104a5462878e35420ad523faf250c5054254a00814081808100a940d1c0010101010101000000fc0044454c4c20553237323351450a000000ff0044384b345032370a2020202020000000000000000000000000000000000000000000000000000000000000000000000000000f",
       "numeric_serial": 1248566305,
       "string_serial": "D8K4P27",
-      "model": "DELL U2723QE"
+      "model": "DELL U2723QE",
+      "week": 12,
+      "year": 2023
     },
     {
       "instance_id": "DISPLAY\\DEL4321\\5&7a23b1c&0&UID4353",
       "edid_hex": "00ffffffffffff0010ac2143a9d4c72329210104a5462878e35420ad523faf250c5054254a00814081808100a940d1c0010101010101000000fc0044454c4c20553237323351450a000000ff00473654395831330a202020202000000000000000000000000000000000000000000000000000000000000000000000000000eb",
       "numeric_serial": 600298665,
       "string_serial": "G6T9X13",
-      "model": "DELL U2723QE"
+      "model": "DELL U2723QE",
+      "week": 41,
+      "year": 2023
     },
     {
       "instance_id": "DISPLAY\\DEL4321\\5&91b4d2e&0&UID4354",
       "edid_hex": "00ffffffffffff0010ac2143352b8a6d07190104a5462878e35420ad523faf250c5054254a00814081808100a940d1c0010101010101000000fc0044454c4c2055323431350a2020000000ff0050324e375634360a2020202020000000000000000000000000000000000000000000000000000000000000000000000000007c",
       "numeric_serial": 1837771573,
       "string_serial": "P2N7V46",
-      "model": "DELL U2415"
+      "model": "DELL U2415",
+      "week": 7,
+      "year": 2015
     }
   ],
   "wmi": [
@@ -41,5 +47,18 @@
     "DISPLAY\\DEL4321\\5&7a23b1c&0&UID4353"
   ],
   "placeholder_serials": [0, 4294967295, 16843009],
-  "truncated_lengths": [0, 8, 16, 54, 127]
+  "truncated_lengths": [0, 8, 16, 54, 127],
+  "date_cases": [
+    { "bytes_16_to_19": [0, 33, 1, 4], "kind": "manufactured", "week": null, "year": 2023 },
+    { "bytes_16_to_19": [54, 33, 1, 4], "kind": "manufactured", "week": 54, "year": 2023 },
+    { "bytes_16_to_19": [255, 34, 1, 4], "kind": "model", "year": 2024 },
+    { "bytes_16_to_19": [53, 33, 1, 3], "kind": "manufactured", "week": 53, "year": 2023 },
+    { "bytes_16_to_19": [54, 33, 1, 3], "kind": "invalid" },
+    { "bytes_16_to_19": [255, 33, 1, 3], "kind": "invalid" },
+    { "bytes_16_to_19": [55, 33, 1, 4], "kind": "invalid" },
+    { "bytes_16_to_19": [254, 33, 1, 4], "kind": "invalid" },
+    { "bytes_16_to_19": [0, 0, 1, 0], "kind": "manufactured", "week": null, "year": 1990 },
+    { "bytes_16_to_19": [1, 255, 1, 4], "kind": "manufactured", "week": 1, "year": 2245 },
+    { "bytes_16_to_19": [1, 33, 2, 0], "kind": "invalid" }
+  ]
 }
