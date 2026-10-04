@@ -1,32 +1,43 @@
-//! Legacy WMI processor fields and native CPUID identifiers.
+//! Direct processor fields with the legacy WMI fallback and native CPUID identifiers.
 
 use crate::{
     hw::Ctx,
     report::Out,
-    win::{self, wmi},
+    win::{self, firmware, registry, wmi},
 };
 use core::arch::x86_64::{__cpuid, CpuidResult};
 
 /// Collects this hardware section through the shared output builder.
-pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
-    let result = wmi::query(wmi::Namespace::Cimv2, "SELECT * FROM Win32_Processor");
-    out.source(if result.is_ok() {
-        "WMI, native (CPUID)"
-    } else {
-        "native (CPUID)"
-    });
-    if let Ok(rows) = &result {
-        // C# parity: Hardware/CpuInfo.cs:23-30. No separators between sockets;
-        // null serials are omitted, but empty strings and OEM placeholders stay.
-        for row in rows {
-            write_processor(
-                out,
-                &row.str("Name").unwrap_or_default(),
-                &row.str("ProcessorId").unwrap_or_default(),
-                row.str("SerialNumber").as_deref(),
-            );
+pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
+    let result = match direct_processor(ctx) {
+        Ok((name, processor_id, serial)) => {
+            out.source("registry, SMBIOS type 4, native (CPUID)");
+            write_processor(out, &name, &processor_id, Some(&serial));
+            Ok(())
         }
-    }
+        Err(error) => {
+            out.fallback_failed("registry / SMBIOS type 4", &error);
+            let result = wmi::query(wmi::Namespace::Cimv2, "SELECT * FROM Win32_Processor");
+            out.source(if result.is_ok() {
+                "WMI, native (CPUID)"
+            } else {
+                "native (CPUID)"
+            });
+            if let Ok(rows) = &result {
+                // C# parity: Hardware/CpuInfo.cs:23-30. No separators between sockets;
+                // null serials are omitted, but empty strings and OEM placeholders stay.
+                for row in rows {
+                    write_processor(
+                        out,
+                        &row.str("Name").unwrap_or_default(),
+                        &row.str("ProcessorId").unwrap_or_default(),
+                        row.str("SerialNumber").as_deref(),
+                    );
+                }
+            }
+            result.map(|_| ())
+        }
+    };
     // x86-64 guarantees CPUID. The pinned Rust 1.98 intrinsics are safe, so the
     // provider needs neither unsafe nor a second Win32 helper implementation.
     let leaf0 = __cpuid(0);
@@ -37,7 +48,69 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     // The shared collector renders and records a WMI failure after retaining
     // the independent native data; no failure is silently discarded. Partial
     // CPU output on this failure path needs an orchestrator approval-ledger row.
-    result.map(|_| ())
+    result
+}
+
+fn direct_processor(ctx: &Ctx) -> win::Result<(String, String, String)> {
+    // Same OnceLock snapshot as ctx.smbios(), with the read error retained.
+    let (processor_id, serial) = firmware_processor(ctx.smbios_result()?)?;
+    const PROCESSORS: &str = r"HARDWARE\DESCRIPTION\System\CentralProcessor";
+    let keys = registry::subkeys(PROCESSORS)?;
+    if keys.is_empty() {
+        return Err(win::Error::msg("CPU registry", "no logical processors"));
+    }
+    let mut name = None;
+    for key in keys {
+        if key.parse::<u32>().is_err() {
+            return Err(win::Error::msg("CPU registry", "unknown processor subkey"));
+        }
+        let value = registry::read_string(&format!(r"{PROCESSORS}\{key}"), "ProcessorNameString")?;
+        // WMI takes Name from this registry value. Do not trim brand padding or
+        // substitute the firmware Version/CPUID brand, which can differ.
+        if value.is_empty() || name.as_ref().is_some_and(|name| name != &value) {
+            return Err(win::Error::msg(
+                "CPU registry",
+                "missing or differing logical-processor names; socket association needs WMI",
+            ));
+        }
+        name = Some(value);
+    }
+    let name = name.ok_or_else(|| win::Error::msg("CPU registry", "missing processor name"))?;
+    Ok((name, processor_id, serial))
+}
+
+fn firmware_processor(smbios: &firmware::Smbios) -> win::Result<(String, String)> {
+    let missing = || win::Error::msg("SMBIOS type 4", "incomplete processor identity");
+    let mut processor = None;
+    for socket in smbios.structures.iter().filter(|entry| entry.kind == 4) {
+        let status = socket.byte(0x18).ok_or_else(missing)?;
+        if status & 0x40 == 0 {
+            continue; // An explicitly unpopulated socket is not a processor.
+        }
+        // Firmware order is not a proven WMI row order, nor is a registry
+        // logical-processor index a socket index. Keep WMI for multiple sockets
+        // and disabled/unknown CPU states rather than changing their inventory.
+        if processor.is_some() || status & 7 != 1 || socket.byte(5) != Some(3) {
+            return Err(win::Error::msg(
+                "SMBIOS type 4",
+                "processor ordering or active socket association needs WMI",
+            ));
+        }
+        let id = socket
+            .qword(8)
+            .filter(|id| !matches!(*id, 0 | u64::MAX))
+            .ok_or_else(missing)?;
+        let serial = socket.string(socket.byte(0x20).ok_or_else(missing)?);
+        // Missing/index-zero strings cannot distinguish WMI null from empty.
+        // Let WMI decide; retain every nonempty string, including OEM placeholders.
+        if serial.is_empty() {
+            return Err(missing());
+        }
+        // WMI's x64 ProcessorId is the little-endian type-4 qword in X16 form.
+        // Live CPUID EDX:EAX differs on the owner PC and must never replace it.
+        processor = Some((format!("{id:016X}"), serial.to_owned()));
+    }
+    processor.ok_or_else(missing)
 }
 
 fn write_processor(out: &mut Out, name: &str, processor_id: &str, serial: Option<&str>) {
@@ -119,6 +192,12 @@ mod tests {
         serial_number: Option<String>,
     }
 
+    #[derive(Deserialize)]
+    struct FixtureSocket {
+        formatted: String,
+        strings: Vec<String>,
+    }
+
     #[test]
     fn fabricated_processors_keep_null_empty_placeholder_and_native_serial_text() {
         let rows: Vec<FixtureProcessor> =
@@ -174,6 +253,68 @@ mod tests {
         let empty = out.finish();
         assert_eq!(empty.body, "Name: \r\nProcessorId: \r\nSerialNumber: \r\n");
         assert!(empty.ids.is_empty());
+
+        // Extend the CPU fixture contract with fabricated firmware bytes. This
+        // covers input formats and fallback decisions unavailable on this PC.
+        let sockets: Vec<FixtureSocket> =
+            serde_json::from_str(include_str!("../../tests/fixtures/wp-04/cpu-smbios.json"))
+                .expect("fabricated type-4 sockets");
+        let mut smbios = firmware::Smbios {
+            major: 3,
+            minor: 0,
+            structures: sockets
+                .into_iter()
+                .map(|socket| firmware::Structure {
+                    kind: 4,
+                    handle: 0,
+                    formatted: socket
+                        .formatted
+                        .split_whitespace()
+                        .map(|byte| u8::from_str_radix(byte, 16).expect("fixture byte"))
+                        .collect(),
+                    strings: socket.strings,
+                })
+                .collect(),
+        };
+        assert_eq!(
+            firmware_processor(&smbios).expect("one populated socket"),
+            (
+                "00AF0764C1EBFA2B".to_owned(),
+                "To Be Filled By O.E.M.".to_owned()
+            )
+        );
+        let complete = smbios.structures[0].clone();
+        for length in 0..=0x20 {
+            smbios.structures[0] = complete.clone();
+            smbios.structures[0].formatted.truncate(length);
+            assert!(
+                firmware_processor(&smbios).is_err(),
+                "truncated at {length}"
+            );
+        }
+        for index in [0, 5, 255] {
+            smbios.structures[0] = complete.clone();
+            smbios.structures[0].formatted[0x20] = index;
+            assert!(firmware_processor(&smbios).is_err(), "serial index {index}");
+        }
+        for sentinel in [0, 255] {
+            smbios.structures[0] = complete.clone();
+            smbios.structures[0].formatted[8..16].fill(sentinel);
+            assert!(firmware_processor(&smbios).is_err());
+        }
+        for status in [0, 0x40, 0x42, 0x43, 0x44] {
+            smbios.structures[0] = complete.clone();
+            smbios.structures[0].formatted[0x18] = status;
+            assert!(firmware_processor(&smbios).is_err(), "status {status}");
+        }
+        smbios.structures[0] = complete.clone();
+        smbios.structures.push(complete);
+        assert!(
+            firmware_processor(&smbios).is_err(),
+            "multi-socket order needs WMI"
+        );
+        smbios.structures.clear();
+        assert!(firmware_processor(&smbios).is_err());
     }
 
     #[test]

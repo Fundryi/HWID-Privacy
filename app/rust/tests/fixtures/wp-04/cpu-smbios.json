@@ -1,0 +1,10 @@
+[
+  {
+    "formatted": "04 23 00 04 01 03 6B 02 2B FA EB C1 64 07 AF 00 03 00 00 00 00 00 00 00 41 00 FF FF FF FF FF FF 04 00 00",
+    "strings": ["Socket 0", "AuthenticAMD", "AMD Ryzen 9 7950X 16-Core Processor", "To Be Filled By O.E.M."]
+  },
+  {
+    "formatted": "04 1A 01 04 01 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+    "strings": ["Empty socket"]
+  }
+]
