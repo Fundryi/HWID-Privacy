@@ -124,9 +124,11 @@ fn show_report(owner: HWND, report: String) -> win::Result<()> {
     let mut bar = super::find::bar().cell(0, 0);
     // Keep the existing well margins, but align the bar with its frame. Move the well's
     // top inset above the bar so the visible gap stays 8 and the row still costs 36 px.
-    bar.margin.l = well.margin.l;
-    bar.margin.r = well.margin.r;
-    bar.margin.t = well.margin.t;
+    // The bar's own margins are its ring-room overhang (-4 on three sides, 4 below), so the
+    // sums are l/r -1, t -1, b 1: the overhang lands inside the panel's 12 px padding.
+    bar.margin.l += well.margin.l;
+    bar.margin.r += well.margin.r;
+    bar.margin.t += well.margin.t;
     bar.margin.b -= well.margin.t;
     window::run_modal(
         owner,

@@ -473,8 +473,30 @@ pub const TOOLS_BLOCK_CONTENT: i32 =
     2 * TOOLS_ROW_HEIGHT + TOOLS_ROW_GAP + TOOLS_DIVIDER_MARGIN.t + TOOLS_DIVIDER_MARGIN.b;
 /// Find bar row height.
 pub const FIND_BAR_HEIGHT: i32 = 28;
-/// Gap below the find bar.
-pub const FIND_BAR_MARGIN: Pad = pad(0, 0, 0, 8);
+/// Room a focus ring needs outside a control: its offset plus its stroke.
+pub const FIND_RING_ROOM: i32 = FOCUS_RING_OFFSET + STROKE;
+/// The bar panel pads its children by the ring room, so their focus rings are not clipped by
+/// the panel's own window.
+pub const FIND_BAR_PADDING: Pad = all(FIND_RING_ROOM);
+/// The bar overhangs its row by the ring room on three sides, so the input stays flush with
+/// the well and the row still costs 28 + 8 px; the gap below is the 8 px minus the room.
+pub const FIND_BAR_MARGIN: Pad = pad(
+    -FIND_RING_ROOM,
+    -FIND_RING_ROOM,
+    -FIND_RING_ROOM,
+    FIND_GAP - FIND_RING_ROOM,
+);
+/// The main content pane keeps the 12 px around the header and the well, but the left/right
+/// ring room belongs to the content table (a panel clamps a child's negative margin), so the
+/// find bar's overhang stays inside the table's window.
+pub const CONTENT_PANE_PADDING: Pad = pad(
+    CONTENT_PADDING.l - FIND_RING_ROOM,
+    CONTENT_PADDING.t,
+    CONTENT_PADDING.r - FIND_RING_ROOM,
+    CONTENT_PADDING.b,
+);
+/// See `CONTENT_PANE_PADDING`.
+pub const CONTENT_TABLE_PADDING: Pad = pad(FIND_RING_ROOM, 0, FIND_RING_ROOM, 0);
 /// Minimum input width.
 pub const FIND_EDIT_MIN_WIDTH: i32 = 160;
 /// Minimum match-count width.

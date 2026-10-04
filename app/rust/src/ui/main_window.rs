@@ -40,6 +40,7 @@ const LOADING_BOX: u16 = 15;
 const SIDEBAR_CELL: u16 = 16;
 const TOOLS: u16 = 17;
 const TOOLS_DIVIDER: u16 = 18;
+const CONTENT_PANE: u16 = 19;
 const STARTUP_UPDATES: u16 = 26;
 const COMPARE_EXPORTS: u16 = 27;
 const REFRESH: u16 = 20;
@@ -646,6 +647,11 @@ fn responsive(form: &Form, state: &State, client: Size) {
         }
     };
     form.with_tree(|t| {
+        // Preserve the total inset when the two logical paddings round differently.
+        if let Some(pane) = t.find_mut(CONTENT_PANE) {
+            pane.padding.l = s(theme::CONTENT_PADDING.l) - s(theme::FIND_RING_ROOM);
+            pane.padding.r = s(theme::CONTENT_PADDING.r) - s(theme::FIND_RING_ROOM);
+        }
         if let Some(Kind::Table { cols, .. }) = t.find_mut(MAIN_TABLE).map(|n| &mut n.kind) {
             cols[0] = Track::Absolute(sidebar);
         }
@@ -910,6 +916,9 @@ fn content() -> Node {
     )
     .id(CONTENT_TABLE)
     .fill()
+    // Ring room for the find bar's overhang (DESIGN.md 13.1): the pane gives up the same
+    // amount, so the header and well stay put.
+    .padding(theme::CONTENT_TABLE_PADDING)
     .margin(theme::NO_PAD)
     .back(theme::SURFACE_BACKGROUND);
     // The loading state (DESIGN.md 13): indicator, title and counter centered in the pane.
@@ -957,8 +966,9 @@ fn content() -> Node {
     .back(theme::SURFACE_BACKGROUND)
     .visible(false);
     Node::panel(vec![loaded, loading])
+        .id(CONTENT_PANE)
         .fill()
-        .padding(theme::CONTENT_PADDING)
+        .padding(theme::CONTENT_PANE_PADDING)
         .back(theme::SURFACE_BACKGROUND)
         .cell(1, 0)
 }
@@ -1131,7 +1141,7 @@ mod live {
         r
     }
 
-    /// The first descendant window (any depth) of `parent` with window class `class`.
+    /// The first visible descendant (any depth) of `parent` with window class `class`.
     fn descendant_of_class(parent: HWND, class: &str) -> Option<HWND> {
         unsafe extern "system" fn collect(h: HWND, data: LPARAM) -> BOOL {
             // SAFETY: `data` is the Vec passed below, alive for the enumeration.
@@ -1147,8 +1157,12 @@ mod live {
                 LPARAM(&mut all as *mut Vec<HWND> as isize),
             );
         }
-        all.into_iter()
-            .find(|h| class_of(*h).eq_ignore_ascii_case(class))
+        all.into_iter().find(|h| {
+            // The hidden find input precedes the Old View's report well in child order.
+            // SAFETY: Read-only visibility query of an enumerated child window.
+            class_of(*h).eq_ignore_ascii_case(class)
+                && unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(*h) }.as_bool()
+        })
     }
 
     /// Top-level windows of this process.
