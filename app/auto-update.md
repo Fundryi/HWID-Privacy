@@ -1,76 +1,34 @@
-# Auto-Update System for HWID Checker
+# HWID Checker Auto-Update
 
-## Overview
-The HWID Checker includes an auto-update system that compares the local executable hash with the GitHub-hosted executable hash, then updates in place when they differ.
+The native Rust app and deployed legacy C# clients use the same update channel:
 
-## How It Works
+`https://github.com/Fundryi/HWID-Privacy/raw/main/HWIDChecker.exe`
 
-### Update Detection
-- The updater downloads `HWIDChecker.exe` from GitHub (raw URL, cache-busted query string)
-- It computes SHA256 of the downloaded content
-- It computes SHA256 of the currently running executable
-- If hashes differ, it offers update/install
+This URL must stay unchanged. Checks use a cache-busting query and compare SHA-256 of the downloaded bytes with the running executable. Different hashes offer an update; version ordering is not used. Replacing the channel binary with the saved C# exe therefore also offers a rollback.
 
-### Manual Update Check
-- Users can click the "Check Updates" button to manually check for updates
-- The system will show a confirmation dialog if an update is available
-- If no update is available, it displays an informational message
+## Rust client
 
-### Update Process
-1. **Detect**: Compare local SHA256 vs GitHub file SHA256
-2. **Prompt**: Ask user to confirm update
-3. **Download**: Stream new executable to temp path with progress UI
-4. **Replace**: Generate temporary batch script to replace the running exe
-5. **Restart**: Launch new executable and exit old process
+The Updates button runs `app/rust/src/update.rs` on a worker. `win/http.rs` downloads through WinHTTP with a 100-second budget and a 256 MiB limit, reports progress, and checks Content-Length when supplied. The checked bytes are retained for installation, avoiding a second download.
 
-## Technical Details
+After confirmation, installation rechecks size and hash and validates a Windows x64 PE. It renames the running image to a unique `.old-` sibling, writes the new exe at the original path, and starts it directly. The old process exits only after process creation succeeds. Write/restart failures attempt to restore the original exe; rollback failures are reported. Startup cleans up old image siblings. Paths containing `%` are refused. Debug builds guard update installation unless explicitly enabled for an authorized child process.
 
-### Files Added/Modified
-- `Services/AutoUpdateService.cs` - Core update logic
-- `UI/Forms/SectionedViewForm.cs` - Main UI update button + event handler
-- `HWIDChecker.csproj` - Project publish/runtime settings and package references
+## Legacy C# client hand-over
 
-### GitHub Endpoints Used
-- `https://github.com/Fundryi/HWID-Privacy/raw/main/HWIDChecker.exe`
+`app/src/Services/AutoUpdateService.cs` downloads the same channel to compare hashes, asks for confirmation, then downloads again into a fixed temp path. A temporary batch script waits two seconds, copies over the installed exe, deletes the temp file, and starts the replacement.
 
-### Update Logic
-```csharp
-// Download GitHub file and compute SHA256
-var githubFileSha = await GetGitHubFileSha256Async();
+The C# client does not require a managed assembly, a particular version, or a fixed size. It can therefore receive the Rust exe. Both applications require administrator rights on launch. The C# batch script has no copy/restart checks or retry loop: a slow exit, another process holding the file, permissions, or antivirus quarantine can prevent replacement or restart. Its second download is not rechecked against the first hash. Paths containing batch metacharacters and concurrent updates using the fixed temp names are additional legacy risks. The `.bat` is passed directly to `Process.Start` with `UseShellExecute=false`, without an explicit `cmd.exe /c`; successful batch launch is not established by this code review. These are existing client behaviors.
 
-// Compute local executable SHA256
-var localFileSha = GetLocalFileSha256();
+## Local build and channel staging
 
-// Update when hashes differ
-if (!localFileSha.Equals(githubFileSha, StringComparison.OrdinalIgnoreCase))
-{
-    return await PerformUpdateAsync();
-}
+From the repository root:
+
+```powershell
+pwsh -NoProfile -File app/rust/check.ps1
+dotnet msbuild app/rust/HWIDChecker.Rust.proj -t:Publish
 ```
 
-## Deployment Workflow
+Publish runs `app/rust/release.ps1`, builds `target/dist/HWIDChecker.exe`, validates its PE/imports/manifest, and copies it to the repository root through the Rust Publish target. Ordinary solution/Rust Build leaves the root exe unchanged. Never manually copy the shipped exe. The legacy C# project remains buildable and has no root-exe copy target.
 
-### For Developers
-1. Make changes to the code
-2. Build the project: `dotnet publish -c Release`
-3. Copy the new `HWIDChecker.exe` to the repository root
-4. Commit and push to GitHub
-5. The update system will automatically detect the new version
+Local staging does not change GitHub. The orchestrator reviews the source and root binary together, then commits, merges, and pushes after owner approval. Installed copies see the new payload on their next user-initiated update check after `main` changes.
 
-### For Users
-1. Open HWID Checker
-2. Click "Check Updates" button
-3. If an update is available, click "Yes" to download and install
-4. The application will restart automatically with the new version
-
-## Benefits
-- **Simple detection logic** - Direct binary hash comparison
-- **No installer required** - In-place executable replacement
-- **Seamless user flow** - One-click check/update from app UI
-- **Cache-resistant fetch** - Cache-busting query parameter on download URL
-
-## Error Handling
-- Network connection issues are handled gracefully
-- Update failures don't crash the application
-- Users can continue using the current version if updates fail
-- Clear error messages for troubleshooting
+The last C# exe and its SHA-256 are preserved locally at `app/rust/golden/cutover/` in the main checkout for a later rollback release asset. Uploading that asset is separate from this local cutover preparation.
