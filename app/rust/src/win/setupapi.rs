@@ -78,62 +78,168 @@ impl DevInfoSet {
     /// Reads a present devnode's PnP container GUID by exact instance ID, for any class.
     /// None means an absent devnode/property or a null GUID; other failures stay errors.
     pub fn container_id(&self, instance_id: &str) -> Result<Option<String>> {
-        if !is_present(instance_id)? {
-            return Ok(None);
-        }
-        let instance_id = wide::to_wide(instance_id);
-        let mut data = SP_DEVINFO_DATA {
-            cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32,
-            ..Default::default()
-        };
-        // SAFETY: self retains the live set; the ID is terminated and data has the SDK size.
-        unsafe {
-            SetupDiOpenDeviceInfoW(
-                self.handle,
-                PCWSTR(instance_id.as_ptr()),
-                None,
-                0,
-                Some(&mut data),
-            )
-        }
-        .map_err(|e| Error::from_win("SetupDiOpenDeviceInfoW (Container ID)", e))?;
-        let mut bytes = [0_u8; 16];
-        let mut kind = DEVPROPTYPE::default();
-        let mut required = 0;
-        // SAFETY: data belongs to this live set; GUID properties occupy exactly 16 bytes.
-        let result = unsafe {
-            SetupDiGetDevicePropertyW(
-                self.handle,
-                &data,
-                &DEVPKEY_Device_ContainerId,
-                &mut kind,
-                Some(&mut bytes),
-                Some(&mut required),
-                0,
-            )
-        };
-        match result {
-            Err(error) if error.code() == HRESULT::from_win32(ERROR_NOT_FOUND.0) => {
-                return Ok(None);
-            }
-            Err(error) => {
-                return Err(Error::from_win(
-                    "SetupDiGetDevicePropertyW (Container ID)",
-                    error,
+        fn read_container(instance_id: &str) -> Result<Option<String>> {
+            // The worker opens and owns a fresh present-device set; no borrowed
+            // HDEVINFO, device data or buffer escapes to a timed-out caller.
+            let set = DevInfoSet::enum_present_all()?;
+            if instance_id.is_empty() || instance_id.chars().any(char::is_control) {
+                return Err(Error::msg(
+                    "SetupAPI Container ID",
+                    "malformed: empty or control-containing instance ID",
                 ));
             }
-            Ok(()) => {}
+            if !is_present(instance_id)? {
+                record(Error::msg(
+                    "SetupAPI Container ID",
+                    "absent: devnode no longer present",
+                ));
+                return Ok(None);
+            }
+            let wide_instance_id = wide::to_wide(instance_id);
+            let mut data = SP_DEVINFO_DATA {
+                cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32,
+                ..Default::default()
+            };
+            // SAFETY: set retains the live set; the ID is terminated and data has the SDK size.
+            unsafe {
+                SetupDiOpenDeviceInfoW(
+                    set.handle,
+                    PCWSTR(wide_instance_id.as_ptr()),
+                    None,
+                    0,
+                    Some(&mut data),
+                )
+            }
+            .map_err(|e| Error::from_win("SetupDiOpenDeviceInfoW (Container ID)", e))?;
+            let mut bytes = [0_u8; 16];
+            let mut kind = DEVPROPTYPE::default();
+            let mut required = 0;
+            // SAFETY: data belongs to this live set; GUID properties occupy exactly 16 bytes.
+            let result = unsafe {
+                SetupDiGetDevicePropertyW(
+                    set.handle,
+                    &data,
+                    &DEVPKEY_Device_ContainerId,
+                    &mut kind,
+                    Some(&mut bytes),
+                    Some(&mut required),
+                    0,
+                )
+            };
+            match result {
+                Err(error) if error.code() == HRESULT::from_win32(ERROR_NOT_FOUND.0) => {
+                    record(Error::msg(
+                        "SetupAPI Container ID",
+                        "absent: GUID property not found",
+                    ));
+                    return Ok(None);
+                }
+                Err(error) => {
+                    return Err(Error::from_win(
+                        "SetupDiGetDevicePropertyW (Container ID)",
+                        error,
+                    ));
+                }
+                Ok(()) => {}
+            }
+            if kind != DEVPROP_TYPE_GUID || required != 16 {
+                return Err(Error::msg(
+                    "SetupAPI Container ID",
+                    "malformed: invalid GUID property type or size",
+                ));
+            }
+            // SAFETY: all GUID bit patterns are valid; the buffer contains exactly one GUID.
+            // read_unaligned avoids imposing GUID alignment on the byte buffer.
+            let guid = unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<GUID>()) };
+            if bytes.iter().all(|byte| *byte == 0) || bytes.iter().all(|byte| *byte == 0xff) {
+                record(Error::msg(
+                    "SetupAPI Container ID",
+                    "placeholder: all-zero or all-FF container GUID",
+                ));
+                return Ok(None);
+            }
+            if !is_present(instance_id)? {
+                return Err(Error::msg(
+                    "SetupAPI Container ID",
+                    "ambiguous: devnode disappeared during property read",
+                ));
+            }
+            Ok(Some(format!("{{{guid:?}}}")))
         }
-        if kind != DEVPROP_TYPE_GUID || required != 16 {
+        use std::{
+            sync::{
+                atomic::{AtomicUsize, Ordering},
+                mpsc,
+            },
+            time::Duration,
+        };
+        // USB, audio and other classes share this helper. Several healthy callers
+        // may overlap; four retained calls cap accumulation if a driver stalls.
+        static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+        struct Worker;
+        impl Drop for Worker {
+            fn drop(&mut self) {
+                IN_FLIGHT.fetch_sub(1, Ordering::Release);
+            }
+        }
+        if IN_FLIGHT
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < 4).then_some(count + 1)
+            })
+            .is_err()
+        {
             return Err(Error::msg(
                 "SetupAPI Container ID",
-                "invalid GUID property type or size",
+                "timeout: previous property workers still running",
             ));
         }
-        // SAFETY: all GUID bit patterns are valid; the buffer contains exactly one GUID.
-        // read_unaligned avoids imposing GUID alignment on the byte buffer.
-        let guid = unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<GUID>()) };
-        Ok((guid != GUID::zeroed()).then(|| format!("{{{guid:?}}}")))
+        let worker = Worker;
+        let instance_id = instance_id.to_owned();
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("container-id".into())
+            .spawn(move || {
+                let _worker = worker;
+                let result = match super::catch_panic(|| read_container(&instance_id)) {
+                    Ok(result) => result.map_err(|mut error| {
+                        if error.code != 0 {
+                            error.detail = match error.code {
+                                5 => "access-denied: Container ID request denied",
+                                2 | 3 | 1168 => "absent: devnode or property missing",
+                                258 | 1460 => "timeout: Container ID request timed out",
+                                _ => "unsupported: Container ID request failed",
+                            }
+                            .into();
+                        }
+                        error
+                    }),
+                    Err(_) => Err(Error::msg(
+                        "SetupAPI Container ID",
+                        "malformed: worker panicked",
+                    )),
+                };
+                let _ = tx.send(result);
+            })
+            .map_err(|error| {
+                Error::msg(
+                    "SetupAPI Container ID worker",
+                    format!("unsupported: cannot spawn worker ({error})"),
+                )
+            })?;
+        rx.recv_timeout(Duration::from_millis(750))
+            .map_err(|error| {
+                Error::msg(
+                    "SetupAPI Container ID",
+                    match error {
+                        mpsc::RecvTimeoutError::Timeout => {
+                            "timeout: 750 ms property deadline exceeded"
+                        }
+                        mpsc::RecvTimeoutError::Disconnected => {
+                            "malformed: property worker disconnected"
+                        }
+                    },
+                )
+            })?
     }
 
     /// Removes copied device data belonging to this live snapshot after the caller's guard.

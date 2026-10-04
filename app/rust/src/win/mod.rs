@@ -1,5 +1,7 @@
 //! Windows helpers and their frozen cross-work-package contracts.
 
+pub mod audio;
+pub mod battery;
 pub mod bluetooth;
 pub mod dialog;
 pub mod dll;
@@ -19,6 +21,7 @@ pub mod registry;
 pub mod security;
 pub mod setupapi;
 pub mod storage;
+pub mod tbs;
 pub mod time;
 pub mod tpm;
 pub mod usbhub;

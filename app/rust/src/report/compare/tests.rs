@@ -1,6 +1,269 @@
 use super::*;
 
 #[test]
+fn new_identity_labels_and_placeholders_have_text_export_verdicts() {
+    for label in [
+        "NVMe Namespace UUID",
+        "NVMe Namespace NGUID",
+        "Storage ID (port, vendor ID, ASCII)",
+        "Serial Number",
+        "PDI",
+        "Board Part Number",
+        "Instance ID",
+        "Endpoint ID",
+        "Endpoint Container ID",
+        "Stable ID",
+        "Battery Serial",
+        "Battery Unique ID",
+        "Battery Serial (SMBIOS)",
+        "Serial (SMBIOS)",
+        "Asset Tag (SMBIOS)",
+        "Socket Asset Tag (SMBIOS)",
+    ] {
+        let diff = difference(
+            "IDENTITY",
+            &format!("{label}: ID-4A37"),
+            &format!("{label}: ID-4A38"),
+        );
+        let field = &diff.entities[0].fields[0];
+        assert!(field.identifier && field.kind == Kind::Changed, "{label}");
+        for placeholder in [
+            "NA",
+            "To be filled by OEM",
+            "Unavailable (probe failed)",
+            "11111111",
+            "GPU-00000000-0000-0000-0000-000000000000",
+            "{0.0.1.00000000}.{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}",
+        ] {
+            let body = format!("{label}: {placeholder}");
+            let diff = difference("IDENTITY", &body, &body);
+            assert!(
+                diff.entities[0].fields[0].not_unique(),
+                "{label}: {placeholder}"
+            );
+        }
+    }
+    for label in [
+        "Hardware IDs",
+        "Component ID (SMBIOS)",
+        "Socket Part Number (SMBIOS)",
+        "TPM Firmware Version (SMBIOS)",
+        "VBIOS Version",
+    ] {
+        assert!(
+            !identifier_label(label),
+            "context, not unit identity: {label}"
+        );
+    }
+    assert!(!generic_value("0000_0000_0000_0001."));
+}
+
+#[test]
+fn audio_adapters_and_endpoints_pair_independently_when_reordered() {
+    let adapter = "Adapter: USB Audio Device\nInstance ID: USB\\VID_046D&PID_0A9F\\A7C28E41\nContainer ID: {52B18C39-7D64-4AF0-963E-826A19DB4507}\n";
+    let mic = "Endpoint: Microphone\nDirection: Capture\nEndpoint ID: {0.0.1.00000000}.{941d59a2-72ce-4536-a71a-66af60dd2788}\nStable ID: microphone-A7C28E41\n";
+    let speaker = "Endpoint: Speakers\nDirection: Render\nEndpoint ID: {0.0.0.00000000}.{6d73e082-684f-4130-a0cb-fb538d1c3279}\n";
+    let before = format!("{adapter}{mic}{speaker}");
+    let after = format!("{adapter}{speaker}{mic}");
+    let diff = difference("AUDIO DEVICES", &before, &after);
+    assert_eq!(diff.entities.len(), 3);
+    assert_eq!(diff.entities[0].kind, Kind::Same);
+    assert!(
+        diff.entities[1..]
+            .iter()
+            .all(|e| e.kind == Kind::Moved && e.fields.iter().all(|f| f.kind == Kind::Same))
+    );
+    let changed = after
+        .replace("microphone-A7C28E41", "microphone-B8D39F52")
+        .replace(
+            "941d59a2-72ce-4536-a71a-66af60dd2788",
+            "a52e6ab3-83df-4647-b82b-77bf71ee3899",
+        );
+    let diff = difference("AUDIO DEVICES", &before, &changed);
+    assert_eq!(
+        diff.entities
+            .iter()
+            .flat_map(|e| &e.fields)
+            .filter(|f| f.identifier && f.kind == Kind::Changed)
+            .count(),
+        2
+    );
+    let twins = format!("{adapter}{speaker}{speaker}");
+    let diff = difference("AUDIO DEVICES", &twins, &twins);
+    assert!(diff.entities.iter().all(|e| e.kind == Kind::Same));
+}
+
+#[test]
+fn battery_sources_stay_separate_and_numbered_positions_are_not_identity() {
+    let pack = |n, serial| {
+        format!(
+            "Battery: #{n}\nBattery Name: L18M3P73\nBattery Manufacturer: SMP\nBattery Serial: {serial}\nBattery Unique ID: SMP-{serial}\n"
+        )
+    };
+    let firmware =
+        "SMBIOS Battery: #1\nBattery Name (SMBIOS): L18M3P73\nBattery Serial (SMBIOS): 4A37\n";
+    let before = format!(
+        "{}----------------------------------------\n{}----------------------------------------\n{firmware}",
+        pack(1, "BAT2402A7381"),
+        pack(2, "BAT2402A7382")
+    );
+    let after = format!(
+        "{}----------------------------------------\n{}----------------------------------------\n{firmware}",
+        pack(1, "BAT2402A7382"),
+        pack(2, "BAT2402A7381")
+    );
+    let diff = difference("BATTERY", &before, &after);
+    assert_eq!(diff.entities.len(), 3);
+    assert!(
+        diff.entities[..2]
+            .iter()
+            .all(|e| e.kind == Kind::Moved && e.fields.iter().all(|f| f.kind == Kind::Same))
+    );
+    assert_eq!(diff.entities[2].kind, Kind::Same);
+    let diff = difference(
+        "BATTERY",
+        &pack(1, "BAT2402A7381"),
+        &pack(1, "BAT2402A8391"),
+    );
+    assert_eq!(diff.entities.len(), 1);
+    assert_eq!(diff.entities[0].kind, Kind::Changed);
+    let twins = format!(
+        "{}----------------------------------------\n{}",
+        pack(1, "0000"),
+        pack(2, "0000")
+    );
+    let diff = difference("BATTERY", &twins, &twins);
+    assert!(diff.entities.iter().all(|e| e.kind == Kind::Same));
+    let diff = difference("BATTERY", &pack(1, "BAT2402A7381"), firmware);
+    assert_eq!(
+        diff.entities.iter().map(|e| e.kind).collect::<Vec<_>>(),
+        [Kind::Removed, Kind::Added]
+    );
+}
+
+#[test]
+fn firmware_lists_keep_legacy_headers_and_pair_singletons_twins_and_moves() {
+    for (section, prefix, model, unit) in [
+        ("CHASSIS", "Power Supply", "Model/Part", "Serial"),
+        (
+            "(SM)BIOS",
+            "Firmware Component",
+            "Component Name",
+            "Component ID",
+        ),
+        (
+            "CPU",
+            "CPU Socket",
+            "Socket Part Number",
+            "Socket Asset Tag",
+        ),
+        (
+            "TPM MODULES",
+            "TPM Firmware",
+            "TPM Description",
+            "TPM Firmware Version",
+        ),
+    ] {
+        let base = "Legacy: unchanged\n";
+        let fields = |name, id| format!("{model} (SMBIOS): {name}\n{unit} (SMBIOS): {id}\n");
+        let one = fields("Model A", "UNIT-4A37");
+        let two = fields("Model B", "UNIT-5B48");
+        let before = format!("{base}{prefix} #1 (SMBIOS)\n{one}{prefix} #2 (SMBIOS)\n{two}");
+        let after = format!("{base}{prefix} #1 (SMBIOS)\n{two}{prefix} #2 (SMBIOS)\n{one}");
+        let diff = difference(section, &before, &after);
+        assert_eq!(diff.entities.len(), 3, "{section}");
+        assert!(diff.entities[0].is_header);
+        assert!(
+            diff.entities[1..].iter().all(|e| e.kind == Kind::Moved),
+            "{section}"
+        );
+        let diff = difference(section, &format!("{base}{one}"), &before);
+        assert_eq!(diff.entities[0].kind, Kind::Same);
+        assert_eq!(
+            diff.entities[1].kind,
+            Kind::Same,
+            "singleton gained heading: {section}"
+        );
+        assert_eq!(diff.entities[2].kind, Kind::Added);
+        let diff = difference(
+            section,
+            &format!("{base}{one}"),
+            &format!("{base}{}", one.replace("UNIT-4A37", "UNIT-6C59")),
+        );
+        assert_eq!(
+            diff.entities[1].kind,
+            Kind::Changed,
+            "unique model: {section}"
+        );
+        let twins = before.replace(&two, &one);
+        let diff = difference(section, &twins, &twins);
+        assert!(
+            diff.entities.iter().all(|e| e.kind == Kind::Same),
+            "twins: {section}"
+        );
+        let diff = difference(section, base, &format!("{base}{one}"));
+        assert_eq!(
+            diff.entities[0].kind,
+            Kind::Same,
+            "old header preserved: {section}"
+        );
+        assert_eq!(diff.entities[1].kind, Kind::Added);
+    }
+}
+
+#[test]
+fn new_gpu_details_and_storage_ids_remain_with_their_device() {
+    let gpu = "GPU 0\n└── NVIDIA GeForce RTX 3070\n    └── UUID: GPU-9e521d74-03ba-4c68-a27f-81d639b504c0\n\nSerial Number: 032482719630\nPDI: 08F47A2196BC3D50\nBoard Part Number: 900-1G141-2530-000\nVBIOS Version: 94.04.3A.00.71\nGPU 1\n└── Intel UHD Graphics 770\n";
+    let parsed = parse(&format!("===== GPU INFO =====\n{gpu}"), false).unwrap();
+    assert_eq!(parsed.sections[0].entities[0].rows.len(), 6);
+    assert_eq!(parsed.sections[0].entities[1].rows.len(), 1);
+    let qualified = gpu
+        .replace("\nPDI:", "\nGPU 0 PDI:")
+        .replace("\nSerial Number:", "\nGPU 0 Serial Number:");
+    assert!(
+        difference("GPU INFO", gpu, &qualified)
+            .entities
+            .iter()
+            .all(|e| e.kind == Kind::Same)
+    );
+    let disk = |n, uuid| {
+        format!(
+            "└── PHYSICALDRIVE{n}\n    ├── Model: Samsung SSD 980\n    ├── NVMe Namespace UUID: {uuid}\n    └── Storage ID (port, vendor ID, ASCII): Port_4A729C1E\n"
+        )
+    };
+    let diff = difference(
+        "DISK DRIVES",
+        &disk(0, "71A25E94-D6B8-4C02-9F31-826C50A7B493"),
+        &disk(2, "71A25E94-D6B8-4C02-9F31-826C50A7B494"),
+    );
+    assert_eq!(diff.entities.len(), 1);
+    assert!(
+        diff.entities[0]
+            .fields
+            .iter()
+            .any(|f| f.label == "NVMe Namespace UUID" && f.identifier && f.kind == Kind::Changed)
+    );
+}
+
+#[test]
+fn diagnostics_are_rejected_even_if_a_helper_contains_export_like_text() {
+    let sections = [super::super::Section {
+        title: "BATTERY",
+        source: "Battery IOCTL".into(),
+        elapsed_ms: 3,
+        ..Default::default()
+    }];
+    let text = super::super::diagnostics(&sections, &[], false);
+    assert!(parse(&text, false).unwrap().is_empty());
+    let injected = format!("{text}===== BATTERY =====\nBattery Serial: BAT2402A7381\n");
+    assert!(parse(&injected, false).unwrap().is_empty());
+    // Extension rejection precedes file IO and also covers masked/case variants.
+    for path in ["not-present.diag.txt", "HWID-EXPORT-MASKED.DIAG.TXT"] {
+        assert!(matches!(read(Path::new(path)), Err(ReadError::Empty(_))));
+    }
+}
+
+#[test]
 fn vanished_virtual_nic_does_not_change_survivors() {
     let before = parse("===== NETWORK ADAPTERS (NIC's) =====\nName: Virtual\nMAC Address: 02:41:67:93:A8:2C\n----------------------------------------\nName: Ethernet\nMAC Address: 3C:FD:FE:72:19:A6\n----------------------------------------\nName: Wi-Fi\nMAC Address: 00:1B:21:73:95:C4", false).unwrap();
     let after = parse("===== NETWORK ADAPTERS (NIC's) =====\nName: Ethernet\nMAC Address: 3C:FD:FE:72:19:A6\n----------------------------------------\nName: Wi-Fi\nMAC Address: 00:1B:21:73:95:C4", false).unwrap();

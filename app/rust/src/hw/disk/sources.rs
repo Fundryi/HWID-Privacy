@@ -7,7 +7,10 @@ use crate::{
         wmi::{self, Namespace},
     },
 };
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 pub(super) struct LogicalDrive {
     pub(super) physical: String,
@@ -112,24 +115,122 @@ pub(super) fn logical_drive_wmi(letter: char) -> win::Result<Vec<LogicalDrive>> 
 #[derive(Default)]
 pub(super) struct PhysicalDiskIds {
     pub(super) unique_ids: HashMap<u32, String>,
-    pub(super) adapter_serials: HashMap<u32, String>,
+    pub(super) adapter_serials: HashMap<u32, AdapterSerial>,
+}
+
+pub(super) struct AdapterSerial {
+    pub(super) value: String,
+    disk_serial: String,
+    bus: u32,
+}
+
+impl AdapterSerial {
+    pub(super) fn matches_disk(&self, serial: &str) -> bool {
+        // DeviceId is provider-scoped, not universally a Windows disk number.
+        // Require the independently reported unit serial as corroboration, and
+        // exclude bridges/virtual/RAID backends from this added field.
+        let matches = matches!(self.bus, 3 | 11 | 17)
+            && !trim_net(serial).is_empty()
+            && trim_net(serial) == self.disk_serial;
+        if !matches {
+            win::record(Error::msg(
+                "Adapter Serial join",
+                "ambiguous: disk serial or native bus not corroborated",
+            ));
+        }
+        matches
+    }
+}
+
+pub(super) fn insert_adapter_serial(
+    ids: &mut HashMap<u32, AdapterSerial>,
+    seen: &mut HashSet<u32>,
+    index: Option<&str>,
+    serial: Option<&str>,
+    disk_serial: Option<&str>,
+    bus: Option<u32>,
+) {
+    let Some(index) = index
+        .and_then(|v| trim_net(v).parse::<i32>().ok())
+        .filter(|&n| n >= 0)
+        .map(|n| n as u32)
+    else {
+        win::record(Error::msg(
+            "Adapter Serial join",
+            "malformed: missing or invalid disk index",
+        ));
+        return;
+    };
+    if !seen.insert(index) {
+        ids.remove(&index);
+        win::record(Error::msg(
+            "Adapter Serial join",
+            "ambiguous: duplicate provider disk index",
+        ));
+        return;
+    }
+    let Some(serial) = serial.map(trim_net).filter(|s| !s.is_empty()) else {
+        win::record(Error::msg("Adapter Serial", "absent: no serial"));
+        return;
+    };
+    if serial.chars().any(char::is_control) {
+        win::record(Error::msg(
+            "Adapter Serial",
+            "malformed: control characters",
+        ));
+        return;
+    }
+    if serial
+        .chars()
+        .next()
+        .is_some_and(|first| serial.chars().all(|c| c == first))
+        || matches!(
+            serial.to_ascii_uppercase().as_str(),
+            "UNKNOWN" | "NONE" | "N/A" | "DEFAULT STRING"
+        )
+    {
+        win::record(Error::msg("Adapter Serial", "placeholder: serial omitted"));
+        return;
+    }
+    let (Some(disk_serial), Some(bus)) = (disk_serial.map(trim_net).filter(|s| !s.is_empty()), bus)
+    else {
+        win::record(Error::msg(
+            "Adapter Serial join",
+            "absent: corroborating disk metadata missing",
+        ));
+        return;
+    };
+    ids.insert(
+        index,
+        AdapterSerial {
+            value: serial.into(),
+            disk_serial: disk_serial.into(),
+            bus,
+        },
+    );
 }
 
 /// Reads physical-disk unique IDs and adapter serials from the Storage namespace.
 pub(super) fn physical_disk_ids_wmi() -> win::Result<PhysicalDiskIds> {
     let mut ids = PhysicalDiskIds::default();
+    let mut seen = HashSet::new();
     for row in wmi::query(
         Namespace::Storage,
-        "SELECT DeviceId, UniqueId, AdapterSerialNumber FROM MSFT_PhysicalDisk",
+        "SELECT DeviceId, UniqueId, AdapterSerialNumber, SerialNumber, BusType FROM MSFT_PhysicalDisk",
     )? {
-        if let Some(index) = row.str("DeviceId") {
-            if let Some(id) = row.str("UniqueId") {
-                insert_unique_id(&mut ids.unique_ids, &index, &id);
-            }
-            if let Some(serial) = row.str("AdapterSerialNumber") {
-                insert_unique_id(&mut ids.adapter_serials, &index, trim_net(&serial));
-            }
+        if let Some(index) = row.str("DeviceId")
+            && let Some(id) = row.str("UniqueId")
+        {
+            insert_unique_id(&mut ids.unique_ids, &index, &id);
         }
+        insert_adapter_serial(
+            &mut ids.adapter_serials,
+            &mut seen,
+            row.str("DeviceId").as_deref(),
+            row.str("AdapterSerialNumber").as_deref(),
+            row.str("SerialNumber").as_deref(),
+            row.u32("BusType"),
+        );
     }
     // C# parity: Hardware/DiskDriveInfo.cs:209-236. Empty success does not fallback.
     Ok(ids)

@@ -157,21 +157,7 @@ fn run(options: Options) -> Result<(), String> {
         Mode::Dump(path) => {
             let sections = hw::collect_all(options.only.as_deref(), &|_, _| {});
             write(&path, hw::full_report(&sections))?;
-            let mut diagnostics = String::new();
-            for section in &sections {
-                diagnostics.push_str(&format!(
-                    "{}\r\nTime: {} ms\r\nSource: {}\r\n",
-                    section.title, section.elapsed_ms, section.source
-                ));
-                for failure in &section.failures {
-                    diagnostics.push_str(&format!("Failed fallback: {failure}\r\n"));
-                }
-                diagnostics.push_str("\r\n");
-            }
-            diagnostics.push_str("[helpers]\r\n");
-            for error in win::take_recorded() {
-                diagnostics.push_str(&format!("{error}\r\n"));
-            }
+            let diagnostics = report::diagnostics(&sections, &win::take_recorded(), false);
             let mut diag_path = path.into_os_string();
             diag_path.push(".diag.txt");
             write(Path::new(&diag_path), diagnostics)

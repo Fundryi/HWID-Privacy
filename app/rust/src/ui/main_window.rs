@@ -79,9 +79,11 @@ pub fn run() {
 
 #[derive(Default)]
 struct State {
-    /// The 14 sections in provider order; bodies are raw provider text (`Loading...` while a
+    /// The sections (`hw::PROVIDERS`) in provider order; bodies are raw provider text (`Loading...` while a
     /// load runs).
     sections: RefCell<Vec<Section>>,
+    /// Helper diagnostics drained at the end of the load that supplied these sections.
+    helpers: RefCell<Vec<win::Error>>,
     /// Index of the highlighted sidebar item (C# finds it by its `BackColor`).
     active: Cell<usize>,
     /// Id of the newest load; older results are dropped (F26).
@@ -107,6 +109,7 @@ enum Msg {
         load: u64,
         refresh: bool,
         result: Result<Vec<Section>, String>,
+        helpers: Vec<win::Error>,
     },
 }
 
@@ -188,10 +191,11 @@ fn on_msg(form: &Form, state: &State, msg: Msg) {
             load,
             refresh,
             result,
+            helpers,
         } => {
             // AD-41: a superseded load is dropped whole, including its Refresh message box.
             if load == state.load.get() {
-                finish_load(form, state, refresh, result);
+                finish_load(form, state, refresh, result, helpers);
             }
         }
     }
@@ -338,6 +342,7 @@ fn begin_load(form: &Form, state: &State) -> u64 {
     state.collected.set(0);
     state.loading.set(true);
     compare_buttons(form, state);
+    state.helpers.borrow_mut().clear();
     // C# parity: SectionedViewForm.cs:506-527 (placeholders from GetAvailableSections, sidebar
     // rebuilt, first section shown and highlighted).
     *state.sections.borrow_mut() = hw::PROVIDERS
@@ -374,20 +379,29 @@ fn spawn_load(form: &Form, state: &State, load: u64, refresh: bool) {
                     let _ = progress.post(Msg::Progress { load, index });
                 })
             });
+            let helpers = win::take_recorded();
             // `false` only when the window is already gone; nobody waits for the result then.
             let _ = poster.post(Msg::Loaded {
                 load,
                 refresh,
                 result,
+                helpers,
             });
         });
     if let Err(error) = spawned {
         let error = win::Error::msg("thread::spawn", error.to_string()).to_string();
-        finish_load(form, state, refresh, Err(error));
+        finish_load(form, state, refresh, Err(error), Vec::new());
     }
 }
 
-fn finish_load(form: &Form, state: &State, refresh: bool, result: Result<Vec<Section>, String>) {
+fn finish_load(
+    form: &Form,
+    state: &State,
+    refresh: bool,
+    result: Result<Vec<Section>, String>,
+    helpers: Vec<win::Error>,
+) {
+    *state.helpers.borrow_mut() = helpers;
     state.loading.set(false);
     compare_buttons(form, state);
     match result {
@@ -550,14 +564,7 @@ fn export(form: &Form, state: &State) {
     // sections, which the main window never has.
     let result = {
         let sections = state.sections.borrow();
-        let masked;
-        let sections = if state.mask.get() {
-            masked = sections.iter().map(report::masked).collect::<Vec<_>>();
-            &masked[..]
-        } else {
-            &sections[..]
-        };
-        write_export(sections, state.mask.get())
+        write_export(&sections, &state.helpers.borrow(), state.mask.get())
     };
     match result {
         Ok(path) => msgbox::show(
@@ -581,7 +588,11 @@ fn export(form: &Form, state: &State) {
 }
 
 /// Writes the export next to the exe (UTF-8 without BOM, same-second files overwritten).
-fn write_export(sections: &[Section], masked: bool) -> win::Result<PathBuf> {
+fn write_export(
+    sections: &[Section],
+    helpers: &[win::Error],
+    masked: bool,
+) -> win::Result<PathBuf> {
     // C# parity: FileExportService.cs:18-31 with AppDomain.BaseDirectory.
     let exe = std::env::current_exe().map_err(|e| io_error("Locate executable folder", e))?;
     let folder = exe
@@ -595,8 +606,20 @@ fn write_export(sections: &[Section], masked: bool) -> win::Result<PathBuf> {
     let suffix = if masked { "-MASKED" } else { "" };
     let stem = format!("HWID-EXPORT-{date}-{time}{suffix}");
     let path = folder.join(format!("{stem}.txt"));
+    let diag = folder.join(format!("{stem}.diag.txt"));
+    let diagnostics = report::diagnostics(sections, helpers, masked);
+    let masked_sections;
+    let sections = if masked {
+        masked_sections = sections.iter().map(report::masked).collect::<Vec<_>>();
+        &masked_sections[..]
+    } else {
+        sections
+    };
     std::fs::write(&path, report::export_text(sections))
         .map_err(|e| io_error("Write export file", e))?;
+    if let Err(error) = std::fs::write(&diag, diagnostics) {
+        win::record(io_error("Write export diagnostics", error));
+    }
     Ok(path)
 }
 
@@ -729,7 +752,10 @@ fn responsive(form: &Form, state: &State, client: Size) {
         let (tier, scroll) = theme::SIDEBAR_TIERS
             .iter()
             .find(|tier| tier_height(tier, padding, dpi) <= inner)
-            .map_or((&theme::SIDEBAR_TIERS[3], true), |tier| (tier, false));
+            .map_or(
+                (&theme::SIDEBAR_TIERS[theme::SIDEBAR_TIERS.len() - 1], true),
+                |tier| (tier, false),
+            );
         // Width: margins, padding, the scroll bar once, and the scaled inset (audit F7).
         let bar = if scroll { bar_w } else { 0 };
         let item_w = (sidebar
@@ -1528,7 +1554,7 @@ mod live {
             ("1920x1080 custom 137 DPI", 1920, 1080, 137),
         ];
         let mut rows = vec![
-            "| Setup | Work area (px) | Default outer | Start | Restored outer | Client | Tier | 14 visible | Scrollbar | Elided | Compare need/width | Footer rows |".to_owned(),
+            "| Setup | Work area (px) | Default outer | Start | Restored outer | Client | Tier | All visible | Scrollbar | Elided | Compare need/width | Footer rows |".to_owned(),
             "|---|---|---|---|---|---|---|---|---|---|---|---|".to_owned(),
         ];
         let mut fit_failures = Vec::new();
@@ -1537,7 +1563,7 @@ mod live {
                 let side = t.find(SIDEBAR).unwrap();
                 let first = t.find(FIRST_SECTION).unwrap();
                 let last = t.find(section_id(hw::PROVIDERS.len() - 1)).unwrap();
-                let tier = ["A", "B", "C", "D"]
+                let tier = ["A", "B", "C", "D", "E"]
                     .iter()
                     .zip(theme::SIDEBAR_TIERS.iter())
                     .find(|(_, tier)| dpi::scale(tier.item, dpi) == first.bounds.h)
@@ -1852,6 +1878,15 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
             );
             assert!(!body.contains("JSON: "));
             assert!(!txt.with_extension("json").exists());
+            let diag = txt.with_extension("diag.txt");
+            let diagnostics = std::fs::read_to_string(&diag).expect("adjacent diagnostics");
+            assert!(!diagnostics.starts_with('\u{feff}'));
+            assert!(!diagnostics.replace("\r\n", "").contains('\n'));
+            assert!(diagnostics.contains("\r\n[helpers]\r\n"));
+            assert!(matches!(
+                report::compare::read(&diag),
+                Err(report::compare::ReadError::Empty(_))
+            ));
             let bytes = std::fs::read(&txt).unwrap();
             assert_eq!(bytes, expected.as_bytes());
             assert!(!bytes.starts_with(&[0xef, 0xbb, 0xbf]));
@@ -1865,6 +1900,8 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
             );
             std::fs::copy(&txt, Path::new(GOLDEN).join(txt.file_name().unwrap())).unwrap();
             std::fs::remove_file(txt).unwrap();
+            std::fs::copy(&diag, Path::new(GOLDEN).join(diag.file_name().unwrap())).unwrap();
+            std::fs::remove_file(diag).unwrap();
             expected
         };
         let original = export(false);
@@ -1963,8 +2000,13 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
 
     // Extend the existing real-HWND run rather than adding mock layout tests.
     fn trunk_tools_check(form: &Form) {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{VK_RETURN, VK_SPACE};
+        use windows::Win32::UI::Input::KeyboardAndMouse::{SetKeyboardState, VK_RETURN, VK_SPACE};
         use windows::Win32::UI::WindowsAndMessaging::{MSG, WM_KEYDOWN, WM_KEYUP};
+        // SAFETY: This test owns the thread; synthetic Enter requires neutral
+        // modifiers, independent of keys held in the owner's foreground app.
+        unsafe {
+            SetKeyboardState(&[0; 256]).unwrap();
+        }
         let path = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap())
             .join("HWIDChecker")
             .join("settings.json");
@@ -2293,7 +2335,10 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
             form.click(section_id(i));
             pump_for(30);
             assert_eq!(form.text(SECTION_TITLE), p.title);
-            assert_eq!(form.text(SECTION_META), format!("Section {} of 14", i + 1));
+            assert_eq!(
+                form.text(SECTION_META),
+                format!("Section {} of {}", i + 1, hw::PROVIDERS.len())
+            );
             assert_eq!(form.text(section_id(i)), p.title);
             let body = form.text(CONTENT);
             private.push_str(&format!("===== {} =====\r\n{body}\r\n\r\n", p.title));

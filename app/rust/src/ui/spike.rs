@@ -643,7 +643,7 @@ fn main_replica() -> Vec<Node> {
             CONTENT_META,
             Ctl::Label(
                 LabelSpec::new(
-                    "Section 1 of 14",
+                    &format!("Section 1 of {}", crate::hw::PROVIDERS.len()),
                     theme::SECTION_META_FONT,
                     theme::MUTED_TEXT,
                 )

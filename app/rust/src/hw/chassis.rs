@@ -7,12 +7,59 @@ use win::firmware::{Smbios, Structure};
 pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     if let Some(smbios) = ctx.smbios() {
         write_smbios(smbios, out);
+        append_power_supplies(smbios, out);
     } else {
         out.text("Chassis information not available.");
         // AD-03: the C# firmware reader silently returned null on an OS/parser failure.
         ctx.smbios_result()?;
     }
     Ok(())
+}
+
+fn append_power_supplies(smbios: &Smbios, out: &mut Out) {
+    let mut supplies = win::firmware::power_supplies(smbios);
+    supplies.retain(|supply| {
+        super::bios::metadata_record_has_values(
+            out,
+            "Power Supply",
+            None,
+            &[
+                &supply.manufacturer,
+                &supply.model,
+                &supply.revision,
+                &supply.serial,
+                &supply.asset,
+            ],
+        )
+    });
+    for (index, supply) in supplies.iter().enumerate() {
+        if supplies.len() >= 2 {
+            out.text(&format!("Power Supply #{} (SMBIOS)", index + 1));
+        }
+        for (label, identity, value) in [
+            ("Manufacturer (SMBIOS)", false, &supply.manufacturer),
+            ("Model/Part (SMBIOS)", false, &supply.model),
+            ("Revision (SMBIOS)", false, &supply.revision),
+            ("Serial (SMBIOS)", true, &supply.serial),
+            ("Asset Tag (SMBIOS)", true, &supply.asset),
+        ] {
+            if identity {
+                let values: Vec<_> = supplies
+                    .iter()
+                    .map(|other| {
+                        if label == "Serial (SMBIOS)" {
+                            &other.serial
+                        } else {
+                            &other.asset
+                        }
+                    })
+                    .collect();
+                super::bios::write_unique_metadata_field(out, label, value, &values);
+            } else {
+                super::bios::write_metadata_field(out, label, false, value);
+            }
+        }
+    }
 }
 
 fn write_smbios(smbios: &Smbios, out: &mut Out) {
@@ -117,6 +164,119 @@ fn decode_chassis_type(value: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_psu_identities_and_oem_assets_keep_legacy_and_context() {
+        let record = Structure {
+            kind: 39,
+            handle: 0x3908,
+            formatted: vec![0; 12],
+            strings: [
+                "Delta Electronics",
+                "PSU2408G7192",
+                "To Be Filled By O.E.M.",
+            ]
+            .map(String::from)
+            .to_vec(),
+        };
+        let mut table = Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record.clone(), record],
+        };
+        for record in &mut table.structures {
+            record.formatted[7..10].copy_from_slice(&[1, 2, 3]);
+        }
+        let mut out = Out::new();
+        out.info("Legacy", "kept");
+        append_power_supplies(&table, &mut out);
+        let section = out.finish();
+        assert!(section.body.starts_with("Legacy: kept\r\n"));
+        assert!(section.body.contains("Power Supply #2 (SMBIOS)\r\n"));
+        assert_eq!(
+            section
+                .body
+                .matches("Manufacturer (SMBIOS): Delta Electronics\r\n")
+                .count(),
+            2
+        );
+        assert!(!section.body.contains("Serial (SMBIOS):"));
+        assert!(!section.body.contains("Asset Tag (SMBIOS):"));
+        assert!(
+            section
+                .failures
+                .iter()
+                .any(|failure| failure.contains("implausible"))
+        );
+        assert!(
+            section
+                .failures
+                .iter()
+                .any(|failure| failure.contains("placeholder"))
+        );
+        assert!(
+            section
+                .failures
+                .iter()
+                .all(|failure| !failure.contains("PSU2408G7192"))
+        );
+    }
+
+    #[test]
+    fn power_supply_rendering_counts_only_printable_records_and_marks_unit_values() {
+        let empty = Structure {
+            kind: 39,
+            handle: 0x3901,
+            formatted: vec![0; 12],
+            strings: vec!["To Be Filled By O.E.M.".into()],
+        };
+        let mut supply = empty.clone();
+        supply.formatted[7..12].copy_from_slice(&[1, 2, 3, 4, 0]);
+        supply.strings = [
+            "Delta Electronics",
+            "PSU2418K73196",
+            "INV-PSU-2418",
+            "DPS-750AB-12",
+        ]
+        .map(String::from)
+        .to_vec();
+        let mut table = Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![empty.clone()],
+        };
+        table.structures[0].formatted[7..12].fill(1);
+        let mut out = Out::new();
+        append_power_supplies(&table, &mut out);
+        let section = out.finish();
+        assert!(section.body.is_empty());
+        assert_eq!(section.failures.len(), 1);
+        table.structures.push(supply.clone());
+        let mut out = Out::new();
+        append_power_supplies(&table, &mut out);
+        let single = out.finish();
+        assert!(
+            single
+                .body
+                .starts_with("Manufacturer (SMBIOS): Delta Electronics\r\n")
+        );
+        assert!(!single.body.contains("Power Supply"));
+        assert_eq!(single.ids, ["PSU2418K73196", "INV-PSU-2418"]);
+        supply.formatted[8] = 255;
+        table.structures.push(supply);
+        let mut out = Out::new();
+        append_power_supplies(&table, &mut out);
+        let multiple = out.finish();
+        assert!(multiple.body.starts_with("Power Supply #1 (SMBIOS)\r\n"));
+        assert!(multiple.body.contains("Power Supply #2 (SMBIOS)\r\n"));
+        assert!(!multiple.body.contains("Power Supply #3"));
+        assert!(multiple.body.contains("Serial (SMBIOS): Unavailable ("));
+        assert!(
+            !crate::report::masked(&multiple)
+                .body
+                .contains("PSU2418K73196")
+        );
+    }
 
     #[test]
     fn wp02_chassis_text_lock_bit_gaps_and_manufacturer_gate() {

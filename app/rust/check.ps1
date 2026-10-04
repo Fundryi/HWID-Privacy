@@ -16,8 +16,10 @@ $SectionTitles = @(
     'DISK DRIVES', 'MOTHERBOARD', 'CHASSIS', '(SM)BIOS',
     'SYSTEM INFORMATION', 'RAM MODULES', 'CPU', 'TPM MODULES',
     'USB DEVICES', 'GPU INFO', 'MONITOR INFORMATION',
-    "NETWORK ADAPTERS (NIC's)", 'BLUETOOTH ADAPTERS', 'ARP INFO/CACHE'
+    "NETWORK ADAPTERS (NIC's)", 'BLUETOOTH ADAPTERS', 'AUDIO DEVICES', 'BATTERY', 'ARP INFO/CACHE'
 )
+# Sections the C# app never had; golden and timing compares skip them.
+$RustOnlyTitles = @('AUDIO DEVICES', 'BATTERY')
 $Utf8 = [System.Text.UTF8Encoding]::new($false, $true)
 
 function Invoke-Checked([string]$Exe, [string[]]$Arguments) {
@@ -238,15 +240,15 @@ function Compare-Ghosts([string]$Before, [string]$After) {
     Write-Host "Ghost membership checks passed ($($legacy.Count) C# and $($rust.Count) Rust device keys)."
 }
 
-function Read-Timings([string]$Path) {
+function Read-Timings([string]$Path, [string[]]$ExpectedTitles = $SectionTitles) {
     $lines = (Read-Utf8 $Path).Split("`r`n", [System.StringSplitOptions]::RemoveEmptyEntries)
-    if ($lines.Count -ne 15 -or $lines[0] -cnotin @("Section`tMedianMs", "Section`tMedian ms")) {
+    if ($lines.Count -ne ($ExpectedTitles.Count + 1) -or $lines[0] -cnotin @("Section`tMedianMs", "Section`tMedian ms")) {
         throw "Invalid timing header or row count in $Path"
     }
     $times = [ordered]@{}
     for ($i = 1; $i -lt $lines.Count; $i++) {
         $row = $lines[$i].Split("`t")
-        if ($row.Count -ne 2 -or $row[0] -cne $SectionTitles[$i - 1]) { throw "Invalid timing row $i in $Path" }
+        if ($row.Count -ne 2 -or $row[0] -cne $ExpectedTitles[$i - 1]) { throw "Invalid timing row $i in $Path" }
         $value = [double]::Parse($row[1], [System.Globalization.CultureInfo]::InvariantCulture)
         if (-not [double]::IsFinite($value) -or $value -lt 0) { throw "Invalid timing value in $Path" }
         $times[$row[0]] = $value
@@ -345,9 +347,14 @@ try {
         $second = Join-Path $run 'csharp-report-second.txt'
         Invoke-Capture $harnessExe @($baseline) $baseline
         Invoke-Capture $harnessExe @($second) $second
-        $csharp = Read-Report $baseline $SectionTitles
-        $repeat = Read-Report $second $SectionTitles
-        $selected = if ($Sections.Count) { $Sections } else { $SectionTitles }
+        $legacyTitles = @($SectionTitles | Where-Object { $_ -cnotin $RustOnlyTitles })
+        $csharp = Read-Report $baseline $legacyTitles
+        $repeat = Read-Report $second $legacyTitles
+        $selected = @(if ($Sections.Count) { $Sections } else { $SectionTitles })
+        foreach ($title in @($selected | Where-Object { $_ -cnotin $legacyTitles })) {
+            Write-Host "Skipping Rust-only section in C# golden comparison: $title"
+        }
+        $selected = @($selected | Where-Object { $_ -cin $legacyTitles })
         $ok = Compare-Lines $csharp.Preamble $repeat.Preamble 'C# repeat / REPORT HEADER' 'C# first' 'C# second'
         foreach ($title in $selected) {
             $a = $csharp.Parts[$title]; $b = $repeat.Parts[$title]
@@ -388,8 +395,13 @@ try {
             if (-not (Compare-Lines $a $b 'LOGS')) { throw 'Log lists differ.' }
             Write-Host 'Log lists match in order.'
         } else {
-            $a = Read-Timings $legacyFile; $b = Read-Timings $rustFile
+            $legacyTitles = @($SectionTitles | Where-Object { $_ -cnotin $RustOnlyTitles })
+            $a = Read-Timings $legacyFile $legacyTitles; $b = Read-Timings $rustFile
             foreach ($title in $SectionTitles) {
+                if (-not $a.Contains($title)) {
+                    [pscustomobject]@{ Section = $title; 'C# ms' = 'n/a'; 'Rust ms' = $b[$title]; Delta = 'Rust-only' }
+                    continue
+                }
                 $delta = if ($a[$title] -gt 0) { '{0:F1}%' -f (100 * ($b[$title] / $a[$title] - 1)) } else { 'n/a' }
                 [pscustomobject]@{ Section = $title; 'C# ms' = $a[$title]; 'Rust ms' = $b[$title]; Delta = $delta }
                 if ($b[$title] -gt $a[$title] * 1.2) { Write-Warning "$title Rust median is more than 20 percent slower than C#." }

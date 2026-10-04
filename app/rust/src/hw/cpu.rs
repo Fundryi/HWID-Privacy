@@ -45,10 +45,52 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     let leaf1 = (leaf0.eax as i32 >= 1).then(|| __cpuid(1));
     let leaf3 = (leaf0.eax as i32 >= 3).then(|| __cpuid(3));
     write_cpuid(out, leaf0, leaf1, leaf3);
-    // The shared collector renders and records a WMI failure after retaining
-    // the independent native data; no failure is silently discarded. Partial
-    // CPU output on this failure path needs an orchestrator approval-ledger row.
-    result
+    // Keep the legacy failure line before the appended socket metadata. It is
+    // recorded here because returning the error would render it after the new lines.
+    if let Err(error) = result {
+        out.fallback_failed("CPU", &error)
+            .text(&format!("Error retrieving CPU information: {error}"));
+    }
+    if let Some(smbios) = ctx.smbios() {
+        append_sockets(smbios, out);
+    }
+    Ok(())
+}
+
+fn append_sockets(smbios: &firmware::Smbios, out: &mut Out) {
+    let mut sockets = firmware::processor_metadata(smbios);
+    sockets.retain(|socket| {
+        super::bios::metadata_record_has_values(
+            out,
+            "CPU Socket",
+            Some(socket.handle),
+            &[
+                &socket.socket,
+                &socket.manufacturer,
+                &socket.part,
+                &socket.asset,
+            ],
+        )
+    });
+    for (index, socket) in sockets.iter().enumerate() {
+        if sockets.len() >= 2 {
+            out.text(&format!("CPU Socket #{} (SMBIOS)", index + 1));
+        }
+        for (label, identity, value) in [
+            ("Socket Designation (SMBIOS)", false, &socket.socket),
+            ("Socket Manufacturer (SMBIOS)", false, &socket.manufacturer),
+            ("Socket Part Number (SMBIOS)", false, &socket.part),
+            ("Socket Asset Tag (SMBIOS)", true, &socket.asset),
+        ] {
+            // Type-4 part numbers describe the processor model; asset tags are per-unit.
+            if identity {
+                let values: Vec<_> = sockets.iter().map(|other| &other.asset).collect();
+                super::bios::write_unique_metadata_field(out, label, value, &values);
+            } else {
+                super::bios::write_metadata_field(out, label, false, value);
+            }
+        }
+    }
 }
 
 fn direct_processor(ctx: &Ctx) -> win::Result<(String, String, String)> {
@@ -183,6 +225,124 @@ fn write_cpuid(
 mod tests {
     use super::*;
     use serde::Deserialize;
+
+    #[test]
+    fn duplicate_socket_assets_and_old_versions_preserve_legacy_output() {
+        let record = firmware::Structure {
+            kind: 4,
+            handle: 0x0418,
+            formatted: vec![0; 0x23],
+            strings: ["CPU1", "Intel(R) Corporation", "CPU-INV-2481"]
+                .map(String::from)
+                .to_vec(),
+        };
+        let mut table = firmware::Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record.clone(), record],
+        };
+        for (index, record) in table.structures.iter_mut().enumerate() {
+            record.handle += index as u16;
+            record.formatted[4] = 1;
+            record.formatted[7] = 2;
+            record.formatted[0x21] = 3;
+        }
+        let mut out = Out::new();
+        out.info("Legacy", "kept");
+        append_sockets(&table, &mut out);
+        let section = out.finish();
+        assert!(section.body.starts_with("Legacy: kept\r\n"));
+        assert!(section.body.contains("CPU Socket #2 (SMBIOS)\r\n"));
+        assert!(!section.body.contains("Socket Asset Tag (SMBIOS):"));
+        assert!(
+            section
+                .failures
+                .iter()
+                .any(|failure| failure.contains("implausible"))
+        );
+        assert!(
+            section
+                .failures
+                .iter()
+                .all(|failure| !failure.contains("CPU-INV-2481"))
+        );
+        table.major = 2;
+        table.minor = 2;
+        for record in &mut table.structures {
+            record.formatted.truncate(0x20);
+        }
+        let mut out = Out::new();
+        append_sockets(&table, &mut out);
+        let old = out.finish();
+        assert!(old.body.contains("Socket Designation (SMBIOS): CPU1\r\n"));
+        assert!(!old.body.contains("Part Number"));
+        assert!(!old.body.contains("Unavailable"));
+        assert!(
+            old.failures
+                .iter()
+                .any(|failure| failure.contains("unsupported"))
+        );
+    }
+
+    #[test]
+    fn socket_rendering_uses_printable_socket_count_and_keeps_model_context_unmarked() {
+        let mut record = firmware::Structure {
+            kind: 4,
+            handle: 0x0401,
+            formatted: vec![0; 0x23],
+            strings: [
+                "CPU1",
+                "Intel(R) Corporation",
+                "BX8071512700K",
+                "CPU-INV-2418",
+            ]
+            .map(String::from)
+            .to_vec(),
+        };
+        let mut table = firmware::Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record.clone()],
+        };
+        let mut out = Out::new();
+        append_sockets(&table, &mut out);
+        let empty = out.finish();
+        assert!(empty.body.is_empty());
+        assert_eq!(empty.failures.len(), 1);
+        for (offset, index) in [(4, 1), (7, 2), (0x22, 3), (0x21, 4)] {
+            record.formatted[offset] = index;
+        }
+        table.structures.push(record.clone());
+        let mut out = Out::new();
+        append_sockets(&table, &mut out);
+        let single = out.finish();
+        assert!(
+            single
+                .body
+                .starts_with("Socket Designation (SMBIOS): CPU1\r\n")
+        );
+        assert!(!single.body.contains("CPU Socket"));
+        assert_eq!(single.ids, ["CPU-INV-2418"]);
+        assert!(
+            crate::report::masked(&single)
+                .body
+                .contains("BX8071512700K")
+        );
+        record.handle = 0x0402;
+        record.formatted[0x21] = 255;
+        table.structures.push(record);
+        let mut out = Out::new();
+        append_sockets(&table, &mut out);
+        let multiple = out.finish();
+        assert!(multiple.body.starts_with("CPU Socket #1 (SMBIOS)\r\n"));
+        assert!(multiple.body.contains("CPU Socket #2 (SMBIOS)\r\n"));
+        assert!(!multiple.body.contains("0x040"));
+        assert!(
+            multiple
+                .body
+                .contains("Socket Asset Tag (SMBIOS): Unavailable (")
+        );
+    }
 
     #[derive(Deserialize)]
     #[serde(rename_all = "PascalCase")]

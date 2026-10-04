@@ -37,6 +37,8 @@ struct Section {
 
 #[derive(Debug, Default, PartialEq)]
 struct Entity {
+    // Keep independent sources and device kinds apart even when values coincide.
+    family: String,
     name: String,
     heading: String,
     rows: Vec<(String, String)>,
@@ -60,6 +62,16 @@ struct JsonSection {
 
 /// Reads text exports or the C3 JSON format; metadata and identifier lists are not diff keys.
 pub fn read(path: &Path) -> Result<Export, ReadError> {
+    if path.file_name().is_some_and(|name| {
+        name.to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with(".diag.txt")
+    }) {
+        return Err(ReadError::Empty(format!(
+            "No hardware values found in: {}",
+            path.display()
+        )));
+    }
     let text = std::fs::read_to_string(path).map_err(|error| read_error(path, &error))?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     let json = path
@@ -95,6 +107,14 @@ fn parse(text: &str, json: bool) -> Result<Export, serde_json::Error> {
             export.push(&section.title, &section.lines.join("\n"), &section.ids);
         }
     } else {
+        // Diagnostics can be renamed in a picker. Their format is not a
+        // hardware export, even if a helper error contains export-like text.
+        if text.lines().any(|line| line == "[helpers]")
+            && text.lines().any(|line| line.starts_with("Time: "))
+            && text.lines().any(|line| line.starts_with("Source: "))
+        {
+            return Ok(export);
+        }
         let mut current = None;
         let mut body = String::new();
         for line in text.lines() {
@@ -213,13 +233,98 @@ fn split_section(title: &str, body: &str, ids: &[String]) -> Section {
                 | "NETWORK ADAPTERS (NIC'S)"
                 | "BLUETOOTH ADAPTERS"
                 | "AUDIO DEVICES"
+                | "BATTERY"
                 | "RAM MODULES"
         ),
     };
     let mut current = Entity::default();
     let mut ram_columns = Vec::new();
+    let title_upper = title.to_ascii_uppercase();
+    let firmware_kind = match title_upper.as_str() {
+        "CHASSIS" => Some("Power Supply"),
+        "(SM)BIOS" => Some("Firmware Component"),
+        "CPU" => Some("CPU Socket"),
+        "TPM MODULES" => Some("TPM Firmware"),
+        _ => None,
+    };
     for raw in body.lines() {
         let line = content(raw);
+        // These inventories append firmware records independently of the legacy
+        // values. A single printable record has fields but no explicit heading.
+        if let Some(kind) = firmware_kind {
+            let heading = line.starts_with(&format!("{kind} #")) && line.ends_with(" (SMBIOS)");
+            let metadata = line.split_once(':').is_some_and(|(label, _)| {
+                label.ends_with(" (SMBIOS)")
+                    || kind == "TPM Firmware" && label == "TPM Version Cross-check"
+            });
+            if heading || metadata {
+                section.blocked = true;
+                if heading || current.family != kind {
+                    if !current.rows.is_empty() {
+                        section.entities.push(std::mem::take(&mut current));
+                    }
+                    current.family = kind.into();
+                    current.heading = if heading {
+                        line.into()
+                    } else {
+                        format!("{kind} #1 (SMBIOS)")
+                    };
+                }
+                if !heading {
+                    add_fields(&mut current, line);
+                }
+                continue;
+            }
+            if title_upper == "CPU" && line.starts_with("Name: ") {
+                section.blocked = true;
+                if !current.rows.is_empty() {
+                    section.entities.push(std::mem::take(&mut current));
+                }
+                current.family = "Processor".into();
+                current.heading = format!("CPU {}", section.entities.len() + 1);
+            } else if title_upper != "CPU"
+                || line.starts_with("CPUID ")
+                || current.family != "Processor"
+                || line.starts_with("Error ")
+            {
+                add_fields(&mut section.header, line);
+                continue;
+            }
+        }
+        if title_upper == "BATTERY"
+            && (line.starts_with("Battery: #") || line.starts_with("SMBIOS Battery: #"))
+        {
+            if !current.rows.is_empty() {
+                section.entities.push(std::mem::take(&mut current));
+            }
+            current.family = line.split_once(':').map_or("", |(label, _)| label).into();
+            current.heading = line.replace(": #", " ");
+            continue;
+        }
+        if title_upper == "AUDIO DEVICES" {
+            let family = if line.starts_with("Adapter: ") {
+                Some("Audio adapter")
+            } else if line.starts_with("Endpoint: ") {
+                Some("Audio endpoint")
+            } else {
+                None
+            };
+            if let Some(family) = family {
+                if !current.rows.is_empty() {
+                    section.entities.push(std::mem::take(&mut current));
+                }
+                current.family = family.into();
+                current.heading = format!(
+                    "{family} {}",
+                    section
+                        .entities
+                        .iter()
+                        .filter(|e| e.family == family)
+                        .count()
+                        + 1
+                );
+            }
+        }
         let separator = line.len() >= 4 && line.bytes().all(|c| c == b'-');
         let disk_root = raw.starts_with("└── PHYSICALDRIVE");
         let gpu = gpu_prefix(line);
@@ -281,7 +386,17 @@ fn split_section(title: &str, body: &str, ids: &[String]) -> Section {
             }
             continue;
         }
-        if line.starts_with("Board Serial Number: ") && eq_ignore_case(title, "GPU INFO") {
+        if eq_ignore_case(title, "GPU INFO")
+            && [
+                "Board Serial Number: ",
+                "Serial Number: ",
+                "PDI: ",
+                "Board Part Number: ",
+                "VBIOS Version: ",
+            ]
+            .iter()
+            .any(|label| line.starts_with(label))
+        {
             if let Some(first) = section.entities.first_mut() {
                 add_fields(first, line);
             } else {
@@ -421,6 +536,12 @@ pub(crate) fn generic_value(value: &str) -> bool {
             "unavailable",
             "none",
             "n/a",
+            "na",
+            "empty serial",
+            "empty or placeholder serial",
+            "unknown audio adapter",
+            "unresolved audio adapters",
+            "unknown audio endpoint",
             "<empty>",
             "default string",
             "to be filled by o.e.m.",
@@ -446,10 +567,21 @@ pub(crate) fn generic_value(value: &str) -> bool {
         return true;
     }
     let digits = compact.strip_prefix("0x").unwrap_or(&compact);
+    // Vendor UUIDs carry a prefix, and MMDevice tokens a direction prefix;
+    // neither makes a zero/FF payload into usable device identity.
+    if let Some(payload) = value.strip_prefix("gpu-") {
+        return generic_value(payload);
+    }
+    if value.starts_with('{')
+        && let Some((_, payload)) = value.split_once("}.")
+    {
+        return generic_value(payload);
+    }
     !digits.is_empty()
-        && ['0', 'f', 'x']
+        && (['0', 'f', 'x']
             .iter()
             .any(|c| digits.chars().all(|d| d == *c))
+            || digits.len() >= 4 && digits.chars().all(|c| digits.starts_with(c)))
 }
 
 fn usable(value: &str) -> bool {
@@ -482,6 +614,7 @@ fn identifier_label(label: &str) -> bool {
 
 fn identity_weight(label: &str) -> u32 {
     let label = label.to_ascii_lowercase();
+    let label = label.strip_suffix(" (smbios)").unwrap_or(&label);
     if label.contains("serial")
         || label.starts_with("mac") && !label.starts_with("machine")
         || label.contains(" mac")
@@ -493,15 +626,19 @@ fn identity_weight(label: &str) -> u32 {
     } else if label.contains("uuid")
         || label.contains("guid")
         || label.contains("uniqueid")
+        || label == "battery unique id"
+        || label == "endpoint id"
+        || label == "stable id"
+        || label.contains("asset tag")
         || label.contains("container id")
         || label.contains("storage id")
     {
         80
-    } else if label.contains("hardware id") || label == "instance id" || label == "stable id" {
+    } else if label.contains("hardware id") || label == "instance id" {
         40
     } else if label.contains("model")
         || matches!(
-            label.as_str(),
+            label,
             "name"
                 | "device"
                 | "adapter"
@@ -509,10 +646,15 @@ fn identity_weight(label: &str) -> u32 {
                 | "product name"
                 | "device product"
                 | "partnumber"
+                | "battery name"
+                | "component name"
+                | "socket part number"
+                | "endpoint"
+                | "tpm description"
         )
     {
         12
-    } else if label.contains("manufacturer") || label == "vendor" {
+    } else if label.contains("manufacturer") || label == "vendor" || label.ends_with(" vendor") {
         8
     } else {
         0
@@ -520,6 +662,9 @@ fn identity_weight(label: &str) -> u32 {
 }
 
 fn score(before: &Entity, after: &Entity) -> u32 {
+    if before.family != after.family {
+        return 0;
+    }
     // Count each evidence category once: duplicate source labels/model aliases must
     // not outweigh a unit serial, nor let a model alone cross the threshold.
     let mut weights = BTreeSet::new();
@@ -545,7 +690,7 @@ fn model_fields(entity: &Entity) -> Vec<&(String, String)> {
     let mut rows: Vec<_> = entity
         .rows
         .iter()
-        .filter(|(label, _)| matches!(identity_weight(label), 8 | 12))
+        .filter(|(label, _)| matches!(identity_weight(label), 8 | 12) || label == "Direction")
         .collect();
     // A manufacturer alone is not a model. Name/product aliases also cover
     // sections without an explicit Model label (GPU name lines parse as Model).
@@ -605,10 +750,9 @@ fn match_entities(before: &Section, after: &Section) -> Vec<Option<usize>> {
     let right_rows: Vec<_> = after.entities.iter().map(sorted_rows).collect();
     for (i, rows) in left_rows.iter().enumerate() {
         if matched[i].is_none()
-            && let Some(j) = right_rows
-                .iter()
-                .enumerate()
-                .position(|(j, other)| !used[j] && rows == other)
+            && let Some(j) = right_rows.iter().enumerate().position(|(j, other)| {
+                !used[j] && rows == other && before.entities[i].family == after.entities[j].family
+            })
         {
             matched[i] = Some(j);
             used[j] = true;
@@ -624,16 +768,19 @@ fn match_entities(before: &Section, after: &Section) -> Vec<Option<usize>> {
             || left_models
                 .iter()
                 .enumerate()
-                .filter(|(a, other)| matched[*a].is_none() && *other == model)
+                .filter(|(a, other)| {
+                    matched[*a].is_none()
+                        && *other == model
+                        && before.entities[i].family == before.entities[*a].family
+                })
                 .count()
                 != 1
         {
             continue;
         }
-        let mut remaining = right_models
-            .iter()
-            .enumerate()
-            .filter(|(j, other)| !used[*j] && *other == model);
+        let mut remaining = right_models.iter().enumerate().filter(|(j, other)| {
+            !used[*j] && *other == model && before.entities[i].family == after.entities[*j].family
+        });
         if let Some((j, _)) = remaining.next()
             && remaining.next().is_none()
         {

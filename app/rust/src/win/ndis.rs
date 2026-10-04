@@ -1,6 +1,6 @@
 //! Best-effort, read-only legacy NDIS permanent-address corroboration.
 
-use super::{Error, Result, catch_panic, ioctl, record, wide};
+use super::{Error, Result, catch_panic, ioctl, record};
 use std::{
     collections::{HashMap, HashSet},
     mem::{offset_of, size_of},
@@ -33,36 +33,65 @@ pub struct PermanentMacs {
     pub failures: Vec<Error>,
 }
 
-struct Worker;
-impl Drop for Worker {
-    fn drop(&mut self) {
-        BUSY.store(false, Ordering::Release);
+struct Worker<'a>(&'a AtomicBool);
+impl<'a> Worker<'a> {
+    fn acquire(busy: &'a AtomicBool) -> Option<Self> {
+        busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self(busy))
     }
+}
+impl Drop for Worker<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+fn diagnostic(mut error: Error) -> Error {
+    if error.code != 0 {
+        error.detail = match error.code {
+            5 => "access-denied: NDIS request denied",
+            2 | 3 | 1168 => "absent: NDIS interface or property missing",
+            258 | 1460 => "timeout: NDIS request timed out",
+            _ => "unsupported: NDIS request failed",
+        }
+        .into();
+    } else if !error.detail.contains(':') {
+        let class = if error.detail.contains("deadline") || error.detail.contains("still running") {
+            "timeout"
+        } else {
+            "malformed"
+        };
+        error.detail = format!("{class}: {}", error.detail);
+    }
+    error
 }
 
 /// Queries only accepted WMI instances; retains completed results within a 750 ms wait.
 pub fn permanent_macs(instances: Vec<String>) -> PermanentMacs {
     let mut result = PermanentMacs::default();
-    if BUSY
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        result
-            .failures
-            .push(Error::msg("NDIS OID", "previous scan still running"));
+    let Some(worker) = Worker::acquire(&BUSY) else {
+        result.failures.push(Error::msg(
+            "NDIS OID",
+            "timeout: previous scan still running",
+        ));
         return result;
-    }
+    };
     let deadline = Instant::now() + BUDGET;
     let (tx, rx) = mpsc::channel();
-    let worker = Worker;
     // Driver calls are synchronous. The worker keeps its buffers and handles alive
     // after timeout; BUSY prevents repeated collections from piling up stuck workers.
     let spawned = std::thread::Builder::new()
         .name("ndis-oid".into())
         .spawn(move || {
             let _worker = worker;
-            let targets = instances.into_iter().map(|id| id.to_uppercase()).collect();
-            let error = match catch_panic(|| scan(&targets, deadline, &tx)) {
+            let error = match catch_panic(|| {
+                let targets = instances
+                    .into_iter()
+                    .map(|id| id.to_ascii_uppercase())
+                    .collect();
+                scan(&targets, deadline, &tx)
+            }) {
                 Ok(Ok(())) => return,
                 Ok(Err(error)) => error,
                 Err(_) => Error::msg("NDIS OID", "worker panicked"),
@@ -70,32 +99,19 @@ pub fn permanent_macs(instances: Vec<String>) -> PermanentMacs {
             let _ = tx.send(Err(error));
         });
     if let Err(error) = spawned {
-        result
-            .failures
-            .push(Error::msg("NDIS OID worker", error.to_string()));
+        result.failures.push(Error::msg(
+            "NDIS OID worker",
+            format!("unsupported: cannot spawn worker ({error})"),
+        ));
         return result;
     }
     let mut seen = HashSet::new();
     loop {
         match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(Ok((instance, address))) => {
-                let unique = seen.insert(instance.clone());
-                if !unique {
-                    result.addresses.remove(&instance);
-                    result.failures.push(Error::msg(
-                        "NDIS OID association",
-                        "multiple interfaces match one instance",
-                    ));
-                }
-                match address {
-                    Ok(address) if unique => {
-                        result.addresses.insert(instance, address);
-                    }
-                    Err(error) => result.failures.push(error),
-                    Ok(_) => {}
-                }
+                retain_address(&mut result, &mut seen, instance, address);
             }
-            Ok(Err(error)) => result.failures.push(error),
+            Ok(Err(error)) => result.failures.push(diagnostic(error)),
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 result
@@ -105,7 +121,46 @@ pub fn permanent_macs(instances: Vec<String>) -> PermanentMacs {
             }
         }
     }
+    reject_shared_addresses(&mut result);
     result
+}
+
+fn retain_address(
+    result: &mut PermanentMacs,
+    seen: &mut HashSet<String>,
+    instance: String,
+    address: Result<String>,
+) {
+    if !seen.insert(instance.clone()) {
+        result.addresses.remove(&instance);
+        result.failures.push(Error::msg(
+            "NDIS OID association",
+            "ambiguous: multiple interfaces match one instance",
+        ));
+    } else if let Ok(address) = &address {
+        result.addresses.insert(instance, address.clone());
+    }
+    if let Err(error) = address {
+        result.failures.push(diagnostic(error));
+    }
+}
+
+fn reject_shared_addresses(result: &mut PermanentMacs) {
+    let mut counts = HashMap::new();
+    for address in result.addresses.values() {
+        *counts.entry(address.clone()).or_insert(0_usize) += 1;
+    }
+    result.addresses.retain(|_, address| {
+        if counts.get(address).copied().unwrap_or_default() > 1 {
+            result.failures.push(Error::msg(
+                "NDIS OID address",
+                "implausible: permanent address shared by different adapters",
+            ));
+            false
+        } else {
+            true
+        }
+    });
 }
 
 struct Interfaces(HDEVINFO);
@@ -133,7 +188,9 @@ fn scan(targets: &HashSet<String>, deadline: Instant, tx: &mpsc::Sender<Message>
         }
         .map_err(|e| Error::from_win("NDIS SetupDiGetClassDevsW", e))?,
     );
-    let mut matched = HashSet::new();
+    let mut matched: HashMap<String, Vec<String>> = HashMap::new();
+    let mut complete = false;
+    let mut malformed = false;
     for index in 0..1024 {
         if Instant::now() >= deadline {
             return Err(Error::msg("NDIS OID", "750 ms scan deadline exceeded"));
@@ -148,37 +205,60 @@ fn scan(targets: &HashSet<String>, deadline: Instant, tx: &mpsc::Sender<Message>
         } {
             Ok(()) => {}
             Err(error) if error.code() == HRESULT::from_win32(ERROR_NO_MORE_ITEMS.0) => {
-                for _ in targets.difference(&matched) {
-                    let _ = tx.send(Err(Error::msg(
-                        "NDIS OID association",
-                        "no present miniport interface matches WMI instance",
-                    )));
-                }
-                return Ok(());
+                complete = true;
+                break;
             }
             Err(error) => return Err(Error::from_win("NDIS SetupDiEnumDeviceInterfaces", error)),
         }
         let (instance, path) = match interface_details(set.0, &interface) {
             Ok(details) => details,
             Err(error) => {
+                malformed = true;
                 let _ = tx.send(Err(error));
                 continue;
             }
         };
-        let instance = instance.to_uppercase();
+        let instance = instance.to_ascii_uppercase();
         if !targets.contains(&instance) {
             continue;
         }
-        matched.insert(instance.clone());
-        let address = query_address(&path);
-        if tx.send(Ok((instance, address))).is_err() {
+        matched.entry(instance).or_default().push(path);
+    }
+    if !complete || malformed {
+        return Err(Error::msg(
+            "NDIS OID association",
+            "ambiguous: interface inventory incomplete or malformed",
+        ));
+    }
+    // Prove uniqueness before a synchronous query can stall. A timeout during
+    // enumeration must not retain an address whose second interface is unseen.
+    let mut targets: Vec<_> = targets.iter().collect();
+    targets.sort();
+    for instance in targets {
+        let address = match matched.get(instance).map(Vec::as_slice) {
+            Some([path]) => {
+                if Instant::now() >= deadline {
+                    return Err(Error::msg(
+                        "NDIS OID",
+                        "timeout: 750 ms scan deadline exceeded",
+                    ));
+                }
+                query_address(path)
+            }
+            Some(_) => Err(Error::msg(
+                "NDIS OID association",
+                "ambiguous: multiple interfaces match one instance",
+            )),
+            None => Err(Error::msg(
+                "NDIS OID association",
+                "absent: no present miniport interface matches WMI instance",
+            )),
+        };
+        if tx.send(Ok((instance.clone(), address))).is_err() {
             return Ok(());
         }
     }
-    Err(Error::msg(
-        "NDIS interface enumeration",
-        "1024 interface limit exceeded",
-    ))
+    Ok(())
 }
 
 fn interface_details(
@@ -250,16 +330,37 @@ fn interface_details(
     // SAFETY: device came from this set; the writable instance slice has its stated length.
     unsafe { SetupDiGetDeviceInstanceIdW(set, &device, Some(&mut instance), Some(&mut required)) }
         .map_err(|e| Error::from_win("NDIS instance ID", e))?;
-    if required == 0 || required as usize > instance.len() || instance[required as usize - 1] != 0 {
+    if required == 0 || instance.get(required.saturating_sub(1) as usize) != Some(&0) {
         return Err(Error::msg(
             "NDIS instance ID",
             "invalid instance ID size or terminator",
         ));
     }
+    let instance = instance
+        .get(..required as usize)
+        .ok_or_else(|| Error::msg("NDIS instance ID", "malformed: instance ID exceeds buffer"))?;
     Ok((
-        wide::from_wide(&instance[..required as usize]),
-        wide::from_wide(path),
+        terminated_text(instance, "NDIS instance ID")?,
+        terminated_text(path, "NDIS interface path")?,
     ))
+}
+
+fn terminated_text(units: &[u16], op: &'static str) -> Result<String> {
+    let end = units
+        .iter()
+        .position(|unit| *unit == 0)
+        .filter(|end| *end > 0)
+        .ok_or_else(|| Error::msg(op, "malformed: empty or unterminated text"))?;
+    let text = String::from_utf16(
+        units
+            .get(..end)
+            .ok_or_else(|| Error::msg(op, "malformed: invalid text span"))?,
+    )
+    .map_err(|_| Error::msg(op, "malformed: invalid UTF-16"))?;
+    if text.chars().any(char::is_control) {
+        return Err(Error::msg(op, "malformed: control-containing text"));
+    }
+    Ok(text)
 }
 
 fn query_address(path: &str) -> Result<String> {
@@ -270,16 +371,135 @@ fn query_address(path: &str) -> Result<String> {
         &OID_802_3_PERMANENT_ADDRESS.to_le_bytes(),
         32,
     )?;
+    parse_address(&bytes)
+}
+
+fn parse_address(bytes: &[u8]) -> Result<String> {
     if bytes.len() != 6 {
         return Err(Error::msg(
             "OID_802_3_PERMANENT_ADDRESS",
             "malformed address: expected six bytes",
         ));
     }
-    // Retain exactly the driver-reported bytes, including zero or locally administered values.
+    if bytes.iter().all(|byte| *byte == 0) || bytes.first().is_some_and(|byte| byte & 1 != 0) {
+        return Err(Error::msg(
+            "OID_802_3_PERMANENT_ADDRESS",
+            "implausible: zero, broadcast or multicast address",
+        ));
+    }
+    // Locally administered unicast addresses are valid driver reports.
     Ok(bytes
         .iter()
         .map(|byte| format!("{byte:02X}"))
         .collect::<Vec<_>>()
         .join(":"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ndis_busy_guard_survives_caller_timeout_and_resets_on_worker_exit() {
+        static TEST_BUSY: AtomicBool = AtomicBool::new(false);
+        let worker = Worker::acquire(&TEST_BUSY).expect("initial worker");
+        let (release, blocked) = mpsc::channel();
+        let (done, waited) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let _worker = worker;
+            blocked.recv().expect("release");
+            done.send(()).expect("done");
+        });
+        assert!(waited.recv_timeout(Duration::from_millis(1)).is_err());
+        assert!(Worker::acquire(&TEST_BUSY).is_none());
+        release.send(()).expect("release");
+        thread.join().expect("worker");
+        assert!(Worker::acquire(&TEST_BUSY).is_some());
+    }
+
+    #[test]
+    fn oid_unicast_size_and_plausibility() {
+        assert_eq!(
+            parse_address(&[2, 0x7c, 0x39, 0x61, 0xb4, 0x8e]).expect("unicast"),
+            "02:7C:39:61:B4:8E"
+        );
+        for bad in [
+            &[][..],
+            &[0; 5],
+            &[0; 7],
+            &[0; 6],
+            &[255; 6],
+            &[1, 2, 3, 4, 5, 6],
+        ] {
+            let mut result = PermanentMacs::default();
+            retain_address(
+                &mut result,
+                &mut HashSet::new(),
+                "PCI\\FABRICATED\\A".into(),
+                parse_address(bad),
+            );
+            assert!(result.addresses.is_empty());
+            assert_eq!(result.failures.len(), 1);
+        }
+    }
+
+    #[test]
+    fn oid_duplicate_interfaces_addresses_and_denial() {
+        let mut result = PermanentMacs::default();
+        let mut seen = HashSet::new();
+        for instance in ["A", "A", "A"] {
+            retain_address(
+                &mut result,
+                &mut seen,
+                instance.into(),
+                parse_address(&[2, 7, 9, 11, 13, 15]),
+            );
+        }
+        assert!(result.addresses.is_empty());
+        assert_eq!(result.failures.len(), 2);
+        for instance in ["B", "C"] {
+            retain_address(
+                &mut result,
+                &mut seen,
+                instance.into(),
+                parse_address(&[2, 17, 19, 21, 23, 25]),
+            );
+        }
+        retain_address(
+            &mut result,
+            &mut seen,
+            "D".into(),
+            Err(Error {
+                op: "NDIS OID",
+                code: 5,
+                detail: "access-denied".into(),
+            }),
+        );
+        reject_shared_addresses(&mut result);
+        assert!(result.addresses.is_empty());
+        assert!(result.failures.iter().any(|e| e.code == 5));
+        assert!(
+            result
+                .failures
+                .iter()
+                .any(|e| e.detail.contains("implausible"))
+        );
+    }
+
+    #[test]
+    fn ndis_exact_association_text_rejects_lossy_or_truncated_ids() {
+        assert_eq!(
+            terminated_text(
+                &"PCI\\VEN_8086&DEV_2725\\A7C2\0"
+                    .encode_utf16()
+                    .collect::<Vec<_>>(),
+                "NDIS instance ID"
+            )
+            .expect("instance"),
+            "PCI\\VEN_8086&DEV_2725\\A7C2"
+        );
+        for bad in [&[][..], &[0], &[65], &[0xd800, 0], &[65, 10, 0]] {
+            assert!(terminated_text(bad, "NDIS instance ID").is_err());
+        }
+    }
 }

@@ -3,7 +3,7 @@
 use crate::{
     hw::{Ctx, first_ok},
     report::{Out, eq_ignore_case, trim_net},
-    win::{self, Error, tpm, wmi},
+    win::{self, Error, firmware, tbs, tpm, wmi},
 };
 
 struct Info {
@@ -17,7 +17,13 @@ struct Info {
 }
 
 /// Collects TPM status and EK identifiers, retaining the WMI/PowerShell fallbacks.
-pub fn collect(_ctx: &Ctx, out: &mut Out) -> win::Result<()> {
+pub fn collect(ctx: &Ctx, out: &mut Out) -> win::Result<()> {
+    let result = collect_status(out);
+    append_firmware(ctx, out);
+    result
+}
+
+fn collect_status(out: &mut Out) -> win::Result<()> {
     let info = match first_ok(
         out,
         "TPM information",
@@ -75,6 +81,147 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> win::Result<()> {
         append_ek(out, info.source);
     }
     Ok(())
+}
+
+fn append_firmware(ctx: &Ctx, out: &mut Out) {
+    let devices = match ctx.smbios_result() {
+        Ok(table) => firmware::tpm_devices(table),
+        Err(error) => {
+            out.fallback_failed("SMBIOS TPM", &error);
+            Vec::new()
+        }
+    };
+    let tbs_version = tbs::device_version();
+    render_firmware(devices, &tbs_version, out);
+}
+
+fn render_firmware(
+    mut devices: Vec<firmware::TpmDevice>,
+    tbs_version: &win::Result<Option<(u8, u8)>>,
+    out: &mut Out,
+) {
+    devices.retain(|device| {
+        if device.spec.is_ok()
+            || device.firmware1.is_ok()
+            || device.firmware2.is_ok()
+            || device.characteristics.is_ok()
+        {
+            return true;
+        }
+        super::bios::metadata_record_has_values(
+            out,
+            "TPM Firmware",
+            Some(device.handle),
+            &[&device.vendor, &device.description],
+        )
+    });
+    for (index, device) in devices.iter().enumerate() {
+        if devices.len() >= 2 {
+            out.text(&format!("TPM Firmware #{} (SMBIOS)", index + 1));
+        }
+        super::bios::write_metadata_field(out, "TPM Vendor (SMBIOS)", false, &device.vendor);
+        // Retain the vendor-specific raw words rather than assuming a decimal encoding.
+        // Each word remains visible even when the other one cannot be decoded.
+        let words =
+            [(&device.firmware1, "1"), (&device.firmware2, "2")].map(|(word, n)| match word {
+                Ok(value) => format!("0x{value:08X}"),
+                Err(error) => {
+                    out.fallback_failed(&format!("TPM Firmware Version {n} (SMBIOS)"), error);
+                    format!("Unavailable ({error})")
+                }
+            });
+        let fields = [
+            (
+                "TPM Spec Version (SMBIOS)",
+                device
+                    .spec
+                    .as_ref()
+                    .map(|(major, minor)| format!("{major}.{minor}")),
+            ),
+            ("TPM Firmware Version (SMBIOS)", Ok(words.join(" "))),
+            (
+                "TPM Characteristics (SMBIOS)",
+                device
+                    .characteristics
+                    .as_ref()
+                    .map(|value| decode_characteristics(*value)),
+            ),
+        ];
+        for (label, value) in fields {
+            match value {
+                Ok(value) => {
+                    out.info(label, &value);
+                }
+                Err(error) => {
+                    out.fallback_failed(label, error)
+                        .info(label, &format!("Unavailable ({error})"));
+                }
+            }
+        }
+        super::bios::write_metadata_field(
+            out,
+            "TPM Description (SMBIOS)",
+            false,
+            &device.description,
+        );
+        match (&device.spec, tbs_version) {
+            (Ok((major, minor)), Ok(Some(version))) if (*major, *minor) != *version => {
+                out.info(
+                    "TPM Version Cross-check",
+                    &format!(
+                        "SMBIOS {major}.{minor} differs from TBS {}.{}",
+                        version.0, version.1
+                    ),
+                );
+            }
+            (_, Ok(None)) => {
+                out.info(
+                    "TPM Version Cross-check",
+                    "SMBIOS reports a TPM; TBS did not find one",
+                );
+            }
+            _ => {}
+        }
+    }
+    match tbs_version {
+        Ok(Some((major, minor))) => {
+            out.info("TPM Spec Version (TBS)", &format!("{major}.{minor}"));
+        }
+        Ok(None) => {
+            out.fallback_failed(
+                "TBS",
+                &Error::msg("Tbsi_GetDeviceInfo", "absent: TPM not found"),
+            );
+            out.info("TPM Spec Version (TBS)", "Not found");
+        }
+        Err(error) => {
+            out.fallback_failed("TBS", error)
+                .info("TPM Spec Version (TBS)", &format!("Unavailable ({error})"));
+        }
+    }
+}
+
+fn decode_characteristics(value: u64) -> String {
+    // DSP0134 7.44: bits 0/1 and 6..63 are reserved; retain them as unknown hex.
+    let mut names: Vec<String> = [
+        (2, "Not supported"),
+        (3, "Configurable via firmware update"),
+        (4, "Configurable via platform software"),
+        (5, "Configurable via OEM proprietary mechanism"),
+    ]
+    .into_iter()
+    .filter(|(bit, _)| value & (1 << bit) != 0)
+    .map(|(_, name)| name.to_owned())
+    .collect();
+    let unknown = value & !0x3C;
+    if unknown != 0 {
+        names.push(format!("0x{unknown:016X}"));
+    }
+    if names.is_empty() {
+        "None reported".into()
+    } else {
+        names.join(", ")
+    }
 }
 
 fn wmi_info() -> win::Result<Info> {
@@ -341,6 +488,128 @@ fn render_ek(out: &mut Out, fields: &[(String, String)]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tbs_failures_keep_legacy_and_tpm12_firmware_byte_identical() {
+        let mut record = firmware::Structure {
+            kind: 43,
+            handle: 0x4318,
+            formatted: vec![0; 0x1B],
+            strings: vec!["Discrete TPM".into()],
+        };
+        record.formatted[4..10].copy_from_slice(&[b'I', b'F', b'X', 0, 1, 2]);
+        record.formatted[0x12] = 1;
+        let table = firmware::Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record],
+        };
+        let mut baseline = Out::new();
+        baseline.info("Legacy", "kept");
+        render_firmware(
+            firmware::tpm_devices(&table),
+            &Ok(Some((1, 2))),
+            &mut baseline,
+        );
+        let baseline = baseline.finish();
+        let prefix = baseline
+            .body
+            .strip_suffix("TPM Spec Version (TBS): 1.2\r\n")
+            .unwrap();
+        for code in [5, 127, 126, 1460, 0x8028_4002] {
+            let mut out = Out::new();
+            out.info("Legacy", "kept");
+            render_firmware(
+                firmware::tpm_devices(&table),
+                &Err(Error {
+                    op: "Tbsi_GetDeviceInfo",
+                    code,
+                    detail: "unavailable: fabricated failure".into(),
+                }),
+                &mut out,
+            );
+            let failed = out.finish();
+            assert!(failed.body.starts_with(prefix));
+            assert!(failed.body.contains("TPM Spec Version (SMBIOS): 1.2\r\n"));
+            assert!(
+                failed
+                    .body
+                    .contains("TPM Spec Version (TBS): Unavailable (")
+            );
+            assert_eq!(failed.failures.len(), 1);
+        }
+    }
+
+    #[test]
+    fn firmware_rendering_merges_words_decodes_bits_and_keeps_cross_check_observational() {
+        let mut record = firmware::Structure {
+            kind: 43,
+            handle: 0x4301,
+            formatted: vec![0; 0x1B],
+            strings: vec!["Firmware TPM".into()],
+        };
+        record.formatted[4..10].copy_from_slice(&[b'I', b'F', b'X', 0, 2, 0]);
+        record.formatted[0x0A..0x0E].copy_from_slice(&0x0007_0055u32.to_le_bytes());
+        record.formatted[0x0E..0x12].copy_from_slice(&0x11CB_0000u32.to_le_bytes());
+        record.formatted[0x12] = 1;
+        record.formatted[0x13..0x1B].copy_from_slice(&0x8000_0000_0000_003Cu64.to_le_bytes());
+        let mut table = firmware::Smbios {
+            major: 3,
+            minor: 6,
+            structures: vec![record.clone()],
+        };
+        let mut out = Out::new();
+        render_firmware(firmware::tpm_devices(&table), &Ok(Some((1, 2))), &mut out);
+        let single = out.finish();
+        assert!(single.body.starts_with("TPM Vendor (SMBIOS): IFX\r\n"));
+        assert!(
+            single
+                .body
+                .contains("TPM Firmware Version (SMBIOS): 0x00070055 0x11CB0000\r\n")
+        );
+        assert!(single.body.contains("Not supported, Configurable via firmware update, Configurable via platform software, Configurable via OEM proprietary mechanism, 0x8000000000000000"));
+        assert!(
+            single
+                .body
+                .contains("TPM Version Cross-check: SMBIOS 2.0 differs from TBS 1.2\r\n")
+        );
+        assert!(single.failures.is_empty());
+        assert!(single.ids.is_empty());
+        assert!(!single.body.contains("0x4301"));
+        record.formatted.truncate(14);
+        table.structures.push(record);
+        let mut out = Out::new();
+        render_firmware(firmware::tpm_devices(&table), &Ok(None), &mut out);
+        let multiple = out.finish();
+        assert!(multiple.body.starts_with("TPM Firmware #1 (SMBIOS)\r\n"));
+        assert!(multiple.body.contains("TPM Firmware #2 (SMBIOS)\r\n"));
+        assert!(
+            multiple
+                .body
+                .contains("TPM Firmware Version (SMBIOS): 0x00070055 Unavailable (")
+        );
+        assert!(
+            multiple
+                .body
+                .ends_with("TPM Spec Version (TBS): Not found\r\n")
+        );
+        table.structures = vec![firmware::Structure {
+            kind: 43,
+            handle: 0x4302,
+            formatted: vec![0; 4],
+            strings: vec![],
+        }];
+        let mut out = Out::new();
+        render_firmware(firmware::tpm_devices(&table), &Ok(Some((2, 0))), &mut out);
+        let empty = out.finish();
+        assert_eq!(empty.body, "TPM Spec Version (TBS): 2.0\r\n");
+        assert_eq!(empty.failures.len(), 1);
+        assert_eq!(decode_characteristics(0), "None reported");
+        assert_eq!(
+            decode_characteristics(0x10),
+            "Configurable via platform software"
+        );
+    }
 
     #[test]
     fn failed_tpm_return_value_cannot_be_replaced_by_initial_state() {

@@ -77,7 +77,14 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                         out.info("Error", &format!("Error reading monitor details: {error}"));
                     }
                 }
-                write_extensions(out, &extensions[index]);
+                if let Some(extension) = extensions.get(index) {
+                    write_extensions(out, extension);
+                } else {
+                    out.fallback_failed(
+                        "WMI EDID extensions",
+                        &win::Error::msg("EDID extensions", "ambiguous: result count mismatch"),
+                    );
+                }
             }
         }
         result => {
@@ -139,7 +146,17 @@ fn collect_extensions(rows: &[wmi::Row]) -> Vec<Extensions> {
                 }
             }
             let _guard = WorkerGuard;
-            read_extensions(&names, deadline, &tx);
+            if win::catch_panic(|| read_extensions(&names, deadline, &tx)).is_err() {
+                for index in 0..names.len() {
+                    let _ = tx.send((
+                        index,
+                        Err(win::Error::msg(
+                            "EDID extensions",
+                            "malformed: extension worker panicked",
+                        )),
+                    ));
+                }
+            }
         });
     if worker.is_err() {
         EXTENSION_WORKER.store(false, Ordering::Release);
@@ -155,8 +172,21 @@ fn collect_extensions(rows: &[wmi::Row]) -> Vec<Extensions> {
     // to one across UI refreshes; the worker stops between calls after the deadline.
     let timed_out = loop {
         match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Ok((index, Ok(block))) => results[index].blocks.push(block),
-            Ok((index, Err(error))) => results[index].failures.push(error),
+            Ok((index, event)) => {
+                if let Some(result) = results.get_mut(index) {
+                    match event {
+                        Ok(block) => result.blocks.push(block),
+                        Err(error) => result.failures.push(error),
+                    }
+                } else {
+                    for result in &mut results {
+                        result.failures.push(win::Error::msg(
+                            "EDID extensions",
+                            "ambiguous: invalid result index",
+                        ));
+                    }
+                }
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => break Instant::now() >= deadline,
             Err(mpsc::RecvTimeoutError::Timeout) => break true,
         }
@@ -170,7 +200,104 @@ fn collect_extensions(rows: &[wmi::Row]) -> Vec<Extensions> {
             });
         }
     }
+    reject_shared_serials(&mut results);
     results
+}
+
+fn reject_shared_serials(results: &mut [Extensions]) {
+    let serials: Vec<Vec<String>> = results
+        .iter()
+        .map(|result| {
+            result
+                .blocks
+                .iter()
+                .flat_map(|(_, extension)| extension.fields.iter())
+                .filter(|(_, _, id)| *id)
+                .map(|(_, value, _)| value.clone())
+                .collect()
+        })
+        .collect();
+    for (index, result) in results.iter_mut().enumerate() {
+        for (_, extension) in &mut result.blocks {
+            extension.fields.retain(|(_, value, id)| {
+                if *id
+                    && serials
+                        .iter()
+                        .enumerate()
+                        .any(|(other, values)| other != index && values.contains(value))
+                {
+                    extension.failures.push(win::Error::msg(
+                        "EDID extension serial",
+                        "implausible: same serial on distinct monitors",
+                    ));
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+    }
+}
+
+fn descriptor_path(
+    name: Option<&str>,
+    names: &[Option<String>],
+    descriptors: &[(Option<String>, Option<String>)],
+) -> win::Result<String> {
+    let name =
+        name.ok_or_else(|| win::Error::msg("EDID association", "absent: monitor instance name"))?;
+    let id = edid::instance_id(name)?;
+    if names
+        .iter()
+        .filter_map(Option::as_deref)
+        .filter_map(|name| edid::instance_id(name).ok())
+        .filter(|other| other == &id)
+        .count()
+        != 1
+    {
+        return Err(win::Error::msg(
+            "EDID association",
+            "ambiguous: duplicate monitor instance",
+        ));
+    }
+    let matches: Vec<_> = descriptors
+        .iter()
+        .filter(|(other, _)| {
+            other
+                .as_deref()
+                .is_some_and(|other| other.eq_ignore_ascii_case(name))
+        })
+        .collect();
+    let [(.., path)] = matches.as_slice() else {
+        return Err(win::Error::msg(
+            "EDID association",
+            if matches.is_empty() {
+                "absent: matching descriptor instance"
+            } else {
+                "ambiguous: duplicate descriptor instances"
+            },
+        ));
+    };
+    let path = path
+        .as_deref()
+        .filter(|path| !path.is_empty() && !path.contains('\0'))
+        .ok_or_else(|| win::Error::msg("EDID association", "malformed: descriptor object path"))?;
+    if descriptors
+        .iter()
+        .filter(|(_, other)| {
+            other
+                .as_deref()
+                .is_some_and(|other| other.eq_ignore_ascii_case(path))
+        })
+        .count()
+        != 1
+    {
+        return Err(win::Error::msg(
+            "EDID association",
+            "ambiguous: reused descriptor object path",
+        ));
+    }
+    Ok(path.to_owned())
 }
 
 type ExtensionEvent = (usize, win::Result<(u8, edid::Extension)>);
@@ -188,34 +315,29 @@ fn read_extensions(names: &[Option<String>], deadline: Instant, tx: &mpsc::Sende
             return;
         }
     };
+    let descriptors: Vec<_> = descriptors
+        .iter()
+        .map(|row| {
+            (
+                row.str("InstanceName"),
+                row.str("__PATH").or_else(|| row.str("__RELPATH")),
+            )
+        })
+        .collect();
     for (index, name) in names.iter().enumerate() {
         if Instant::now() >= deadline {
             return;
         }
-        let path = name
-            .as_ref()
-            .filter(|name| edid::instance_id(name).is_ok())
-            .and_then(|name| {
-                descriptors.iter().find(|row| {
-                    row.str("InstanceName")
-                        .is_some_and(|other| other.eq_ignore_ascii_case(name))
-                })
-            })
-            .and_then(|row| row.str("__PATH").or_else(|| row.str("__RELPATH")));
-        let Some(path) = path else {
-            let _ = tx.send((
-                index,
-                Err(win::Error {
-                    op: "EDID extensions",
-                    code: 0x80041002,
-                    detail: "matching descriptor instance absent".into(),
-                }),
-            ));
-            continue;
+        let path = match descriptor_path(name.as_deref(), names, &descriptors) {
+            Ok(path) => path,
+            Err(error) => {
+                let _ = tx.send((index, Err(error)));
+                continue;
+            }
         };
         let mut count = 0;
         for block in 0..=MAX_EXTENSIONS {
-            if block > count || Instant::now() >= deadline {
+            if !extension_block_allowed(block, count, Instant::now() < deadline) {
                 break;
             }
             let bytes = wmi::call_method_with_inputs(
@@ -223,7 +345,7 @@ fn read_extensions(names: &[Option<String>], deadline: Instant, tx: &mpsc::Sende
                 "WmiMonitorDescriptorMethods",
                 &path,
                 "WmiGetMonitorRawEEdidV1Block",
-                &[("BlockId", ::wmi::Variant::UI1(block))],
+                &[("BlockId", block)],
             )
             .and_then(|row| {
                 row.u8_array("BlockContent").ok_or_else(|| {
@@ -238,14 +360,15 @@ fn read_extensions(names: &[Option<String>], deadline: Instant, tx: &mpsc::Sende
                 }
             };
             if block == 0 {
-                if let Err(error) =
-                    edid::validate_block(&bytes).and_then(|()| edid::parse(&bytes).map(|_| ()))
-                {
-                    let _ = tx.send((index, Err(error)));
-                    break;
-                }
-                count = bytes[126].min(MAX_EXTENSIONS);
-                if bytes[126] > MAX_EXTENSIONS {
+                let declared = match base_extension_count(&bytes) {
+                    Ok(count) => count,
+                    Err(error) => {
+                        let _ = tx.send((index, Err(error)));
+                        break;
+                    }
+                };
+                count = declared.min(MAX_EXTENSIONS);
+                if declared > MAX_EXTENSIONS {
                     let _ = tx.send((
                         index,
                         Err(win::Error::msg(
@@ -267,6 +390,19 @@ fn read_extensions(names: &[Option<String>], deadline: Instant, tx: &mpsc::Sende
             }
         }
     }
+}
+
+fn base_extension_count(bytes: &[u8]) -> win::Result<u8> {
+    edid::validate_block(bytes)?;
+    edid::parse(bytes)?;
+    bytes
+        .get(126)
+        .copied()
+        .ok_or_else(|| win::Error::msg("EDID extensions", "malformed: missing extension count"))
+}
+
+fn extension_block_allowed(block: u8, count: u8, within_budget: bool) -> bool {
+    within_budget && block <= count && block <= MAX_EXTENSIONS
 }
 
 fn extension_error(mut error: win::Error) -> win::Error {
@@ -520,6 +656,107 @@ fn write_details(out: &mut Out, details: &[(&str, String)]) {
 #[allow(clippy::unwrap_used)] // Fixture assertions may panic; production code may not.
 mod tests {
     use super::*;
+
+    #[test]
+    fn extension_association_rejects_duplicate_instances_paths_and_serials() {
+        let name = "DISPLAY\\DEL4321\\5&12345&0&UID417_0";
+        let names = vec![Some(name.to_owned())];
+        let descriptors = vec![(Some(name.to_owned()), Some("exact-object-path".to_owned()))];
+        assert_eq!(
+            descriptor_path(Some(name), &names, &descriptors).unwrap(),
+            "exact-object-path"
+        );
+        for error in [
+            descriptor_path(Some(name), &names, &[]).unwrap_err(),
+            descriptor_path(
+                Some(name),
+                &[Some(name.into()), Some(name.into())],
+                &descriptors,
+            )
+            .unwrap_err(),
+            descriptor_path(
+                Some(name),
+                &names,
+                &[descriptors[0].clone(), descriptors[0].clone()],
+            )
+            .unwrap_err(),
+            descriptor_path(Some("not-an-instance"), &names, &descriptors).unwrap_err(),
+        ] {
+            let mut out = Out::new();
+            out.info("Base", "kept");
+            write_extensions(
+                &mut out,
+                &Extensions {
+                    blocks: vec![],
+                    failures: vec![error],
+                },
+            );
+            let section = out.finish();
+            assert_eq!(section.body, "Base: kept\r\n");
+            assert_eq!(section.failures.len(), 1);
+            assert!(!section.failures[0].contains(name));
+        }
+        let extension = || Extensions {
+            blocks: vec![(
+                1,
+                edid::Extension {
+                    source: "DisplayID",
+                    fields: vec![
+                        ("Serial", "1937468251".into(), true),
+                        ("Model", "U2723QE".into(), false),
+                    ],
+                    failures: vec![],
+                },
+            )],
+            failures: vec![],
+        };
+        let mut results = vec![extension(), extension()];
+        reject_shared_serials(&mut results);
+        for result in results {
+            let mut out = Out::new();
+            out.info("Base", "kept");
+            write_extensions(&mut out, &result);
+            let section = out.finish();
+            assert!(section.body.starts_with("Base: kept\r\n"));
+            assert!(!section.body.contains("EDID Serial"));
+            assert!(section.body.contains("EDID Model"));
+            assert_eq!(section.failures.len(), 1);
+            assert!(section.failures[0].contains("implausible"));
+            assert!(!section.failures[0].contains("1937468251"));
+        }
+    }
+
+    #[test]
+    fn extension_sequence_respects_count_cap_budget_and_registry_base_only() {
+        let mut base = [0; 128];
+        base[..8].copy_from_slice(&[0, 255, 255, 255, 255, 255, 255, 0]);
+        base[126] = 1;
+        base[127] = 0_u8.wrapping_sub(
+            base[..127]
+                .iter()
+                .fold(0_u8, |sum, byte| sum.wrapping_add(*byte)),
+        );
+        assert_eq!(base_extension_count(&base).unwrap(), 1);
+        assert!(extension_block_allowed(1, 1, true));
+        assert!(!extension_block_allowed(2, 1, true)); // Driver's undeclared blocks are not trusted.
+        assert!(!extension_block_allowed(33, 255, true));
+        assert!(!extension_block_allowed(1, 1, false));
+        assert_eq!(
+            (0..=255)
+                .filter(|block| extension_block_allowed(*block, 255, true))
+                .count(),
+            33
+        );
+        base[127] ^= 1;
+        assert!(base_extension_count(&base).is_err());
+        let mut registry_bytes = base.to_vec();
+        registry_bytes.extend_from_slice(&[0x70; 128]);
+        let parsed = edid::parse(&registry_bytes).unwrap();
+        let mut details = Vec::new();
+        append_edid_details(&mut details, &parsed, false);
+        assert!(details.iter().all(|(label, _)| !label.contains("block")));
+        assert!(base_extension_count(&registry_bytes).is_err());
+    }
 
     #[test]
     fn extension_serials_use_the_existing_masked_view_contract() {

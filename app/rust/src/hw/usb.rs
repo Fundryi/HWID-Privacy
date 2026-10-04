@@ -5,6 +5,7 @@ use crate::{
     report::Out,
     win::{self, setupapi::DevInfoSet},
 };
+use std::collections::HashMap;
 use windows::Win32::{
     Devices::DeviceAndDriverInstallation::{SPDRP_DEVICEDESC, SPDRP_DRIVER, SPDRP_FRIENDLYNAME},
     Foundation::{ERROR_INVALID_DATA, ERROR_NOT_FOUND},
@@ -15,8 +16,8 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     out.source("native SetupAPI");
     let result = (|| {
         let set = DevInfoSet::enum_present_all()?;
-        let device_strings = win::usbhub::descriptors();
-        let mut first = true;
+        let mut entries = Vec::new();
+        let mut key_counts = HashMap::new();
         for device in set.devices()? {
             let instance_id = match device.instance_id() {
                 Ok(id) => id,
@@ -32,14 +33,50 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             {
                 continue;
             }
-            let serial = serial_from_instance_id(&instance_id);
-            let strings = match device.property_string(SPDRP_DRIVER) {
-                Ok(key) => device_strings.get(&key.to_ascii_uppercase()),
+            let key = match device.property_string(SPDRP_DRIVER) {
+                Ok(key) => {
+                    let key = key.to_ascii_uppercase();
+                    *key_counts.entry(key.clone()).or_insert(0_usize) += 1;
+                    Some(key)
+                }
                 Err(error) => {
                     out.fallback_failed("USB driver key association", &error);
                     None
                 }
             };
+            entries.push((device, instance_id, key));
+        }
+        let device_strings = win::usbhub::descriptors();
+        let mut first = true;
+        for (device, instance_id, key) in entries {
+            let serial = serial_from_instance_id(&instance_id);
+            let current_key = device
+                .property_string(SPDRP_DRIVER)
+                .map(|key| key.to_ascii_uppercase());
+            let current_instance = device.instance_id();
+            let present = win::setupapi::is_present(&instance_id);
+            let association = match (current_key, current_instance, present) {
+                (Ok(current), Ok(id), Ok(true))
+                    if key.as_deref() == Some(&current) && id == instance_id =>
+                {
+                    associated_strings(key.as_deref(), &key_counts, &device_strings, out)
+                }
+                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+                    out.fallback_failed("USB snapshot association", &error);
+                    None
+                }
+                _ => {
+                    out.fallback_failed(
+                        "USB snapshot association",
+                        &win::Error::msg(
+                            "USB driver key",
+                            "ambiguous: devnode changed or disappeared during hub scan",
+                        ),
+                    );
+                    None
+                }
+            };
+            let strings = association;
             let device_serial = strings.and_then(|strings| strings.serial.as_deref());
             let instance_tail = instance_id.rsplit_once('\\').map(|(_, tail)| tail);
             if serial.is_none()
@@ -71,23 +108,20 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                     }
                 }
             };
-            append_device(out, &mut first, &name, serial);
-            if let Some(device_serial) = device_serial {
-                append_device_serial(out, instance_tail.unwrap_or_default(), device_serial);
-            }
-            if let Some(strings) = strings {
-                if let Some(manufacturer) = &strings.manufacturer {
-                    out.info("Device Manufacturer", manufacturer);
-                }
-                if let Some(product) = &strings.product {
-                    out.info("Device Product", product);
-                }
-            }
+            render_device(out, &mut first, &name, &instance_id, strings);
             match set.container_id(&instance_id) {
                 Ok(Some(container)) => {
                     out.id("Container ID", &container);
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    out.fallback_failed(
+                        "SetupAPI Container ID",
+                        &win::Error::msg(
+                            "USB Container ID",
+                            "absent: present devnode/property or usable GUID unavailable",
+                        ),
+                    );
+                }
                 Err(error) => {
                     out.fallback_failed("SetupAPI Container ID", &error);
                 }
@@ -102,6 +136,69 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             .info("Error", &error.to_string());
     }
     Ok(())
+}
+
+fn associated_strings<'a>(
+    key: Option<&str>,
+    counts: &HashMap<String, usize>,
+    strings: &'a HashMap<String, win::usbhub::DeviceStrings>,
+    out: &mut Out,
+) -> Option<&'a win::usbhub::DeviceStrings> {
+    let key = key?;
+    if counts.get(key) != Some(&1) {
+        out.fallback_failed(
+            "USB driver key association",
+            &win::Error::msg(
+                "USB descriptors",
+                "ambiguous: driver key shared by multiple devnodes",
+            ),
+        );
+        return None;
+    }
+    match strings.get(key) {
+        Some(strings) => Some(strings),
+        None => {
+            out.fallback_failed(
+                "USB driver key association",
+                &win::Error::msg(
+                    "USB descriptors",
+                    "absent: no exactly matched descriptor result",
+                ),
+            );
+            None
+        }
+    }
+}
+
+fn render_device(
+    out: &mut Out,
+    first: &mut bool,
+    name: &str,
+    instance_id: &str,
+    strings: Option<&win::usbhub::DeviceStrings>,
+) -> bool {
+    let serial = serial_from_instance_id(instance_id);
+    let tail = instance_id
+        .rsplit_once('\\')
+        .map(|(_, tail)| tail)
+        .unwrap_or_default();
+    let device_serial = strings.and_then(|strings| strings.serial.as_deref());
+    if serial.is_none() && !device_serial.is_some_and(|value| value != tail) {
+        return false;
+    }
+    append_device(out, first, name, serial);
+    if let Some(value) = device_serial {
+        append_device_serial(out, tail, value);
+    }
+    if let Some(strings) = strings {
+        if let Some(value) = &strings.manufacturer {
+            out.info("Device Manufacturer", value);
+        }
+        if let Some(value) = &strings.product {
+            out.info("Device Product", value);
+        }
+    }
+    true
 }
 
 fn serial_from_instance_id(instance_id: &str) -> Option<&str> {
@@ -183,5 +280,68 @@ mod tests {
             "Device: USB Receiver\r\nSerial: 83917A5E\r\nSerial (device): 83917a5e\r\n"
         );
         assert_eq!(differing.ids, ["83917A5E", "83917a5e"]);
+    }
+
+    #[test]
+    fn usb_generated_tail_exact_join_and_legacy_failure_retention() {
+        let strings = win::usbhub::DeviceStrings {
+            serial: Some("R7Q291E4".into()),
+            manufacturer: Some("Acme".into()),
+            product: Some("USB Receiver".into()),
+        };
+        let map = HashMap::from([("KEY".into(), strings)]);
+        let mut out = Out::new();
+        let joined = associated_strings(
+            Some("KEY"),
+            &HashMap::from([("KEY".into(), 1)]),
+            &map,
+            &mut out,
+        );
+        assert!(render_device(
+            &mut out,
+            &mut true,
+            "Receiver",
+            "USB\\VID_046D&PID_C52B\\7&183&0",
+            joined
+        ));
+        assert!(out.finish().body.contains("Serial (device): R7Q291E4\r\n"));
+        for counts in [HashMap::new(), HashMap::from([("KEY".into(), 2)])] {
+            let mut out = Out::new();
+            let joined = associated_strings(Some("KEY"), &counts, &map, &mut out);
+            assert!(!render_device(
+                &mut out,
+                &mut true,
+                "Receiver",
+                "USB\\node\\7&183&0",
+                joined
+            ));
+            assert!(render_device(
+                &mut out,
+                &mut true,
+                "Receiver",
+                "USB\\node\\B8D4C721",
+                joined
+            ));
+            let section = out.finish();
+            assert_eq!(section.body, "Device: Receiver\r\nSerial: B8D4C721\r\n");
+            assert_eq!(section.failures.len(), 1);
+        }
+        // Equal cheap-device serials are still independently joined by key.
+        let mut out = Out::new();
+        let joined = associated_strings(
+            Some("KEY"),
+            &HashMap::from([("KEY".into(), 1)]),
+            &map,
+            &mut out,
+        );
+        render_device(&mut out, &mut true, "One", "USB\\node\\7&183&0", joined);
+        render_device(&mut out, &mut false, "Two", "USB\\node\\7&184&0", joined);
+        assert_eq!(
+            out.finish()
+                .body
+                .matches("Serial (device): R7Q291E4")
+                .count(),
+            2
+        );
     }
 }

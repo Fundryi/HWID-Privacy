@@ -13,7 +13,10 @@ use crate::{
         wmi::{self, Namespace},
     },
 };
-use formatting::{convert_unique_id_to_hex, nonempty, render_disks};
+use formatting::{
+    add_storage_identifiers, convert_unique_id_to_hex, identity_displayed, nonempty,
+    reject_repeated_identities, render_disks,
+};
 #[cfg(test)]
 use sources::unique_ids_wmi;
 use sources::{PhysicalDiskIds, logical_drives, physical_disk_ids_wmi, unique_ids_powershell};
@@ -42,6 +45,18 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         out.text("No disk drives detected.").trim_end();
         return Ok(());
     }
+    let row_indices = proven_disk_indices(
+        &rows
+            .iter()
+            .map(|row| (row.str("Index"), row.str("DeviceID")))
+            .collect::<Vec<_>>(),
+    );
+    let indices: Vec<_> = row_indices.iter().copied().flatten().collect();
+    // Native disk queries do not depend on volume, WMI identity or SetupAPI
+    // snapshots. Start them while those independent sources are collected.
+    let native_queries = std::thread::Builder::new()
+        .name("disk queries".into())
+        .spawn(move || storage::physical_queries(&indices));
     let mut sources = vec!["WMI (Win32_DiskDrive)"];
     let mut failures = Vec::new();
     let volumes = logical_drives(out, &mut sources, &mut failures);
@@ -82,7 +97,26 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         }
     }
     let mut disks = Vec::new();
-    for row in rows {
+    // Native work completes independently; consume results in the original WMI
+    // order so rendering, identity precedence and source/failure order stay intact.
+    let queries = match native_queries {
+        Ok(worker) => worker.join().unwrap_or_else(|_| {
+            out.fallback_failed(
+                "native disk jobs",
+                &Error::msg("storage worker", "disk jobs panicked"),
+            );
+            Vec::new()
+        }),
+        Err(error) => {
+            out.fallback_failed(
+                "native disk jobs",
+                &Error::msg("storage worker", format!("start worker: {error}")),
+            );
+            Vec::new()
+        }
+    };
+    let mut queries = queries.into_iter();
+    for (row, index) in rows.into_iter().zip(row_indices) {
         // C# parity: Hardware/DiskDriveInfo.cs:134-138. Null differs from empty;
         // OEM placeholders and whitespace-trimmed empty strings are preserved.
         let device_id = row
@@ -116,12 +150,18 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             failures: Vec::new(),
         };
         // C# parity: Hardware/DiskDriveInfo.cs:140-144 (signed Int32 index).
-        let index = row
-            .str("Index")
-            .and_then(|v| trim_net(&v).parse::<i32>().ok())
-            .filter(|&n| n >= 0);
         if let Some(index) = index {
-            match storage::physical_nvme_identity(index as u32) {
+            let storage::PhysicalQueries {
+                nvme,
+                ata,
+                identifiers,
+                layout,
+            } = queries
+                .next()
+                .unwrap_or_else(storage::PhysicalQueries::unavailable);
+            let mut storage_descriptors = Vec::new();
+            let mut namespace_descriptor_ids = Vec::new();
+            match nvme {
                 Ok(identity) => {
                     match identity.controller_serial {
                         storage::IdentifyOutcome::Ok(serial) => {
@@ -135,7 +175,9 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                                 bus,
                                 windows::Win32::Storage::FileSystem::BusTypeNvme.0 as u32
                             );
-                            collect_ata(index as u32, bus, out, &mut disk, &mut sources);
+                            if let Some(ata) = ata {
+                                collect_ata(ata, out, &mut disk, &mut sources);
+                            }
                         }
                         storage::IdentifyOutcome::Failed(error) => {
                             out.fallback_failed(
@@ -168,6 +210,33 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                             ));
                         }
                     }
+                    match identity.namespace_descriptors {
+                        storage::IdentifyOutcome::Ok(ids) => {
+                            // CNS 0 keeps priority; CNS 3 only supplies absent fields.
+                            for (label, value) in [
+                                ("NVMe Namespace EUI-64", ids.eui64),
+                                ("NVMe Namespace NGUID", ids.nguid),
+                                ("NVMe Namespace UUID", ids.uuid),
+                            ] {
+                                if let Some(value) = value
+                                    && !disk.nvme_ids.iter().any(|(old, _)| *old == label)
+                                {
+                                    namespace_descriptor_ids.push((label, value));
+                                }
+                            }
+                        }
+                        storage::IdentifyOutcome::Empty
+                        | storage::IdentifyOutcome::NotAttempted { .. } => {}
+                        storage::IdentifyOutcome::Failed(error) => {
+                            out.fallback_failed(
+                                &format!("{} NVMe Namespace Descriptor List", disk.device_id),
+                                &error,
+                            );
+                            disk.failures.push(format!(
+                                "    NVMe Namespace Descriptor List: Unavailable ({error})"
+                            ));
+                        }
+                    }
                     if !disk.nvme_ids.is_empty() {
                         sources.push("native (NVMe Identify)");
                     }
@@ -177,14 +246,18 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                     out.fallback_failed(&format!("{} NVMe Identify", disk.device_id), &error);
                 }
             }
-            if let Some(serial) = unique_ids.adapter_serials.get(&(index as u32)) {
+            if let Some(serial) = unique_ids.adapter_serials.get(&index)
+                && serial.matches_disk(&disk.serial)
+            {
                 disk.details
-                    .push(("Adapter Serial".into(), serial.clone(), true));
+                    .push(("Adapter Serial".into(), serial.value.clone(), true));
             }
-            match storage::physical_identifier(index as u32) {
-                Ok(Some(id)) => {
+            match identifiers {
+                Ok(ids) => {
                     sources.push("native (storage)");
-                    if !id.hex.is_empty() {
+                    if let Some(id) = ids.selected
+                        && !id.hex.is_empty()
+                    {
                         disk.details.push(("UniqueId (IOCTL)".into(), id.hex, true));
                         disk.details.push((
                             "UniqueId (IOCTL) decoded".into(),
@@ -192,13 +265,23 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                             !id.decoded.is_empty(),
                         ));
                     }
-                }
-                Ok(None) => {
-                    sources.push("native (storage)");
+                    match ids.descriptors {
+                        storage::IdentifyOutcome::Ok(ids) => storage_descriptors = ids,
+                        storage::IdentifyOutcome::Failed(error) => {
+                            out.fallback_failed(
+                                &format!("{} Storage Identifiers", disk.device_id),
+                                &error,
+                            );
+                            disk.failures
+                                .push(format!("    Storage Identifiers: Unavailable ({error})"));
+                        }
+                        storage::IdentifyOutcome::Empty
+                        | storage::IdentifyOutcome::NotAttempted { .. } => {}
+                    }
                 }
                 Err(error) => disk_error(out, &mut disk, "UniqueId (IOCTL)", &error),
             }
-            if let Some(id) = unique_ids.unique_ids.get(&(index as u32)) {
+            if let Some(id) = unique_ids.unique_ids.get(&index) {
                 disk.details
                     .push(("UniqueId (WMI)".into(), convert_unique_id_to_hex(id), true));
                 disk.details.push((
@@ -207,7 +290,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                     !id.is_empty(),
                 ));
             }
-            match storage::physical_layout(index as u32) {
+            match layout {
                 Ok(Some(layout)) => {
                     sources.push("native (storage)");
                     let label = if layout.is_gpt {
@@ -225,6 +308,14 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                 }
                 Err(error) => disk_error(out, &mut disk, "Partition Style", &error),
             }
+            // Compare against every existing identity before adding descriptor lines.
+            for (label, value) in namespace_descriptor_ids {
+                if !identity_displayed(&disk, &value) {
+                    disk.nvme_ids.push((label, value));
+                    sources.push("native (NVMe Identify)");
+                }
+            }
+            add_storage_identifiers(out, &mut disk, &storage_descriptors);
         } else {
             disk_error(
                 out,
@@ -238,6 +329,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         }
         disks.push(disk);
     }
+    reject_repeated_identities(out, &mut disks);
     render_disks(out, &disks);
     for failure in failures {
         out.text(&failure);
@@ -253,12 +345,60 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     Ok(())
 }
 
+fn proven_disk_indices(rows: &[(Option<String>, Option<String>)]) -> Vec<Option<u32>> {
+    if rows.len() > storage::MAX_DISKS {
+        win::record(Error::msg(
+            "Win32 disk index join",
+            "implausible: disk count exceeds collection cap",
+        ));
+        return vec![None; rows.len()];
+    }
+    let parsed: Vec<_> = rows
+        .iter()
+        .map(|(index, device)| {
+            index
+                .as_deref()
+                .and_then(|s| trim_net(s).parse::<i32>().ok())
+                .filter(|&n| n >= 0)
+                .map(|n| n as u32)
+                .filter(|n| {
+                    device
+                        .as_deref()
+                        .is_some_and(|s| s.eq_ignore_ascii_case(&format!(r"\\.\PHYSICALDRIVE{n}")))
+                })
+        })
+        .collect();
+    let mut counts = std::collections::HashMap::new();
+    for index in parsed.iter().flatten() {
+        *counts.entry(*index).or_insert(0usize) += 1;
+    }
+    parsed
+        .into_iter()
+        .map(|index| {
+            if index.is_some_and(|n| counts.get(&n) == Some(&1)) {
+                index
+            } else {
+                win::record(Error::msg(
+                    "Win32 disk index join",
+                    "ambiguous: invalid path/index or duplicate disk index",
+                ));
+                None
+            }
+        })
+        .collect()
+}
+
 /// Win32 codes a healthy disk returns when it lacks a feature or has no media:
 /// invalid function, not ready, not supported, no media in drive.
 const EXPECTED_UNSUPPORTED: [u32; 4] = [1, 21, 50, 1112];
 
-fn collect_ata(index: u32, bus: u32, out: &mut Out, disk: &mut DiskInfo, sources: &mut Vec<&str>) {
-    let identity = match storage::physical_ata_identity(index, bus) {
+fn collect_ata(
+    result: win::Result<storage::AtaIdentity>,
+    out: &mut Out,
+    disk: &mut DiskInfo,
+    sources: &mut Vec<&str>,
+) {
+    let identity = match result {
         Ok(identity) => identity,
         Err(error) => {
             out.fallback_failed(&format!("{} ATA Identify", disk.device_id), &error);

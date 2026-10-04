@@ -67,6 +67,212 @@ pub(super) fn render_disks(out: &mut Out, disks: &[DiskInfo]) {
     }
 }
 
+/// Adds nonempty VPD values only when this disk does not already display them.
+pub(super) fn add_storage_identifiers(
+    out: &mut Out,
+    disk: &mut DiskInfo,
+    descriptors: &[storage::StorageIdentifier],
+) {
+    for descriptor in descriptors {
+        let value = match descriptor_value(descriptor) {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                out.fallback_failed(
+                    "Storage Identifier",
+                    &crate::win::Error::msg("storage descriptor", "absent: no usable identity"),
+                );
+                continue;
+            }
+            Err(error) => {
+                out.fallback_failed(&format!("{} Storage Identifier", disk.device_id), &error);
+                disk.failures
+                    .push(format!("    Storage Identifier: Unavailable ({error})"));
+                continue;
+            }
+        };
+        if identity_displayed(disk, &value) {
+            out.fallback_failed(
+                "Storage Identifier",
+                &crate::win::Error::msg(
+                    "storage descriptor",
+                    "ambiguous: duplicate displayed identity omitted",
+                ),
+            );
+            continue;
+        }
+        // SCSI association 0 / Windows Device identifies a logical unit, 1 a
+        // target port, 2 the target device. Never relabel a target/port as a LU.
+        let association = match descriptor.association {
+            0 => "device / logical unit".into(),
+            1 => "port".into(),
+            2 => "target device".into(),
+            n => format!("association {n}"),
+        };
+        let kind = match descriptor.identifier_type {
+            0 => "vendor-specific".into(),
+            1 => "vendor ID".into(),
+            2 => "EUI-64".into(),
+            3 => "NAA".into(),
+            4 => "relative port".into(),
+            5 => "port group".into(),
+            6 => "logical unit group".into(),
+            7 => "MD5 logical unit".into(),
+            8 => "SCSI name".into(),
+            n => format!("type {n}"),
+        };
+        let code = match descriptor.code_set {
+            1 => "binary",
+            2 => "ASCII",
+            3 => "UTF-8",
+            _ => continue, // descriptor_value already rejects unknown code sets.
+        };
+        disk.details.push((
+            format!("Storage ID ({association}, {kind}, {code})"),
+            value,
+            true,
+        ));
+    }
+}
+
+pub(super) fn identity_displayed(disk: &DiskInfo, value: &str) -> bool {
+    let same = |old: &str| {
+        value == old
+            || matches!((hex_identity(value), hex_identity(old)),
+            (Some(a), Some(b)) if a == b)
+    };
+    same(&disk.serial)
+        || disk.nvme_ids.iter().any(|(_, old)| same(old))
+        || disk.details.iter().any(|(_, old, id)| *id && same(old))
+        || disk.volumes.iter().any(|(_, old)| same(old))
+        || disk
+            .hardware_id
+            .as_ref()
+            .is_some_and(|(old, id)| *id && same(old))
+}
+
+/// Reject only added unit identities; adapter/controller/port identities can be
+/// shared by several disks or namespaces. Keep every legacy field untouched.
+pub(super) fn reject_repeated_identities(out: &mut Out, disks: &mut [DiskInfo]) {
+    use std::collections::{HashMap, HashSet};
+    let unit = |label: &str| {
+        label.starts_with("NVMe Namespace ")
+            || matches!(label, "ATA Serial (Identify)" | "ATA WWN")
+            || label.starts_with("Storage ID (device / logical unit,")
+                && [", EUI-64,", ", NAA,", ", MD5 logical unit,", ", SCSI name,"]
+                    .iter()
+                    .any(|kind| label.contains(kind))
+    };
+    let key = |value: &str| hex_identity(value).unwrap_or_else(|| value.to_owned());
+    let mut counts = HashMap::new();
+    for disk in disks.iter() {
+        let values: HashSet<_> = disk
+            .nvme_ids
+            .iter()
+            .filter(|(label, _)| unit(label))
+            .map(|(_, value)| key(value))
+            .chain(
+                disk.details
+                    .iter()
+                    .filter(|(label, _, id)| *id && unit(label))
+                    .map(|(_, value, _)| key(value)),
+            )
+            .collect();
+        for value in values {
+            *counts.entry(value).or_insert(0usize) += 1;
+        }
+    }
+    for disk in disks {
+        let mut retain = |label: &str, value: &str| {
+            if unit(label) && counts.get(&key(value)).is_some_and(|&n| n > 1) {
+                out.fallback_failed(
+                    label,
+                    &crate::win::Error::msg(
+                        "disk identity",
+                        "implausible: unit identity repeated on different disks",
+                    ),
+                );
+                false
+            } else {
+                true
+            }
+        };
+        disk.nvme_ids.retain(|(label, value)| retain(label, value));
+        disk.details
+            .retain(|(label, value, _)| retain(label, value));
+    }
+}
+
+fn descriptor_value(descriptor: &storage::StorageIdentifier) -> crate::win::Result<Option<String>> {
+    let value = &descriptor.value;
+    if value.is_empty() || value.iter().all(|&b| b == 0) {
+        crate::win::record(crate::win::Error::msg(
+            "Storage Identifier",
+            "absent: empty or zero identity",
+        ));
+        return Ok(None);
+    }
+    if descriptor.code_set == 1 && value.iter().all(|&b| b == 0xFF) {
+        crate::win::record(crate::win::Error::msg(
+            "Storage Identifier",
+            "implausible: all-FF identity",
+        ));
+        return Ok(None);
+    }
+    if descriptor.code_set == 1 {
+        return Ok(Some(storage::colon_hex(value)));
+    }
+    if !matches!(descriptor.code_set, 2 | 3) {
+        return Err(crate::win::Error::msg(
+            "storage descriptor",
+            "unsupported: identifier code set",
+        ));
+    }
+    let end = value.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+    let value = value
+        .get(..end)
+        .ok_or_else(|| crate::win::Error::msg("storage descriptor", "malformed: text bounds"))?;
+    let text = std::str::from_utf8(value).map_err(|_| {
+        crate::win::Error::msg("storage descriptor", "invalid identifier text encoding")
+    })?;
+    if text.chars().any(char::is_control) || descriptor.code_set == 2 && !text.is_ascii() {
+        return Err(crate::win::Error::msg(
+            "storage descriptor",
+            "malformed: identifier text encoding",
+        ));
+    }
+    let sentinel = hex_identity(text)
+        .is_some_and(|hex| hex.bytes().all(|b| b == b'0') || hex.bytes().all(|b| b == b'F'));
+    let placeholder = text
+        .chars()
+        .next()
+        .is_some_and(|first| text.chars().all(|c| c == first));
+    if sentinel || placeholder {
+        crate::win::record(crate::win::Error::msg(
+            "Storage Identifier",
+            "implausible: placeholder identity",
+        ));
+    }
+    Ok((!trim_net(text).is_empty() && !sentinel && !placeholder).then(|| text.to_owned()))
+}
+
+// Compare only explicit hex encodings; arbitrary serial punctuation/case stays.
+fn hex_identity(value: &str) -> Option<String> {
+    let value = value
+        .strip_prefix("eui.")
+        .or_else(|| value.strip_prefix("naa."))
+        .or_else(|| value.strip_prefix("uuid."))
+        .unwrap_or(value);
+    let mut hex = String::new();
+    for c in value.chars() {
+        if c.is_ascii_hexdigit() {
+            hex.push(c.to_ascii_uppercase());
+        } else if !matches!(c, ':' | '-' | '_' | '.' | '{' | '}') {
+            return None;
+        }
+    }
+    (hex.len() >= 4 && hex.len().is_multiple_of(2)).then_some(hex)
+}
+
 /// Formats a unique ID using the legacy GUID or UTF-16 byte conversion.
 pub(super) fn convert_unique_id_to_hex(id: &str) -> String {
     // C# parity: Hardware/DiskDriveInfo.cs:294-327. GUIDs use ToByteArray mixed
@@ -165,4 +371,120 @@ fn guid_x(text: &str) -> Option<[u8; 16]> {
         bytes[8 + i] = u8::try_from(component(text)?).ok()?;
     }
     Some(bytes)
+}
+
+#[cfg(test)]
+mod descriptor_tests {
+    use super::*;
+
+    #[test]
+    fn descriptor_sentinels_unknown_codes_and_associations_are_isolated() {
+        let mut disk = DiskInfo {
+            device_id: "PHYSICALDRIVE7".into(),
+            model: "Example SSD".into(),
+            serial: "S6PUNF0R812345X".into(),
+            nvme_ids: vec![],
+            firmware: "SVT02B6Q".into(),
+            hardware_id: None,
+            volumes: vec![],
+            details: vec![],
+            failures: vec![],
+        };
+        let descriptor = |code_set, association, value: &[u8]| storage::StorageIdentifier {
+            code_set,
+            identifier_type: 0x80,
+            association,
+            value: value.to_vec(),
+        };
+        let mut out = Out::new();
+        add_storage_identifiers(
+            &mut out,
+            &mut disk,
+            &[
+                descriptor(1, 0, &[0xFF; 16]),
+                descriptor(1, 0, &[0; 8]),
+                descriptor(2, 0, b"FFFF"),
+                descriptor(3, 0, b"uuid.00000000-0000-0000-0000-000000000000"),
+                descriptor(99, 0, b"SECRET-7F29"),
+                descriptor(3, 81, b"EXAMPLE-7F29"),
+                descriptor(3, 81, b"EXAMPLE-7F29"),
+            ],
+        );
+        assert_eq!(disk.details.len(), 1);
+        assert_eq!(
+            disk.details[0].0,
+            "Storage ID (association 81, type 128, UTF-8)"
+        );
+        assert_eq!(disk.failures.len(), 1);
+        render_disks(&mut out, &[disk]);
+        let section = out.finish();
+        assert_eq!(section.failures.len(), 6);
+        assert!(!section.body.contains("SECRET"));
+        assert!(
+            section
+                .failures
+                .iter()
+                .all(|e| !e.contains("SECRET") && !e.contains("EXAMPLE"))
+        );
+    }
+
+    #[test]
+    fn descriptor_text_safety_duplicate_suppression_and_masked_rendering() {
+        let uuid = "D197A234-51C8-4E62-9B17-A06432DF8790";
+        let mut disk = DiskInfo {
+            device_id: "PHYSICALDRIVE0".into(),
+            model: "Samsung SSD 980 PRO 1TB".into(),
+            serial: "S5GXNF0R913742K".into(),
+            nvme_ids: vec![
+                ("NVMe Namespace EUI-64", "002538C86B1479A2".into()),
+                ("NVMe Namespace UUID", uuid.into()),
+            ],
+            firmware: "2B2QGXA7".into(),
+            hardware_id: None,
+            volumes: Vec::new(),
+            details: Vec::new(),
+            failures: Vec::new(),
+        };
+        let descriptor =
+            |code_set, identifier_type, association, value: &[u8]| storage::StorageIdentifier {
+                code_set,
+                identifier_type,
+                association,
+                value: value.to_vec(),
+            };
+        let mut out = Out::new();
+        add_storage_identifiers(
+            &mut out,
+            &mut disk,
+            &[
+                descriptor(3, 8, 0, b"eui.002538c86b1479a2\0"),
+                descriptor(2, 1, 0, b"S5GXNF0R913742K"),
+                descriptor(2, 1, 1, b"Samsung_Port_4A729C1E\0"),
+                descriptor(3, 1, 2, b"Samsung_Port_4A729C1E"),
+                descriptor(1, 3, 2, &[0x50, 0x02, 0x53, 0x8E, 0xA7, 0x49, 0x3D, 0x21]),
+                descriptor(2, 1, 0, b"\0\0"),
+                descriptor(3, 8, 0, &[0xFF]),
+                descriptor(2, 1, 0, b"SECRET_BAD\nVALUE"),
+            ],
+        );
+        assert_eq!(disk.details.len(), 2);
+        assert_eq!(disk.details[0].0, "Storage ID (port, vendor ID, ASCII)");
+        assert_eq!(disk.details[1].0, "Storage ID (target device, NAA, binary)");
+        assert_eq!(disk.failures.len(), 2);
+        render_disks(&mut out, &[disk]);
+        let section = out.finish();
+        assert!(!section.body.contains("SECRET_BAD"));
+        assert!(!section.body.contains("eui."));
+        let masked = crate::report::masked(&section);
+        for id in [uuid, "Samsung_Port_4A729C1E", "50:02:53:8E:A7:49:3D:21"] {
+            assert!(section.ids.iter().any(|marked| marked == id));
+            assert!(section.body.contains(id));
+            assert!(!masked.body.contains(id));
+        }
+        assert!(
+            masked
+                .body
+                .contains("Storage ID (target device, NAA, binary)")
+        );
+    }
 }
