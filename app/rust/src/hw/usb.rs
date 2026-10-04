@@ -6,7 +6,7 @@ use crate::{
     win::{self, setupapi::DevInfoSet},
 };
 use windows::Win32::{
-    Devices::DeviceAndDriverInstallation::{SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME},
+    Devices::DeviceAndDriverInstallation::{SPDRP_DEVICEDESC, SPDRP_DRIVER, SPDRP_FRIENDLYNAME},
     Foundation::{ERROR_INVALID_DATA, ERROR_NOT_FOUND},
 };
 
@@ -15,6 +15,7 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     out.source("native SetupAPI");
     let result = (|| {
         let set = DevInfoSet::enum_present_all()?;
+        let device_serials = win::usbhub::serials();
         let mut first = true;
         for device in set.devices()? {
             let instance_id = match device.instance_id() {
@@ -52,6 +53,16 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                 }
             };
             append_device(out, &mut first, &name, serial);
+            match device.property_string(SPDRP_DRIVER) {
+                Ok(key) => {
+                    if let Some(device_serial) = device_serials.get(&key.to_ascii_uppercase()) {
+                        append_device_serial(out, serial, device_serial);
+                    }
+                }
+                Err(error) => {
+                    out.fallback_failed("USB driver key association", &error);
+                }
+            }
         }
         Ok::<_, win::Error>(())
     })();
@@ -81,6 +92,12 @@ fn append_device(out: &mut Out, first: &mut bool, name: &str, serial: &str) {
     }
     *first = false;
     out.info("Device", name).id("Serial", serial);
+}
+
+fn append_device_serial(out: &mut Out, serial: &str, device_serial: &str) {
+    if device_serial != serial {
+        out.id("Serial (device)", device_serial);
+    }
 }
 
 #[cfg(test)]
@@ -117,6 +134,7 @@ mod tests {
         out = Out::new();
         let mut first = true;
         append_device(&mut out, &mut first, "USB Receiver", "83917A5E");
+        append_device_serial(&mut out, "83917A5E", "83917A5E");
         append_device(&mut out, &mut first, "", "60A44C1F83D2");
         let section = out.finish();
         assert_eq!(
@@ -124,5 +142,14 @@ mod tests {
             "Device: USB Receiver\r\nSerial: 83917A5E\r\n----------------------------------------\r\nDevice: \r\nSerial: 60A44C1F83D2\r\n"
         );
         assert_eq!(section.ids, ["83917A5E", "60A44C1F83D2"]);
+        let mut differing = Out::new();
+        append_device(&mut differing, &mut true, "USB Receiver", "83917A5E");
+        append_device_serial(&mut differing, "83917A5E", "83917a5e");
+        let differing = differing.finish();
+        assert_eq!(
+            differing.body,
+            "Device: USB Receiver\r\nSerial: 83917A5E\r\nSerial (device): 83917a5e\r\n"
+        );
+        assert_eq!(differing.ids, ["83917A5E", "83917a5e"]);
     }
 }
