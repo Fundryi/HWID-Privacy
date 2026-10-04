@@ -13,6 +13,42 @@ use std::{
 };
 
 #[test]
+fn standard_probe_skips_only_missing_channels_and_preserves_additional_policy() {
+    use super::batch::{Attempt, probe_skip};
+
+    let missing = Err(Error {
+        op: "EvtOpenChannelConfig",
+        code: 15007,
+        detail: "The specified channel could not be found.".into(),
+    });
+    let denied = Err(Error {
+        op: "EvtOpenChannelConfig",
+        code: 5,
+        detail: "Access is denied.".into(),
+    });
+    let property_error = Err(Error {
+        op: "EvtGetChannelConfigProperty",
+        code: 15007,
+        detail: "Property read failed after opening the channel.".into(),
+    });
+    assert!(matches!(
+        probe_skip(true, &missing),
+        Some(Attempt::NotFound)
+    ));
+    for enabled in [Ok(true), Ok(false), denied.clone(), property_error.clone()] {
+        assert!(probe_skip(true, &enabled).is_none());
+    }
+    assert!(probe_skip(false, &Ok(true)).is_none());
+    assert!(matches!(
+        probe_skip(false, &Ok(false)),
+        Some(Attempt::Disabled)
+    ));
+    for error in [missing, denied, property_error] {
+        assert!(matches!(probe_skip(false, &error), Some(Attempt::NotFound)));
+    }
+}
+
+#[test]
 fn discovery_failure_keeps_standard_summary_but_cancel_stays_cancelled() {
     for failure in [Some("parallel failed"), Some("discovery panicked"), None] {
         for cancelled in [false, true] {
