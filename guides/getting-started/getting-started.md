@@ -169,7 +169,11 @@ Every part guide links back here. Apply this list before any firmware, SPD, EDID
 3. Select **Export**. The app writes a timestamped `HWID-EXPORT-*.txt` file beside the executable and shows the full path. Label a private copy `before` with the date, hardware configuration, and firmware versions.
 4. Make one approved change, then perform the reboot or full power cycle required by the dedicated guide.
 5. Run the same version of HWIDChecker again and export an `after` copy.
-6. Compare the relevant fields and the full output. Check that an intended change persisted and that unrelated manufacturer, model, capacity, firmware, or certificate fields did not change unexpectedly.
+6. Select **Compare now** and pick the `before` export to compare it with the current system, or **Compare files** to compare two exports. Green marks an identifier that changed, red a unique identifier that is still the same, and outlined light green a placeholder value that was never unique. Check that an intended change persisted and that unrelated manufacturer, model, capacity, firmware, or certificate fields did not change unexpectedly.
+
+![HWIDChecker main window with Mask IDs on: serials, MACs and GUIDs show as X](../../site/screenshots/main-masked.png)
+
+![Compare files: before and after export side by side. Green: identifier changed. Red: unique identifier still the same.](../../site/screenshots/compare.png)
 
 For firmware-level changes, take three captures: before the change, immediately after the first reboot, and again after a full shutdown and cold boot. A value that returns after a cold boot was not proven persistent.
 
