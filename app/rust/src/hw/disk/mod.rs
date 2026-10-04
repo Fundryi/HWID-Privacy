@@ -14,8 +14,9 @@ use crate::{
     },
 };
 use formatting::{convert_unique_id_to_hex, nonempty, render_disks};
-use sources::{logical_drives, unique_ids_powershell, unique_ids_wmi};
-use std::collections::HashMap;
+#[cfg(test)]
+use sources::unique_ids_wmi;
+use sources::{PhysicalDiskIds, logical_drives, physical_disk_ids_wmi, unique_ids_powershell};
 
 struct DiskInfo {
     device_id: String,
@@ -31,7 +32,10 @@ struct DiskInfo {
 
 /// Collects this hardware section through the shared output builder.
 pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
-    let rows = wmi::query(Namespace::Cimv2, "SELECT * FROM Win32_DiskDrive")?;
+    let rows = wmi::query(
+        Namespace::Cimv2,
+        "SELECT DeviceID, Model, SerialNumber, FirmwareRevision, Index, PNPDeviceID FROM Win32_DiskDrive",
+    )?;
     out.source("WMI (Win32_DiskDrive)");
     if rows.is_empty() {
         // C# parity: Hardware/DiskDriveInfo.cs:42. The empty body has no final CRLF.
@@ -46,10 +50,18 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         "MSFT_PhysicalDisk",
         &[
             ("WMI (Storage)", &|| {
-                unique_ids_wmi().map(|m| (m, "WMI (Storage)"))
+                physical_disk_ids_wmi().map(|m| (m, "WMI (Storage)"))
             }),
             ("PowerShell (Get-PhysicalDisk)", &|| {
-                unique_ids_powershell().map(|m| (m, "PowerShell (Get-PhysicalDisk)"))
+                unique_ids_powershell().map(|unique_ids| {
+                    (
+                        PhysicalDiskIds {
+                            unique_ids,
+                            ..PhysicalDiskIds::default()
+                        },
+                        "PowerShell (Get-PhysicalDisk)",
+                    )
+                })
             }),
         ],
     ) {
@@ -59,7 +71,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         }
         Err(error) => {
             failures.push(format!("UniqueId (WMI): {error}"));
-            HashMap::new()
+            PhysicalDiskIds::default()
         }
     };
     let hardware_ids = ctx.hardware_ids();
@@ -110,19 +122,32 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             .filter(|&n| n >= 0);
         if let Some(index) = index {
             match storage::physical_nvme_identity(index as u32) {
-                Ok(Some(identity)) => {
+                Ok(identity) => {
                     match identity.controller_serial {
-                        Ok(Some(serial)) => disk.nvme_ids.push(("NVMe Controller Serial", serial)),
-                        Ok(None) => {}
-                        Err(error) => {
+                        storage::IdentifyOutcome::Ok(serial) => {
+                            disk.nvme_ids.push(("NVMe Controller Serial", serial))
+                        }
+                        storage::IdentifyOutcome::Empty => disk
+                            .failures
+                            .push("    NVMe Identify Controller: Empty serial".into()),
+                        storage::IdentifyOutcome::NotAttempted { bus } => {
+                            debug_assert_ne!(
+                                bus,
+                                windows::Win32::Storage::FileSystem::BusTypeNvme.0 as u32
+                            );
+                        }
+                        storage::IdentifyOutcome::Failed(error) => {
                             out.fallback_failed(
                                 &format!("{} NVMe Controller Serial", disk.device_id),
                                 &error,
                             );
+                            disk.failures.push(format!(
+                                "    NVMe Identify Controller: Unavailable ({error})"
+                            ));
                         }
                     }
                     match identity.namespace {
-                        Ok(namespace) => {
+                        storage::IdentifyOutcome::Ok(namespace) => {
                             if let Some(eui64) = namespace.eui64 {
                                 disk.nvme_ids.push(("NVMe Namespace EUI-64", eui64));
                             }
@@ -130,22 +155,30 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                                 disk.nvme_ids.push(("NVMe Namespace NGUID", nguid));
                             }
                         }
-                        Err(error) => {
+                        storage::IdentifyOutcome::Empty
+                        | storage::IdentifyOutcome::NotAttempted { .. } => {}
+                        storage::IdentifyOutcome::Failed(error) => {
                             out.fallback_failed(
                                 &format!("{} NVMe Namespace", disk.device_id),
                                 &error,
                             );
+                            disk.failures.push(format!(
+                                "    NVMe Identify Namespace: Unavailable ({error})"
+                            ));
                         }
                     }
                     if !disk.nvme_ids.is_empty() {
                         sources.push("native (NVMe Identify)");
                     }
                 }
-                Ok(None) => {}
-                // Optional enrichment must not change existing failure/status lines.
+                // A failed bus probe cannot establish NVMe; keep it diagnostic-only.
                 Err(error) => {
                     out.fallback_failed(&format!("{} NVMe Identify", disk.device_id), &error);
                 }
+            }
+            if let Some(serial) = unique_ids.adapter_serials.get(&(index as u32)) {
+                disk.details
+                    .push(("Adapter Serial".into(), serial.clone(), true));
             }
             match storage::physical_identifier(index as u32) {
                 Ok(Some(id)) => {
@@ -164,7 +197,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                 }
                 Err(error) => disk_error(out, &mut disk, "UniqueId (IOCTL)", &error),
             }
-            if let Some(id) = unique_ids.get(&(index as u32)) {
+            if let Some(id) = unique_ids.unique_ids.get(&(index as u32)) {
                 disk.details
                     .push(("UniqueId (WMI)".into(), convert_unique_id_to_hex(id), true));
                 disk.details.push((

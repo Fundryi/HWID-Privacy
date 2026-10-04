@@ -6,7 +6,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::mpsc,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use windows::Win32::{
     Foundation::GENERIC_READ,
@@ -168,9 +168,17 @@ pub fn physical_identifier(index: u32) -> Result<Option<Identifier>> {
 /// Independently collected controller and namespace identities, never Windows Serial.
 pub struct NvmeIdentity {
     /// Identify Controller SN, with fixed-width padding removed.
-    pub controller_serial: Result<Option<String>>,
+    pub controller_serial: IdentifyOutcome<String>,
     /// Identify Namespace binary identities in their original byte order.
-    pub namespace: Result<NvmeNamespace>,
+    pub namespace: IdentifyOutcome<NvmeNamespace>,
+}
+
+/// A protocol field group, retaining empty and bus-gated results separately.
+pub enum IdentifyOutcome<T> {
+    Ok(T),
+    Failed(Error),
+    Empty,
+    NotAttempted { bus: u32 },
 }
 
 /// Optional namespace identities; all-zero fields mean not supplied.
@@ -183,15 +191,19 @@ pub struct NvmeNamespace {
 }
 
 /// Reads NVMe Identify through storage property queries, gated by bus.
-pub fn physical_nvme_identity(index: u32) -> Result<Option<NvmeIdentity>> {
-    let nvme = bounded("StorageDeviceProperty", move || {
+pub fn physical_nvme_identity(index: u32) -> Result<NvmeIdentity> {
+    let started = Instant::now();
+    let data = bounded("StorageDeviceProperty", move || {
         let handle = ioctl::open_device(&format!(r"\\.\PHYSICALDRIVE{index}"), GENERIC_READ.0)?;
-        let data = ioctl::device_io_control(
+        ioctl::device_io_control(
             &handle,
             IOCTL_STORAGE_QUERY_PROPERTY,
             &[0; size_of::<STORAGE_PROPERTY_QUERY>()],
             4096,
-        )?;
+        )
+    });
+    let returned = data.as_ref().ok().map(Vec::len);
+    let bus = data.and_then(|data| {
         let size = dword(&data, offset_of!(STORAGE_DEVICE_DESCRIPTOR, Size))? as usize;
         let bus_end = offset_of!(STORAGE_DEVICE_DESCRIPTOR, BusType) + 4;
         if size < bus_end || size > data.len() {
@@ -200,26 +212,56 @@ pub fn physical_nvme_identity(index: u32) -> Result<Option<NvmeIdentity>> {
                 "invalid device descriptor size",
             ));
         }
-        Ok(dword(&data, offset_of!(STORAGE_DEVICE_DESCRIPTOR, BusType))? == BusTypeNvme.0 as u32)
-    })?;
-    if !nvme {
-        return Ok(None);
+        dword(&data, offset_of!(STORAGE_DEVICE_DESCRIPTOR, BusType))
+    });
+    storage_diagnostic(
+        index,
+        bus.as_ref().ok().copied(),
+        "StorageDeviceProperty CNS=n/a",
+        returned,
+        started,
+        bus.as_ref().err(),
+        "ok",
+    );
+    let bus = bus?;
+    if bus != BusTypeNvme.0 as u32 {
+        storage_diagnostic(
+            index,
+            Some(bus),
+            "NVMe Identify CNS=1/0 SubValue=0",
+            None,
+            Instant::now(),
+            None,
+            "not-attempted",
+        );
+        return Ok(NvmeIdentity {
+            controller_serial: IdentifyOutcome::NotAttempted { bus },
+            namespace: IdentifyOutcome::NotAttempted { bus },
+        });
     }
     // Separate bounded calls retain a successful identity if the other query fails
-    // or times out. Namespace SubValue=0 addresses this physical drive's namespace.
-    let controller_serial = nvme_identify(index, true).and_then(|data| parse_nvme_serial(&data));
-    let namespace = nvme_identify(index, false).and_then(|data| parse_nvme_namespace(&data));
-    Ok(Some(NvmeIdentity {
+    // or times out. Keep SubValue=0; multi-namespace association is unverified.
+    let controller_serial = nvme_identify(index, true, parse_nvme_serial);
+    let namespace = nvme_identify(index, false, |data| {
+        let namespace = parse_nvme_namespace(data)?;
+        Ok((namespace.eui64.is_some() || namespace.nguid.is_some()).then_some(namespace))
+    });
+    Ok(NvmeIdentity {
         controller_serial,
         namespace,
-    }))
+    })
 }
 
 const NVME_IDENTIFY_SIZE: usize = 4096;
 const PROTOCOL_START: usize = offset_of!(STORAGE_PROTOCOL_DATA_DESCRIPTOR, ProtocolSpecificData);
 
-fn nvme_identify(index: u32, controller: bool) -> Result<Vec<u8>> {
-    bounded("NVMe Identify", move || {
+fn nvme_identify<T>(
+    index: u32,
+    controller: bool,
+    parse: impl FnOnce(&[u8]) -> Result<Option<T>>,
+) -> IdentifyOutcome<T> {
+    let started = Instant::now();
+    let data = bounded("NVMe Identify", move || {
         let handle = ioctl::open_device(&format!(r"\\.\PHYSICALDRIVE{index}"), GENERIC_READ.0)?;
         // STORAGE_PROPERTY_QUERY.AdditionalParameters starts at byte 8, not
         // sizeof(STORAGE_PROPERTY_QUERY): the SDK includes a one-byte tail.
@@ -240,14 +282,82 @@ fn nvme_identify(index: u32, controller: bool) -> Result<Vec<u8>> {
         ] {
             query[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
-        let data = ioctl::device_io_control(
+        ioctl::device_io_control(
             &handle,
             IOCTL_STORAGE_QUERY_PROPERTY,
             &query,
             8192, // Slack avoids the shared helper retrying a completely full reply.
-        )?;
-        Ok(nvme_payload(&data)?.to_vec())
-    })
+        )
+    });
+    let returned = data.as_ref().ok().map(Vec::len);
+    let result = data.and_then(|data| parse(nvme_payload(&data)?));
+    storage_diagnostic(
+        index,
+        Some(BusTypeNvme.0 as u32),
+        if controller {
+            "StorageAdapterProtocolSpecificProperty CNS=1 SubValue=0"
+        } else {
+            "StorageDeviceProtocolSpecificProperty CNS=0 SubValue=0"
+        },
+        returned,
+        started,
+        result.as_ref().err(),
+        if matches!(result, Ok(None)) {
+            "empty"
+        } else {
+            "ok"
+        },
+    );
+    match result {
+        Ok(Some(value)) => IdentifyOutcome::Ok(value),
+        Ok(None) => IdentifyOutcome::Empty,
+        Err(error) => IdentifyOutcome::Failed(error),
+    }
+}
+
+// The existing helper diagnostic channel stores Error-shaped records. The class
+// explicitly distinguishes telemetry for success/empty/skip from actual failures.
+fn storage_diagnostic(
+    index: u32,
+    bus: Option<u32>,
+    request: &str,
+    returned: Option<usize>,
+    started: Instant,
+    error: Option<&Error>,
+    status: &str,
+) {
+    let class = match error {
+        None => status,
+        Some(error)
+            if matches!(error.code, 121 | 258 | 1460) || error.detail.contains("timed out") =>
+        {
+            "timeout"
+        }
+        Some(error) if error.code == 5 => "access-denied",
+        Some(error) if matches!(error.code, 1 | 50 | 87) => "unsupported",
+        Some(error) if matches!(error.code, 21 | 1112 | 1167) => "absent",
+        Some(error)
+            if matches!(error.op, "storage descriptor" | "storage parser") && error.code == 0
+                || error.op == "NVMe Identify"
+                    && error.code == 0
+                    && (error.detail.starts_with("invalid ")
+                        || error.detail.starts_with("protocol payload ")) =>
+        {
+            "malformed"
+        }
+        Some(_) => "failed",
+    };
+    let bus = bus.map_or_else(|| "unknown".into(), |bus| bus.to_string());
+    let returned = returned.map_or_else(|| "unknown".into(), |size| size.to_string());
+    super::record(Error {
+        op: "storage query diagnostic",
+        code: error.map_or(0, |error| error.code),
+        detail: format!(
+            "path=\\\\.\\PHYSICALDRIVE{index} BusType={bus} property={request} returned={returned} elapsed_ms={} class={class}{}",
+            started.elapsed().as_millis(),
+            error.map_or_else(String::new, |error| format!(" error={error}")),
+        ),
+    });
 }
 
 fn nvme_payload(data: &[u8]) -> Result<&[u8]> {

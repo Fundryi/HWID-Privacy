@@ -108,19 +108,37 @@ pub(super) fn logical_drive_wmi(letter: char) -> win::Result<Vec<LogicalDrive>> 
     Ok(volumes)
 }
 
-/// Reads physical-disk unique IDs from the Storage WMI namespace.
-pub(super) fn unique_ids_wmi() -> win::Result<HashMap<u32, String>> {
-    let mut ids = HashMap::new();
+/// Independent fields joined using the existing physical-disk index mapping.
+#[derive(Default)]
+pub(super) struct PhysicalDiskIds {
+    pub(super) unique_ids: HashMap<u32, String>,
+    pub(super) adapter_serials: HashMap<u32, String>,
+}
+
+/// Reads physical-disk unique IDs and adapter serials from the Storage namespace.
+pub(super) fn physical_disk_ids_wmi() -> win::Result<PhysicalDiskIds> {
+    let mut ids = PhysicalDiskIds::default();
     for row in wmi::query(
         Namespace::Storage,
-        "SELECT DeviceId, UniqueId FROM MSFT_PhysicalDisk",
+        "SELECT DeviceId, UniqueId, AdapterSerialNumber FROM MSFT_PhysicalDisk",
     )? {
-        if let (Some(index), Some(id)) = (row.str("DeviceId"), row.str("UniqueId")) {
-            insert_unique_id(&mut ids, &index, &id);
+        if let Some(index) = row.str("DeviceId") {
+            if let Some(id) = row.str("UniqueId") {
+                insert_unique_id(&mut ids.unique_ids, &index, &id);
+            }
+            if let Some(serial) = row.str("AdapterSerialNumber") {
+                insert_unique_id(&mut ids.adapter_serials, &index, trim_net(&serial));
+            }
         }
     }
     // C# parity: Hardware/DiskDriveInfo.cs:209-236. Empty success does not fallback.
     Ok(ids)
+}
+
+/// Keeps the existing source-comparison check's UniqueId-only contract.
+#[cfg(test)]
+pub(super) fn unique_ids_wmi() -> win::Result<HashMap<u32, String>> {
+    physical_disk_ids_wmi().map(|ids| ids.unique_ids)
 }
 
 fn insert_unique_id(ids: &mut HashMap<u32, String>, index: &str, id: &str) {
