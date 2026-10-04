@@ -28,6 +28,7 @@ pub(crate) struct Row {
     pub flat: bool,
     pub expanded: bool,
     pub counts: [usize; 2],
+    pub extras: [usize; 4],
     pub unchanged: Option<usize>,
 }
 
@@ -47,6 +48,7 @@ impl Row {
             flat: false,
             expanded: false,
             counts: [0; 2],
+            extras: [0; 4],
             unchanged: None,
         }
     }
@@ -57,7 +59,6 @@ struct Group {
     row: Row,
     // None follows the current filter's defaults; explicit choices survive switches.
     open: Option<bool>,
-    visible: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,6 +78,8 @@ pub struct Table {
     notice: Option<String>,
     pub(crate) all: bool,
     pub(crate) counts: [usize; 2],
+    pub(crate) extras: [usize; 4],
+    pub(crate) filters: [bool; 4],
 }
 
 impl Table {
@@ -100,6 +103,8 @@ impl Table {
             notice: result.warning.clone(),
             all: false,
             counts: [0; 2],
+            extras: [0; 4],
+            filters: [true, true, false, false],
         };
         for entity in &result.entities {
             if table
@@ -111,7 +116,6 @@ impl Table {
                 table.sections.push(Group {
                     row: Row::new(RowId::Section(id), entity.section.clone()),
                     open: None,
-                    visible: false,
                 });
             }
             let section = table.sections.len() - 1;
@@ -125,12 +129,19 @@ impl Table {
                 if right.is_some() { new_name } else { old_name }.to_owned(),
             );
             row.position = text::position(old, new, entity.kind);
+            if entity.kind == Kind::Moved {
+                row.position = format!(
+                    "moved {} → {}",
+                    trailing_position(old),
+                    trailing_position(new)
+                );
+            }
             row.kind = entity.kind;
             row.flat = entity.is_header || (left.is_none() && right.is_none());
             row.line = format!(
                 "{}  {}  {}",
                 text::kind_text(row.kind),
-                row.position,
+                text::position(old, new, entity.kind),
                 row.label
             );
             let fields: Vec<_> = entity
@@ -173,6 +184,9 @@ impl Table {
                 })
                 .collect();
             for field in &fields {
+                if table.notice.is_none() && field.not_unique {
+                    row.extras[0] += 1;
+                }
                 if table.notice.is_none() && field.identifier && !field.not_unique {
                     let count = match field.kind {
                         Kind::Same => Some(0),
@@ -186,14 +200,18 @@ impl Table {
                     }
                 }
             }
-            let visible = fields.iter().any(|f| f.identifier || f.kind != Kind::Same);
-            table.sections[section].visible |= visible;
+            match row.kind {
+                Kind::Added => row.extras[1] = 1,
+                Kind::Removed => row.extras[2] = 1,
+                Kind::Moved => row.extras[3] = 1,
+                _ => {}
+            }
+            for (i, count) in row.extras.iter().enumerate() {
+                table.extras[i] += count;
+                table.sections[section].row.extras[i] += count;
+            }
             table.devices.push(Device {
-                group: Group {
-                    row,
-                    open: None,
-                    visible,
-                },
+                group: Group { row, open: None },
                 section,
                 fields,
                 show_all: false,
@@ -239,7 +257,15 @@ impl Table {
         }
         for (section_index, section) in self.sections.iter().enumerate() {
             let mut row = section.row.clone();
-            row.expanded = section.open.unwrap_or(self.all || section.visible);
+            let visible = self
+                .devices
+                .iter()
+                .filter(|d| d.section == section_index)
+                .any(|d| d.fields.iter().any(|f| self.includes(d, f)));
+            if !visible {
+                continue;
+            }
+            row.expanded = section.open.unwrap_or(section.row.unchanged.is_none());
             self.rows.push(row.clone());
             if !row.expanded {
                 continue;
@@ -252,11 +278,11 @@ impl Table {
                     .enumerate()
                     .filter(|(_, d)| d.section == section_index && d.group.row.flat == flat)
                 {
+                    if !device.fields.iter().any(|f| self.includes(device, f)) {
+                        continue;
+                    }
                     let mut row = device.group.row.clone();
-                    row.expanded = device
-                        .group
-                        .open
-                        .unwrap_or(self.all || device.group.visible);
+                    row.expanded = device.group.open.unwrap_or(true);
                     if !flat {
                         self.rows.push(row.clone());
                         if !row.expanded {
@@ -278,8 +304,17 @@ impl Table {
                     });
                     let mut hidden = 0;
                     for field in fields {
+                        if !self.includes(device, field) {
+                            continue;
+                        }
                         if !self.all
                             && !device.show_all
+                            && !(self.filters[3]
+                                && matches!(
+                                    device.group.row.kind,
+                                    Kind::Added | Kind::Removed | Kind::Moved
+                                ))
+                            && !field.not_unique
                             && !field.identifier
                             && field.kind == Kind::Same
                         {
@@ -301,18 +336,39 @@ impl Table {
         }
     }
 
+    fn includes(&self, device: &Device, field: &Row) -> bool {
+        self.all
+            || (self.filters[3] && matches!(device.group.row.kind, Kind::Added | Kind::Removed | Kind::Moved))
+            || (self.filters[2] && field.not_unique)
+            || (!field.not_unique && field.identifier && match field.kind {
+                Kind::Changed => self.filters[0],
+                Kind::Same => self.filters[1],
+                _ => false,
+            })
+            // Neutral facts stay behind the explicit More affordance for a visible group.
+            || (field.kind == Kind::Same && !field.identifier && device.fields.iter().any(|f|
+                !f.not_unique && f.identifier && ((f.kind == Kind::Changed && self.filters[0])
+                    || (f.kind == Kind::Same && self.filters[1]))))
+    }
+
+    pub(crate) fn labels(&self) -> impl Iterator<Item = &str> {
+        self.devices
+            .iter()
+            .flat_map(|d| &d.fields)
+            .map(|r| r.label.as_str())
+    }
+
     /// Updates collapse state and returns the logical row that should remain selected.
     pub(crate) fn activate(&mut self, id: RowId, expand: Option<bool>) -> RowId {
         match id {
             RowId::Section(i) => {
                 let group = &mut self.sections[i];
                 group.open =
-                    Some(expand.unwrap_or(!group.open.unwrap_or(self.all || group.visible)));
+                    Some(expand.unwrap_or(!group.open.unwrap_or(group.row.unchanged.is_none())));
             }
             RowId::Device(i) => {
                 let group = &mut self.devices[i].group;
-                group.open =
-                    Some(expand.unwrap_or(!group.open.unwrap_or(self.all || group.visible)));
+                group.open = Some(expand.unwrap_or(!group.open.unwrap_or(true)));
             }
             RowId::More(i) if expand != Some(false) => self.devices[i].show_all = true,
             RowId::Field(i, _) | RowId::More(i) if expand == Some(false) => {
@@ -360,10 +416,20 @@ pub(crate) fn legend(counts: [usize; 2]) -> [String; 3] {
             String::new(),
         ];
     }
-    let plural = |n| if n == 1 { "ID" } else { "IDs" };
     [
-        format!("{} unchanged {}", counts[0], plural(counts[0])),
+        format!("{} unchanged", counts[0]),
         " · ".to_owned(),
-        format!("{} changed {}", counts[1], plural(counts[1])),
+        format!("{} changed", counts[1]),
     ]
+}
+
+fn trailing_position(heading: &str) -> &str {
+    let heading = heading.trim_end();
+    let start = heading
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_ascii_digit())
+        .last()
+        .map(|(i, _)| i);
+    start.map_or(heading, |i| &heading[i..])
 }

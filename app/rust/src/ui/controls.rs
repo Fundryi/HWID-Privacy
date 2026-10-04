@@ -36,6 +36,7 @@
 //! SOFTWARE.
 
 mod clipboard;
+mod compare_header;
 mod table;
 
 use super::dpi;
@@ -156,6 +157,7 @@ pub struct ButtonSpec {
     pub icon_only: bool,
     /// One centered, clipped line using the node padding without the WinForms image inset.
     pub single_line: bool,
+    pub(crate) compare_chip: Option<Option<(Color, bool)>>,
 }
 
 impl ButtonSpec {
@@ -169,6 +171,7 @@ impl ButtonSpec {
             toggle: false,
             icon_only: false,
             single_line: false,
+            compare_chip: None,
         }
     }
 
@@ -231,6 +234,13 @@ pub struct LabelSpec {
     /// Every character is an icon-font glyph drawn centered on the same spot (a layered
     /// status icon, `DESIGN.md` 15).
     pub stacked: bool,
+    pub(crate) compare: Option<CompareLabel>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CompareLabel {
+    Verdict([usize; 2], bool),
+    Legend(Color, bool),
 }
 
 impl LabelSpec {
@@ -244,6 +254,7 @@ impl LabelSpec {
             align: Align::MiddleLeft,
             ellipsis: false,
             stacked: false,
+            compare: None,
         }
     }
 
@@ -1136,7 +1147,7 @@ enum Data {
     Label(RefCell<LabelSpec>),
     Edit(EditData),
     List(ListData),
-    Table(table::TableData),
+    Table(Box<table::TableData>),
     Progress(ProgressData),
     Spinner(SpinnerData),
     AppIcon,
@@ -1147,6 +1158,7 @@ pub(crate) struct CtlState {
     id: u16,
     hwnd: HWND,
     font: Cell<HFONT>,
+    compare_count_font: RefCell<Option<dpi::Font>>,
     /// The icon font of a button with an icon (0 otherwise).
     icon_font: Cell<HFONT>,
     dpi: Cell<u32>,
@@ -1320,7 +1332,7 @@ pub(crate) fn create(
                         | LBS_WANTKEYBOARDINPUT) as u32,
                 ),
             WINDOW_EX_STYLE(0),
-            Data::Table(table::TableData::new(model.clone(), dpi)?),
+            Data::Table(Box::new(table::TableData::new(model.clone(), dpi)?)),
         ),
         Ctl::Spinner => (
             WC_STATICW,
@@ -1357,6 +1369,15 @@ pub(crate) fn create(
         id,
         hwnd,
         font: Cell::new(font),
+        compare_count_font: RefCell::new(
+            if matches!(ctl, Ctl::Button(b) if b.compare_chip.is_some())
+                || matches!(ctl, Ctl::Label(l) if matches!(l.compare, Some(CompareLabel::Verdict(..))))
+            {
+                Some(dpi::Font::new(theme::COMPARE_COUNT_FONT, dpi)?)
+            } else {
+                None
+            },
+        ),
         icon_font: Cell::new(icon_font),
         dpi: Cell::new(dpi),
         padding: Cell::new(padding),
@@ -1617,6 +1638,26 @@ impl CtlState {
                 t.resize(self);
                 Some(result)
             }
+            (Data::Table(t), WM_PAINT) => {
+                let result = def(hwnd, msg, wparam, lparam);
+                t.paint_sticky(self);
+                Some(result)
+            }
+            (Data::Table(t), WM_KEYDOWN) => {
+                let result = def(hwnd, msg, wparam, lparam);
+                t.reveal_selection(hwnd);
+                invalidate(hwnd);
+                Some(result)
+            }
+            (
+                Data::Table(_),
+                windows::Win32::UI::WindowsAndMessaging::WM_VSCROLL
+                | windows::Win32::UI::WindowsAndMessaging::WM_MOUSEWHEEL,
+            ) => {
+                let result = def(hwnd, msg, wparam, lparam);
+                invalidate(hwnd);
+                Some(result)
+            }
             (Data::Table(_), windows::Win32::UI::WindowsAndMessaging::WM_HSCROLL) => {
                 let result = def(hwnd, msg, wparam, lparam);
                 // The native list scrolls its rows; the parent owns the matching title strip.
@@ -1738,6 +1779,23 @@ impl CtlState {
         let radius = dpi::scale(theme::BUTTON_RADIUS, dpi);
         buffered(hdc, area, |hdc| {
             rounded_rect(hdc, area, radius, container, Some(fill_color), border);
+            if let Some(dot) = spec.compare_chip {
+                compare_header::chip(
+                    hdc,
+                    area.deflate(self.padding.get()),
+                    &spec.text,
+                    self.font.get(),
+                    self.compare_count_font
+                        .borrow()
+                        .as_ref()
+                        .map_or(self.font.get(), dpi::Font::handle),
+                    dot,
+                    text_color,
+                    fill_color,
+                    dpi,
+                );
+                return;
+            }
             if spec.kind == ButtonKind::Sidebar && b.active.get() && !spec.toggle {
                 // The accent bar of the active item (DESIGN.md 6): inside the item's left edge.
                 let inset = dpi::scale(theme::SIDEBAR_ACCENT_INSET, dpi);
@@ -1901,6 +1959,22 @@ impl CtlState {
         let back = self.back.get();
         buffered(hdc, area, |hdc| {
             fill(hdc, area, back);
+            if let Some(compare) = &spec.compare {
+                compare_header::label(
+                    hdc,
+                    face,
+                    &spec,
+                    compare,
+                    self.font.get(),
+                    self.compare_count_font
+                        .borrow()
+                        .as_ref()
+                        .map_or(self.font.get(), dpi::Font::handle),
+                    back,
+                    self.dpi.get(),
+                );
+                return;
+            }
             if spec.stacked {
                 for glyph in spec.text.chars() {
                     draw_glyph(hdc, glyph, self.font.get(), face, spec.fore);
@@ -2470,6 +2544,18 @@ pub(crate) fn measure(
     let dc = ScreenDc::new();
     match ctl {
         Ctl::Button(b) => {
+            if let Some(dot) = b.compare_chip {
+                return Size {
+                    w: table::paint::width(dc.0, &b.text, font)
+                        + padding.horizontal()
+                        + if dot.is_some() {
+                            dpi::scale(theme::COMPARE_DOT + theme::COMPARE_GAP, dpi)
+                        } else {
+                            0
+                        },
+                    h: dpi::scale(theme::COMPARE_FILTER_HEIGHT, dpi),
+                };
+            }
             if b.icon_only {
                 return dpi::scale_size(theme::FIND_BUTTON_SIZE, dpi);
             }
@@ -2528,6 +2614,13 @@ pub(crate) fn measure(
             }
         }
         Ctl::Label(l) => {
+            if let Some(CompareLabel::Legend(_, _)) = l.compare {
+                return Size {
+                    w: table::paint::width(dc.0, &l.text, font)
+                        + dpi::scale(theme::COMPARE_SWATCH + theme::COMPARE_SWATCH_GAP, dpi),
+                    h: dpi::scale(theme::COMPARE_ROW_HEIGHT, dpi),
+                };
+            }
             let avail = Size {
                 w: proposed.w.saturating_sub(padding.horizontal()).max(0),
                 h: proposed.h.saturating_sub(padding.vertical()).max(0),
@@ -2583,6 +2676,30 @@ pub(crate) fn measure_live(
             (Ctl::Label(spec), Data::Label(l)) => *spec = l.borrow().clone(),
             _ => {}
         }
+        if let Ctl::Button(b) = &ctl
+            && let Some(dot) = b.compare_chip
+        {
+            let dc = ScreenDc::new();
+            let fonts = state.compare_count_font.borrow();
+            let count_font = fonts.as_ref().map_or(font, dpi::Font::handle);
+            let (caption, count) = compare_header::chip_parts(&b.text);
+            return Size {
+                w: table::paint::width(dc.0, caption, font)
+                    + padding.horizontal()
+                    + if count.is_empty() {
+                        0
+                    } else {
+                        table::paint::width(dc.0, count, count_font)
+                            + dpi::scale(theme::COMPARE_SWATCH_GAP, dpi)
+                    }
+                    + if dot.is_some() {
+                        dpi::scale(theme::COMPARE_DOT + theme::COMPARE_GAP, dpi)
+                    } else {
+                        0
+                    },
+                h: dpi::scale(theme::COMPARE_FILTER_HEIGHT, dpi),
+            };
+        }
     }
     measure(&ctl, font, padding, min, proposed, dpi)
 }
@@ -2598,6 +2715,12 @@ pub(crate) fn apply_dpi(hwnd: HWND, font: HFONT, icon_font: HFONT, padding: Pad,
         st.icon_font.set(icon_font);
         st.padding.set(padding);
         st.dpi.set(dpi);
+        if st.compare_count_font.borrow().is_some() {
+            match dpi::Font::new(theme::COMPARE_COUNT_FONT, dpi) {
+                Ok(font) => *st.compare_count_font.borrow_mut() = Some(font),
+                Err(error) => win::record(error),
+            }
+        }
         if let Data::Table(t) = &st.data {
             t.apply_dpi(dpi);
         }

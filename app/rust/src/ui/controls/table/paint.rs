@@ -78,7 +78,7 @@ impl TableData {
         };
         let scale = |n| dpi::scale(n, st.dpi.get());
         let fonts = self.fonts.borrow();
-        let [meta, small, name, data, icon] = std::array::from_fn(|i| fonts[i].handle());
+        let [meta, small, name, data, icon, safe] = std::array::from_fn(|i| fonts[i].handle());
         let columns = self.columns.get();
         let padding = scale(theme::COMPARE_CELL_PADDING);
         let cell = |i: usize| Rect {
@@ -152,12 +152,8 @@ impl TableData {
                     } else {
                         columns[3] - padding
                     };
-                    let counts = if row.counts == [0; 2] {
-                        [String::new(), String::new(), String::new()]
-                    } else {
-                        legend(row.counts)
-                    };
-                    let count_width: i32 = counts.iter().map(|s| width(dc, s, meta)).sum();
+                    let counts = count_parts(row);
+                    let count_width: i32 = counts.iter().map(|(s, _)| width(dc, s, meta)).sum();
                     let suffix = if section && !row.expanded {
                         row.unchanged
                             .map(|n| format!(" · {n} values, none changed"))
@@ -197,27 +193,23 @@ impl TableData {
                             theme::FAINT,
                         );
                         x += position_width;
-                        paint_text(
+                        paint_tag(
                             dc,
-                            crate::ui::compare::text::kind_text(row.kind),
+                            row,
                             meta,
                             cell(3),
-                            if row.kind == Change::Same {
-                                theme::FAINT
-                            } else {
-                                theme::SECONDARY
-                            },
+                            st.dpi.get(),
+                            false,
+                            selected,
+                            true,
+                            model.verdicts(),
                         );
                     }
                     if count_width > 0 {
                         x += scale(12);
-                        for (text, color) in
-                            counts
-                                .iter()
-                                .zip([theme::DANGER, theme::FAINT, theme::SUCCESS])
-                        {
+                        for (text, color) in &counts {
                             let w = width(dc, text, meta);
-                            paint_text(dc, text, meta, span(x, (x + w).min(end)), color);
+                            paint_text(dc, text, meta, span(x, (x + w).min(end)), *color);
                             x += w;
                         }
                     }
@@ -248,44 +240,34 @@ impl TableData {
                         dc,
                         &row.label,
                         small,
-                        span(
-                            scale(if row.flat {
-                                theme::COMPARE_TEXT_INSET
-                            } else {
-                                theme::COMPARE_FIELD_INSET
-                            }),
-                            columns[1] - padding,
-                        ),
-                        if neutral_same {
-                            theme::FAINT
-                        } else {
-                            theme::SECONDARY
-                        },
+                        span(scale(theme::COMPARE_FIELD_INSET), columns[1] - padding),
+                        theme::SECONDARY,
                     );
-                    let tag = verdict.unwrap_or(if row.not_unique {
-                        theme::SECONDARY
-                    } else if row.kind == Change::Same {
-                        theme::FAINT
-                    } else if row.kind == Change::Changed {
-                        theme::TEXT
-                    } else {
-                        theme::SECONDARY
-                    });
-                    paint_text(
+                    paint_tag(
                         dc,
-                        if row.not_unique {
-                            "not unique"
-                        } else {
-                            crate::ui::compare::text::kind_text(row.kind)
-                        },
-                        meta,
+                        row,
+                        if row.not_unique { safe } else { meta },
                         cell(3),
-                        tag,
+                        st.dpi.get(),
+                        verdict.is_some(),
+                        selected,
+                        false,
+                        model.verdicts(),
                     );
                     if row.kind == Change::Changed && !row.generic.iter().any(|g| *g) {
-                        paint_pair(dc, row, data, cell(1), cell(2));
+                        paint_pair(
+                            dc,
+                            row,
+                            data,
+                            [cell(1), cell(2)],
+                            st.dpi.get(),
+                            selected,
+                            model.verdicts(),
+                        );
                     } else {
-                        let color = if neutral_same {
+                        let color = if row.not_unique {
+                            theme::SECONDARY
+                        } else if row.kind == Change::Removed || neutral_same {
                             theme::FAINT
                         } else {
                             theme::TEXT
@@ -295,14 +277,39 @@ impl TableData {
                             &row.before,
                             data,
                             cell(1),
-                            if row.generic[0] { theme::FAINT } else { color },
+                            if row.not_unique {
+                                theme::SECONDARY
+                            } else if row.generic[0] {
+                                theme::FAINT
+                            } else {
+                                color
+                            },
                         );
                         paint_value(
                             dc,
                             &row.after,
                             data,
                             cell(2),
-                            if row.generic[1] { theme::FAINT } else { color },
+                            if row.not_unique {
+                                theme::SECONDARY
+                            } else if row.generic[1] {
+                                theme::FAINT
+                            } else {
+                                color
+                            },
+                        );
+                    }
+                    if row.kind == Change::Removed && !row.before.is_empty() {
+                        let area = cell(1);
+                        fill(
+                            dc,
+                            Rect {
+                                y: area.y + area.h / 2,
+                                w: width(dc, &row.before, data).min(area.w),
+                                h: theme::STROKE,
+                                ..area
+                            },
+                            theme::FAINT,
                         );
                     }
                 }
@@ -312,7 +319,7 @@ impl TableData {
 }
 
 // Unlike TextRenderer's UI label margins, exact advances keep colored monospace runs joined.
-pub(super) fn width(dc: HDC, text: &str, font: HFONT) -> i32 {
+pub(in crate::ui::controls) fn width(dc: HDC, text: &str, font: HFONT) -> i32 {
     let _font = Select::new(dc, font);
     let mut size = windows::Win32::Foundation::SIZE::default();
     let text: Vec<_> = text.encode_utf16().collect();
@@ -332,7 +339,13 @@ fn paint_text(dc: HDC, text: &str, font: HFONT, area: Rect, color: Color) {
     paint_run(dc, text, font, area, color, DT_END_ELLIPSIS);
 }
 
-fn paint_value(dc: HDC, text: &str, font: HFONT, area: Rect, color: Color) {
+pub(in crate::ui::controls) fn paint_value(
+    dc: HDC,
+    text: &str,
+    font: HFONT,
+    area: Rect,
+    color: Color,
+) {
     paint_run(dc, text, font, area, color, DRAW_TEXT_FORMAT(0));
 }
 
@@ -357,7 +370,15 @@ fn paint_run(dc: HDC, text: &str, font: HFONT, area: Rect, color: Color, flags: 
     }
 }
 
-fn paint_pair(dc: HDC, row: &Row, font: HFONT, before: Rect, after: Rect) {
+fn paint_pair(
+    dc: HDC,
+    row: &Row,
+    font: HFONT,
+    cells: [Rect; 2],
+    dpi: u32,
+    selected: bool,
+    highlight: bool,
+) {
     let a: Vec<_> = row.before.chars().collect();
     let b: Vec<_> = row.after.chars().collect();
     let prefix = a.iter().zip(&b).take_while(|(a, b)| a == b).count();
@@ -367,7 +388,7 @@ fn paint_pair(dc: HDC, row: &Row, font: HFONT, before: Rect, after: Rect) {
         .zip(b[prefix..].iter().rev())
         .take_while(|(a, b)| a == b)
         .count();
-    for (chars, area) in [(&a, before), (&b, after)] {
+    for (chars, area) in [(&a, cells[0]), (&b, cells[1])] {
         let shown = chars.iter().enumerate().map(|(i, c)| {
             (
                 *c,
@@ -384,6 +405,26 @@ fn paint_pair(dc: HDC, row: &Row, font: HFONT, before: Rect, after: Rect) {
         for (c, next) in shown.chain(std::iter::once(('\0', theme::FAINT))) {
             if next != color {
                 let w = width(dc, &run, font);
+                if highlight && color == theme::TEXT && w > 0 {
+                    let h = text_height(dc, font);
+                    rounded_rect(
+                        dc,
+                        Rect {
+                            x,
+                            y: area.y + (area.h - h) / 2,
+                            w,
+                            h,
+                        },
+                        dpi::scale(theme::COMPARE_HIGHLIGHT_RADIUS, dpi),
+                        if selected {
+                            theme::BORDER_STRONG
+                        } else {
+                            theme::CARD
+                        },
+                        Some(theme::COMPARE_HIGHLIGHT),
+                        None,
+                    );
+                }
                 paint_value(dc, &run, font, Rect { x, w, ..area }, color);
                 x += w;
                 run.clear();
@@ -392,4 +433,107 @@ fn paint_pair(dc: HDC, row: &Row, font: HFONT, before: Rect, after: Rect) {
             run.push(c);
         }
     }
+}
+
+fn count_parts(row: &Row) -> Vec<(String, Color)> {
+    let mut parts = Vec::new();
+    let captions = legend(row.counts);
+    for (n, caption, color) in [
+        (row.counts[1], captions[2].as_str(), theme::SUCCESS),
+        (row.counts[0], captions[0].as_str(), theme::DANGER),
+        (row.extras[0], "safe", theme::COMPARE_SAFE),
+        (row.extras[1], "added", theme::INFO),
+        (row.extras[2], "removed", theme::INFO),
+        (row.extras[3], "moved", theme::INFO),
+    ] {
+        if n == 0 {
+            continue;
+        }
+        if !parts.is_empty() {
+            parts.push((" · ".to_owned(), theme::FAINT));
+        }
+        parts.push((
+            if color == theme::SUCCESS || color == theme::DANGER {
+                caption.to_owned()
+            } else {
+                format!("{n} {caption}")
+            },
+            color,
+        ));
+    }
+    parts
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_tag(
+    dc: HDC,
+    row: &Row,
+    font: HFONT,
+    area: Rect,
+    dpi: u32,
+    verdict: bool,
+    selected: bool,
+    device: bool,
+    verdicts: bool,
+) {
+    if row.not_unique && !verdicts {
+        paint_text(dc, "safe · not unique", font, area, theme::SECONDARY);
+        return;
+    }
+    let (caption, color, fill_color, border) = if row.not_unique && !device {
+        (
+            "safe · not unique",
+            theme::COMPARE_SAFE,
+            None,
+            Some(theme::COMPARE_SAFE_BORDER),
+        )
+    } else {
+        let (text, color, fill) = match row.kind {
+            Change::Changed if verdict => {
+                ("changed", theme::SUCCESS, Some(theme::COMPARE_CHANGED_FILL))
+            }
+            Change::Same if verdict => ("unchanged", theme::DANGER, Some(theme::COMPARE_SAME_FILL)),
+            Change::Changed => ("changed", theme::SECONDARY, None),
+            Change::Same => ("unchanged", theme::FAINT, None),
+            Change::Added => ("added", theme::INFO, Some(theme::COMPARE_ADDED_FILL)),
+            Change::Removed => ("removed", theme::FAINT, Some(theme::COMPARE_REMOVED_FILL)),
+            Change::Moved => ("moved", theme::SECONDARY, Some(theme::COMPARE_MOVED_FILL)),
+        };
+        (text, color, fill, None)
+    };
+    if fill_color.is_none() && border.is_none() {
+        paint_text(dc, caption, font, area, color);
+        return;
+    }
+    let pad = dpi::scale(theme::COMPARE_CELL_PADDING, dpi);
+    let h = dpi::scale(theme::COMPARE_TAG_HEIGHT, dpi);
+    let tag = Rect {
+        w: width(dc, caption, font) + 2 * pad,
+        y: area.y + (area.h - h) / 2,
+        h,
+        ..area
+    };
+    rounded_rect(
+        dc,
+        tag,
+        dpi::scale(theme::COMPARE_TAG_RADIUS, dpi),
+        if selected {
+            theme::BORDER_STRONG
+        } else {
+            theme::CARD
+        },
+        fill_color,
+        border,
+    );
+    paint_value(
+        dc,
+        caption,
+        font,
+        Rect {
+            x: tag.x + pad,
+            w: tag.w - 2 * pad,
+            ..tag
+        },
+        color,
+    );
 }

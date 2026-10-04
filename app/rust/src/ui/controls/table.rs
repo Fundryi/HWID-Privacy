@@ -1,6 +1,6 @@
 //! Native LISTBOX plumbing and GDI rendering for C2c; no matching logic here.
 
-mod paint;
+pub(super) mod paint;
 
 use super::*;
 use crate::report::compare::Kind as Change;
@@ -10,24 +10,43 @@ use windows::Win32::UI::WindowsAndMessaging::{
     LB_SETTOPINDEX, SB_HORZ,
 };
 
+struct WindowDc(HDC, HWND);
+impl WindowDc {
+    fn new(hwnd: HWND) -> Self {
+        // SAFETY: The list HWND is live on this thread; Drop releases its borrowed DC.
+        Self(unsafe { GetDC(Some(hwnd)) }, hwnd)
+    }
+}
+impl Drop for WindowDc {
+    fn drop(&mut self) {
+        // SAFETY: Matched to GetDC with the same live HWND.
+        unsafe {
+            ReleaseDC(Some(self.1), self.0);
+        }
+    }
+}
+
 pub(super) struct TableData {
     model: Rc<RefCell<Table>>,
     pub(super) brush: Brush,
-    fonts: RefCell<[dpi::Font; 5]>,
+    fonts: RefCell<[dpi::Font; 6]>,
     frame: Cell<Rect>,
     columns: Cell<[i32; 5]>,
     value_widths: Cell<[i32; 2]>,
+    field_width: Cell<i32>,
+    status_width: Cell<i32>,
     resizing: Cell<bool>,
     keys: RefCell<Vec<RowId>>,
 }
 
-fn fonts(dpi: u32) -> win::Result<[dpi::Font; 5]> {
+fn fonts(dpi: u32) -> win::Result<[dpi::Font; 6]> {
     Ok([
         dpi::Font::new(theme::SECTION_META_FONT, dpi)?,
         dpi::Font::new(theme::SMALL_FONT, dpi)?,
         dpi::Font::new(theme::BUTTON_FONT, dpi)?,
         dpi::Font::new(theme::CONTENT_FONT, dpi)?,
         dpi::Font::new(theme::icon_font(theme::ICON_PX), dpi)?,
+        dpi::Font::new(theme::COMPARE_SAFE_FONT, dpi)?,
     ])
 }
 
@@ -40,6 +59,8 @@ impl TableData {
             frame: Cell::new(Rect::default()),
             columns: Cell::new([0; 5]),
             value_widths: Cell::new([0; 2]),
+            field_width: Cell::new(0),
+            status_width: Cell::new(0),
             resizing: Cell::new(false),
             keys: RefCell::new(Vec::new()),
         };
@@ -67,6 +88,24 @@ impl TableData {
             }
         }
         self.value_widths.set(widths);
+        let inset = dpi::scale(
+            theme::COMPARE_FIELD_INSET + theme::COMPARE_CELL_PADDING,
+            dpi,
+        );
+        self.field_width.set(
+            self.model
+                .borrow()
+                .labels()
+                .map(|s| paint::width(dc.0, s, fonts[1].handle()) + inset)
+                .max()
+                .unwrap_or(0)
+                .max(dpi::scale(theme::COMPARE_FIELD_MIN_WIDTH, dpi)),
+        );
+        let tag = paint::width(dc.0, "safe · not unique", fonts[5].handle())
+            + dpi::scale(3 * theme::COMPARE_CELL_PADDING, dpi);
+        let step = dpi::scale(theme::COMPARE_GAP, dpi);
+        self.status_width
+            .set(dpi::scale(theme::COMPARE_STATUS_WIDTH, dpi).max((tag + step - 1) / step * step));
     }
 
     fn scroll_offset(&self, hwnd: HWND) -> i32 {
@@ -90,11 +129,11 @@ impl TableData {
         if self.resizing.replace(true) {
             return;
         }
-        let [before, after] = self.value_widths.get();
-        let scale = |n| dpi::scale(n, st.dpi.get());
-        let status = scale(theme::COMPARE_STATUS_WIDTH);
+        let [mut before, mut after] = self.value_widths.get();
+        let status = self.status_width.get();
+        let minimum_field = self.field_width.get();
         // Let Windows settle both scrollbars before reading the resulting viewport width.
-        let minimum = scale(theme::COMPARE_FIELD_MIN_WIDTH) + before + after + status;
+        let minimum = minimum_field + before + after + status;
         send(st.hwnd, LB_SETHORIZONTALEXTENT, minimum as usize, 0);
         let mut client = RECT::default();
         // SAFETY: Live list window and writable RECT on its owning thread.
@@ -106,10 +145,13 @@ impl TableData {
             }
         }
         let width = client.right;
-        let field = (width - status - before - after).clamp(
-            scale(theme::COMPARE_FIELD_MIN_WIDTH),
-            scale(theme::COMPARE_FIELD_WIDTH),
+        let field = (width - before - after - status).clamp(
+            minimum_field,
+            minimum_field.max(dpi::scale(theme::COMPARE_FIELD_WIDTH, st.dpi.get())),
         );
+        let spare = (width - field - before - after - status).max(0);
+        before += spare / 2;
+        after += spare - spare / 2;
         self.columns.set([
             0,
             field,
@@ -185,10 +227,60 @@ impl TableData {
     }
 
     pub(super) fn click(&self, st: &CtlState, point: LPARAM) {
+        let y = (point.0 >> 16) as i16 as i32;
+        if y < dpi::scale(theme::COMPARE_ROW_HEIGHT, st.dpi.get())
+            && let Some(index) = self.sticky(st.hwnd)
+        {
+            send(st.hwnd, LB_SETCURSEL, index, 0);
+            self.activate(st, None);
+            return;
+        }
         let hit = send(st.hwnd, LB_ITEMFROMPOINT, 0, point.0).0 as u32;
         if hit >> 16 == 0 && (hit & 0xffff) < self.keys.borrow().len() as u32 {
             self.activate(st, None);
         }
+    }
+
+    pub(super) fn reveal_selection(&self, hwnd: HWND) {
+        let selected = send(hwnd, LB_GETCURSEL, 0, 0).0;
+        let top = send(hwnd, LB_GETTOPINDEX, 0, 0).0;
+        if selected == top && top > 0 && self.sticky(hwnd).is_some() {
+            send(hwnd, LB_SETTOPINDEX, (top - 1) as usize, 0);
+        }
+    }
+
+    fn sticky(&self, hwnd: HWND) -> Option<usize> {
+        let top = send(hwnd, LB_GETTOPINDEX, 0, 0).0.max(0) as usize;
+        let model = self.model.borrow();
+        if matches!(model.rows.get(top)?.id, RowId::Section(_)) {
+            return None;
+        }
+        model.rows[..top]
+            .iter()
+            .rposition(|r| matches!(r.id, RowId::Section(_)))
+    }
+
+    pub(super) fn paint_sticky(&self, st: &CtlState) {
+        let Some(index) = self.sticky(st.hwnd) else {
+            return;
+        };
+        let dc = WindowDc::new(st.hwnd);
+        let offset = self.scroll_offset(st.hwnd);
+        let area = client(st.hwnd);
+        self.draw(
+            st,
+            &DRAWITEMSTRUCT {
+                itemID: index as u32,
+                hDC: dc.0,
+                rcItem: RECT {
+                    left: -offset,
+                    top: 0,
+                    right: area.w,
+                    bottom: dpi::scale(theme::COMPARE_ROW_HEIGHT, st.dpi.get()),
+                },
+                ..Default::default()
+            },
+        );
     }
 }
 
@@ -202,12 +294,11 @@ pub(crate) fn table_window_width(hwnd: HWND) -> Option<i32> {
     Some(
         before
             + after
-            + dpi::scale(
-                theme::COMPARE_FIELD_WIDTH
-                    + theme::COMPARE_STATUS_WIDTH
-                    + theme::CONTENT_PADDING.horizontal(),
-                st.dpi.get(),
-            )
+            + t.field_width
+                .get()
+                .max(dpi::scale(theme::COMPARE_FIELD_WIDTH, st.dpi.get()))
+            + t.status_width.get()
+            + dpi::scale(theme::CONTENT_PADDING.horizontal(), st.dpi.get())
             + 2 * theme::STROKE
             + dpi::metric(SM_CXVSCROLL, st.dpi.get()),
     )

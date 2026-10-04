@@ -21,6 +21,79 @@ impl Drop for TaskString {
     }
 }
 
+/// Chooses a plain-text comparison destination, initially beside the executable.
+pub(crate) fn save_compare(owner: HWND, initial_dir: &Path) -> Result<Option<PathBuf>> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows::Win32::UI::Shell::{FOS_OVERWRITEPROMPT, FileSaveDialog, IFileSaveDialog};
+    let _apartment = super::initialize_com()?;
+    // SAFETY: Clock query has no caller-owned pointers and cannot fail.
+    let now = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    let filename = to_wide(&format!(
+        "HWID-COMPARE-{:02}.{:02}.{:04}-{:02};{:02};{:02}.txt",
+        now.wDay, now.wMonth, now.wYear, now.wHour, now.wMinute, now.wSecond
+    ));
+    let folder: Vec<_> = initial_dir
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let title = to_wide("Save comparison as text");
+    let name = to_wide("Text files (*.txt)");
+    let pattern = to_wide("*.txt");
+    let extension = to_wide("txt");
+    // SAFETY: COM initialized on this thread; strings outlive the modal dialog. All COM
+    // interfaces and the returned task-allocator string are owned by RAII wrappers.
+    unsafe {
+        let dialog: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)
+            .map_err(|e| Error::from_win("Create save dialog", e))?;
+        dialog
+            .SetOptions(
+                dialog
+                    .GetOptions()
+                    .map_err(|e| Error::from_win("Read save options", e))?
+                    | FOS_FORCEFILESYSTEM
+                    | FOS_PATHMUSTEXIST
+                    | FOS_OVERWRITEPROMPT,
+            )
+            .map_err(|e| Error::from_win("Set save options", e))?;
+        dialog
+            .SetTitle(PCWSTR(title.as_ptr()))
+            .map_err(|e| Error::from_win("Set save title", e))?;
+        dialog
+            .SetFileTypes(&[COMDLG_FILTERSPEC {
+                pszName: PCWSTR(name.as_ptr()),
+                pszSpec: PCWSTR(pattern.as_ptr()),
+            }])
+            .map_err(|e| Error::from_win("Set save filter", e))?;
+        dialog
+            .SetDefaultExtension(PCWSTR(extension.as_ptr()))
+            .map_err(|e| Error::from_win("Set save extension", e))?;
+        dialog
+            .SetFileName(PCWSTR(filename.as_ptr()))
+            .map_err(|e| Error::from_win("Set save filename", e))?;
+        let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(folder.as_ptr()), None)
+            .map_err(|e| Error::from_win("Open save folder", e))?;
+        dialog
+            .SetFolder(&item)
+            .map_err(|e| Error::from_win("Set save folder", e))?;
+        match dialog.Show(Some(owner)) {
+            Ok(()) => {}
+            Err(e) if e.code() == HRESULT::from_win32(ERROR_CANCELLED.0) => return Ok(None),
+            Err(e) => return Err(Error::from_win("Show save dialog", e)),
+        }
+        let item = dialog
+            .GetResult()
+            .map_err(|e| Error::from_win("Read saved file", e))?;
+        let name = TaskString(
+            item.GetDisplayName(SIGDN_FILESYSPATH)
+                .map_err(|e| Error::from_win("Read save path", e))?,
+        );
+        Ok(Some(PathBuf::from(std::ffi::OsString::from_wide(
+            name.0.as_wide(),
+        ))))
+    }
+}
+
 /// Selects one existing file; filters are (display name, glob pattern) pairs. Cancel is None.
 /// Other failures are recorded and also return None, as required by the picker contract.
 pub fn open_file(

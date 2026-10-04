@@ -535,7 +535,7 @@ pub const COMPARE_FILE_HEIGHT: i32 = 20;
 pub const COMPARE_ROW_HEIGHT: i32 = 24;
 pub const COMPARE_HEADER_HEIGHT: i32 = 24;
 pub const COMPARE_FILTER_HEIGHT: i32 = 28;
-pub const COMPARE_STATUS_WIDTH: i32 = 88;
+pub const COMPARE_STATUS_WIDTH: i32 = 120;
 pub const COMPARE_FIELD_WIDTH: i32 = 200;
 pub const COMPARE_FIELD_MIN_WIDTH: i32 = 140;
 pub const COMPARE_VALUE_MIN_WIDTH: i32 = 150;
@@ -545,6 +545,33 @@ pub const COMPARE_SECTION_INSET: i32 = 8;
 pub const COMPARE_DEVICE_INSET: i32 = 24;
 pub const COMPARE_TEXT_INSET: i32 = 32;
 pub const COMPARE_FIELD_INSET: i32 = 48;
+pub(crate) const COMPARE_SAFE: Color = Color::hex(0xA7F3D0);
+pub(crate) const COMPARE_SAFE_BORDER: Color = Color::hex(0x3F6052);
+pub(crate) const COMPARE_CHANGED_FILL: Color = Color::hex(0x192E23);
+pub(crate) const COMPARE_SAME_FILL: Color = Color::hex(0x311E21);
+pub(crate) const COMPARE_ADDED_FILL: Color = Color::hex(0x1C2634);
+pub(crate) const COMPARE_REMOVED_FILL: Color = Color::hex(0x202024);
+pub(crate) const COMPARE_MOVED_FILL: Color = Color::hex(0x222226);
+pub(crate) const COMPARE_HIGHLIGHT: Color = Color::hex(0x204630);
+pub(crate) const COMPARE_TAG_HEIGHT: i32 = 18;
+pub(crate) const COMPARE_TAG_RADIUS: i32 = 4;
+pub(crate) const COMPARE_HIGHLIGHT_RADIUS: i32 = 2;
+pub(crate) const COMPARE_DOT: i32 = 8;
+pub(crate) const COMPARE_SWATCH: i32 = 10;
+pub(crate) const COMPARE_RING_STROKE: f32 = 1.5;
+pub(crate) const COMPARE_GAP: i32 = 8;
+pub(crate) const COMPARE_TEXT_GAP: i32 = 12;
+pub(crate) const COMPARE_LEGEND_GAP: i32 = 16;
+pub(crate) const COMPARE_SWATCH_GAP: i32 = 6;
+pub(crate) const COMPARE_BAR_MIN: i32 = 120;
+pub(crate) const COMPARE_COUNT_FONT: FontSpec = FontSpec {
+    weight: SEMIBOLD,
+    ..BUTTON_FONT
+};
+pub(crate) const COMPARE_SAFE_FONT: FontSpec = FontSpec {
+    weight: MEDIUM,
+    ..SECTION_META_FONT
+};
 /// Sidebar section button margin (tier A: gap 4).
 pub const SECTION_BUTTON_MARGIN: Pad = pad(12, 0, 12, 4);
 /// Width of the accent bar on the active sidebar item.
