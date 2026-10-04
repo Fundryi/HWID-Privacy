@@ -31,7 +31,7 @@ use windows::{
     core::PCWSTR,
 };
 
-/// Control id of the message text (a label; tests read its window text).
+/// Control id of the message text (a label or scrolling well; tests read its window text).
 pub const TEXT_ID: u16 = 0x0100;
 /// Control id of the status glyph.
 const ICON_ID: u16 = 0x0101;
@@ -120,8 +120,15 @@ fn buttons_of(buttons: Buttons) -> Vec<(u16, &'static str, bool)> {
 
 /// The logical client size: the wrapped text (at most `MSGBOX_TEXT_MAX_WIDTH` wide) next to
 /// the icon, the button row below, the padding around. Measured at `dpi` (the monitor the box
-/// opens on) so the wrap the layout produces there is the one that was measured.
-fn client_size(text: &str, has_icon: bool, button_count: i32, dpi: u32) -> win::Result<Size> {
+/// opens on) so the wrap the layout produces there is the one that was measured. The flag is
+/// true when the text is taller than `MSGBOX_BODY_MAX_HEIGHT`: the body is then a scrolling
+/// well of that height at the full text width (DESIGN.md 15).
+fn client_size(
+    text: &str,
+    has_icon: bool,
+    button_count: i32,
+    dpi: u32,
+) -> win::Result<(Size, bool)> {
     let font = dpi::Font::new(theme::MSGBOX_FONT, dpi)?;
     let label = Ctl::Label(LabelSpec::new(text, theme::MSGBOX_FONT, theme::TEXT));
     let measured = controls::measure(
@@ -135,8 +142,13 @@ fn client_size(text: &str, has_icon: bool, button_count: i32, dpi: u32) -> win::
         },
         dpi,
     );
-    let text_w = dpi::unscale(measured.w, dpi).min(theme::MSGBOX_TEXT_MAX_WIDTH);
-    let text_h = dpi::unscale(measured.h, dpi);
+    let mut text_w = dpi::unscale(measured.w, dpi).min(theme::MSGBOX_TEXT_MAX_WIDTH);
+    let mut text_h = dpi::unscale(measured.h, dpi);
+    let well = text_h > theme::MSGBOX_BODY_MAX_HEIGHT;
+    if well {
+        text_w = theme::MSGBOX_TEXT_MAX_WIDTH;
+        text_h = theme::MSGBOX_BODY_MAX_HEIGHT;
+    }
     let icon_w = if has_icon {
         theme::MSGBOX_ICON_PX + theme::MSGBOX_ICON_MARGIN.horizontal()
     } else {
@@ -145,32 +157,36 @@ fn client_size(text: &str, has_icon: bool, button_count: i32, dpi: u32) -> win::
     let pad = theme::MSGBOX_PADDING;
     let buttons_w =
         button_count * (theme::MSGBOX_BUTTON_MIN_WIDTH + theme::MSGBOX_BUTTON_MARGIN.horizontal());
-    // Slack of a few pixels: the unscaled width must not round below the measured wrap.
-    let w = (pad.horizontal() + icon_w + text_w + 6)
+    // Slack of a few pixels: the unscaled size must not round below the measured wrap.
+    let w = (pad.horizontal() + icon_w + text_w + theme::MSGBOX_WIDTH_SLACK)
         .max(theme::MSGBOX_MIN_WIDTH)
         .max(pad.horizontal() + buttons_w);
-    let body_h = text_h.max(if has_icon { theme::MSGBOX_ICON_PX } else { 0 }) + 4;
+    let body_h =
+        text_h.max(if has_icon { theme::MSGBOX_ICON_PX } else { 0 }) + theme::MSGBOX_HEIGHT_SLACK;
     let h = pad.vertical()
         + body_h
         + theme::MSGBOX_BUTTON_ROW_MARGIN.t
         + theme::MSGBOX_BUTTON_HEIGHT
         + theme::MSGBOX_BUTTON_MARGIN.vertical();
-    Ok(Size { w, h })
+    Ok((Size { w, h }, well))
 }
 
-/// The DPI the box will open at: the owner's, or the system DPI without an owner (no shcore
-/// import; such boxes are rare and sized with slack).
+/// The DPI the box will open at: the owner's, or the cursor monitor's without an owner
+/// (`Form::create` centers an ownerless box on the mouse's monitor).
 fn target_dpi(owner: HWND) -> u32 {
-    use windows::Win32::UI::HiDpi::GetDpiForSystem;
-    if !owner.is_invalid() {
-        return dpi::window_dpi(owner);
+    if owner.is_invalid() {
+        dpi::cursor_dpi()
+    } else {
+        dpi::window_dpi(owner)
     }
-    // SAFETY: Plain value query.
-    let system = unsafe { GetDpiForSystem() };
-    if system == 0 { dpi::BASE_DPI } else { system }
 }
 
-fn tree(text: &str, icon: Icon, buttons: Buttons) -> Vec<Node> {
+/// The edit control breaks lines at CR LF only.
+fn crlf(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
+fn tree(text: &str, icon: Icon, buttons: Buttons, well: bool) -> Vec<Node> {
     let mut body = Vec::new();
     if let Some((g, color)) = icon_of(icon) {
         // The symbol glyph sits on the ring glyph (the Fluent status set is layered).
@@ -193,15 +209,33 @@ fn tree(text: &str, icon: Icon, buttons: Buttons) -> Vec<Node> {
             .cell(0, 0),
         );
     }
-    body.push(
+    let body_node = if well {
+        // A read-only text well (DESIGN.md 15): `CARD` fill, `BORDER` outline, the 10 px
+        // inner margins of every well, word-wrapped, so a vertical bar is the only one. The
+        // text is set at `Created` (CR LF) and the well starts at the top. The default
+        // `Fixed3D` edge is the Log Cleaning path: the kit paints the token frame over the
+        // client edge, with the scroll bar inside it. A `WS_BORDER` multiline edit draws its
+        // own frame inside the client area and leaves the scroll bar outside it.
+        Node::leaf(
+            TEXT_ID,
+            Ctl::Edit(EditSpec::new(theme::MSGBOX_FONT, theme::TEXT, theme::CARD).word_wrap()),
+        )
+        .size(Size {
+            w: theme::MSGBOX_TEXT_MAX_WIDTH,
+            h: theme::MSGBOX_BODY_MAX_HEIGHT,
+        })
+    } else {
         Node::leaf(
             TEXT_ID,
             Ctl::Label(LabelSpec::new(text, theme::MSGBOX_FONT, theme::TEXT)),
         )
         .auto_size()
-        .anchor(Anchor(Anchor::TOP.0 | Anchor::LEFT.0 | Anchor::RIGHT.0))
-        .margin(theme::NO_PAD)
-        .cell(1, 0),
+    };
+    body.push(
+        body_node
+            .anchor(Anchor(Anchor::TOP.0 | Anchor::LEFT.0 | Anchor::RIGHT.0))
+            .margin(theme::NO_PAD)
+            .cell(1, 0),
     );
     let button_nodes = buttons_of(buttons)
         .into_iter()
@@ -264,7 +298,7 @@ fn themed(
 ) -> win::Result<Answer> {
     let has_icon = icon_of(icon).is_some();
     let count = buttons_of(buttons).len() as i32;
-    let size = client_size(text, has_icon, count, target_dpi(owner))?;
+    let (size, well) = client_size(text, has_icon, count, target_dpi(owner))?;
     let mut spec = FormSpec::new(title, WindowSize::Client(size));
     spec.style = FormStyle::FixedDialog;
     spec.start = if owner.is_invalid() {
@@ -290,11 +324,15 @@ fn themed(
     window::run_modal(
         owner,
         spec,
-        tree(&text, icon, buttons),
+        tree(&text, icon, buttons, well),
         move |form, event| {
             match event {
                 Event::Created => {
                     form.edit_set_text(COPY_ID, &text);
+                    if well {
+                        form.edit_set_text(TEXT_ID, &crlf(&text));
+                        form.edit_scroll_to_top(TEXT_ID);
+                    }
                     if buttons == Buttons::YesNo {
                         // Like the native Yes/No box: no X, no Esc.
                         // SAFETY: Menu handle of our own window; the item id is a system command.
@@ -391,28 +429,57 @@ pub(crate) mod testing {
         }
     }
 
-    /// The message text of a themed box (empty while it is still being built).
-    pub fn text(dialog: HWND) -> String {
+    /// The child control `id` of a themed box.
+    pub fn control(dialog: HWND, id: u16) -> Option<HWND> {
         unsafe extern "system" fn visit(h: HWND, data: LPARAM) -> BOOL {
-            // SAFETY: `data` is the Option passed below, alive for the enumeration.
-            let found = unsafe { &mut *(data.0 as *mut Option<HWND>) };
+            // SAFETY: `data` is the pair passed below, alive for the enumeration.
+            let (id, found) = unsafe { &mut *(data.0 as *mut (u16, Option<HWND>)) };
             // SAFETY: Read-only id query of a child window.
-            if unsafe { GetDlgCtrlID(h) } == i32::from(TEXT_ID) {
+            if unsafe { GetDlgCtrlID(h) } == i32::from(*id) {
                 *found = Some(h);
                 return BOOL(0);
             }
             BOOL(1)
         }
-        let mut found: Option<HWND> = None;
-        // SAFETY: Synchronous enumeration whose callback only writes `found`.
+        let mut search: (u16, Option<HWND>) = (id, None);
+        // SAFETY: Synchronous enumeration whose callback only writes `search.1`.
         unsafe {
             let _ = EnumChildWindows(
                 Some(dialog),
                 Some(visit),
-                LPARAM(&mut found as *mut Option<HWND> as isize),
+                LPARAM(&mut search as *mut (u16, Option<HWND>) as isize),
             );
         }
-        found.map(window_text).unwrap_or_default()
+        search.1
+    }
+
+    /// The message text of a themed box (empty while it is still being built).
+    pub fn text(dialog: HWND) -> String {
+        control(dialog, TEXT_ID)
+            .map(window_text)
+            .unwrap_or_default()
+    }
+
+    /// `WxH` of the box's client and of the text control, for the notes.
+    pub fn body_note(dialog: HWND) -> String {
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
+        let mut c = RECT::default();
+        let mut t = RECT::default();
+        // SAFETY: Writable RECTs of live windows.
+        unsafe {
+            let _ = GetClientRect(dialog, &mut c);
+            if let Some(h) = control(dialog, TEXT_ID) {
+                let _ = GetWindowRect(h, &mut t);
+            }
+        }
+        format!(
+            "client {}x{} text {}x{}",
+            c.right - c.left,
+            c.bottom - c.top,
+            t.right - t.left,
+            t.bottom - t.top
+        )
     }
 
     /// Presses the button `id` (`IDOK`, `IDYES`, `IDNO`) by posting its command to the box.
@@ -453,7 +520,12 @@ pub(crate) mod testing {
             let form = Form::create(
                 HWND::default(),
                 spec,
-                tree("Synthetic keyboard check", Icon::Information, buttons),
+                tree(
+                    "Synthetic keyboard check",
+                    Icon::Information,
+                    buttons,
+                    false,
+                ),
                 move |form, event| {
                     if let Event::Click(id) = event {
                         result.set(Some(match i32::from(id) {
@@ -655,9 +727,12 @@ mod tests {
     use std::path::Path;
     use std::time::{Duration, Instant};
     use windows::Win32::Foundation::{LPARAM, RECT, WPARAM};
-    use windows::Win32::UI::WindowsAndMessaging::{IDNO, IDOK, IDYES, SendMessageW, WM_DPICHANGED};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        IDNO, IDOK, IDYES, MESSAGEBOX_RESULT, SendMessageW, WM_DPICHANGED,
+    };
 
     const GOLDEN: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\wp-19";
+    const DESIGN_GOLDEN: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\msgbox-design";
 
     // Real HWND checks inside the existing ignored UI run: no hardware queries or cleaning.
     fn review_regressions() {
@@ -846,10 +921,10 @@ mod tests {
         std::fs::create_dir_all(GOLDEN).unwrap();
         assert!(dpi::set_per_monitor_v2_for_tests(), "PerMonitorV2");
         review_regressions();
-        let cases: Vec<(&str, &str, Buttons, Icon, MESSAGEBOX_RESULT, Answer)> = vec![
+        let cases: Vec<Case> = vec![
             (
                 "Update Check Failed",
-                "Error checking for updates: Failed to get GitHub file SHA256 for HWIDChecker.exe: HTTP GET failed: 0x00000000 HTTP status 404",
+                "Error checking for updates: Failed to get GitHub file SHA256 for HWIDChecker.exe: HTTP GET failed: 0x00000000 HTTP status 404".to_owned(),
                 Buttons::Ok,
                 Icon::Warning,
                 IDOK,
@@ -857,7 +932,7 @@ mod tests {
             ),
             (
                 "Update Available",
-                "A new version is available. Do you want to update now?\n\nThe application will restart after the update.",
+                "A new version is available. Do you want to update now?\n\nThe application will restart after the update.".to_owned(),
                 Buttons::YesNo,
                 Icon::Question,
                 IDYES,
@@ -865,7 +940,7 @@ mod tests {
             ),
             (
                 "Confirm Exit",
-                "Operation in progress. Are you sure you want to close?",
+                "Operation in progress. Are you sure you want to close?".to_owned(),
                 Buttons::YesNo,
                 Icon::Warning,
                 IDNO,
@@ -873,7 +948,7 @@ mod tests {
             ),
             (
                 "Error",
-                "Error during cleaning process: SetupDiGetClassDevsW failed: 0x00000005 Access is denied.",
+                "Error during cleaning process: SetupDiGetClassDevsW failed: 0x00000005 Access is denied.".to_owned(),
                 Buttons::Ok,
                 Icon::Error,
                 IDOK,
@@ -881,14 +956,250 @@ mod tests {
             ),
             (
                 "Refresh",
-                "Hardware data refreshed successfully!",
+                "Hardware data refreshed successfully!".to_owned(),
                 Buttons::Ok,
                 Icon::Information,
                 IDOK,
                 Answer::Ok,
             ),
         ];
-        use windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_RESULT;
+        run_boxes(GOLDEN, cases, true);
+    }
+
+    /// A short box and a 200-line box (the scrolling well), captured at the real DPI and a
+    /// synthetic 144 DPI into `golden/msgbox-design`; no keyboard checks.
+    #[test]
+    #[ignore = "opens real windows"]
+    fn msgbox_design_boxes() {
+        std::fs::create_dir_all(DESIGN_GOLDEN).unwrap();
+        assert!(dpi::set_per_monitor_v2_for_tests(), "PerMonitorV2");
+        let long = (1..=200)
+            .map(|i| format!("Line {i}: SetupDiGetClassDevsW failed for a device instance path."))
+            .collect::<Vec<_>>()
+            .join("\n");
+        review_message_body(&long);
+        run_boxes(
+            DESIGN_GOLDEN,
+            vec![
+                (
+                    "Refresh",
+                    "Hardware data refreshed successfully!".to_owned(),
+                    Buttons::Ok,
+                    Icon::Information,
+                    IDOK,
+                    Answer::Ok,
+                ),
+                ("Error", long, Buttons::Ok, Icon::Error, IDOK, Answer::Ok),
+            ],
+            false,
+        );
+    }
+
+    // Real controls and the real dialog translator, with WM_COPY intercepted so the owner's
+    // clipboard is untouched. Checks the full selection sent to native copy, not just text.
+    fn review_message_body(long: &str) {
+        use super::super::window::Form;
+        use windows::Win32::Foundation::{LRESULT, SIZE};
+        use windows::Win32::UI::Controls::{EM_GETFIRSTVISIBLELINE, EM_GETSEL};
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            GetFocus, SetKeyboardState, VK_CONTROL, VK_END, VK_HOME, VK_NEXT, VK_TAB,
+        };
+        use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GWL_STYLE, GetWindowLongPtrW, MSG, WM_COPY, WM_GETDPISCALEDSIZE, WM_KEYDOWN,
+            WS_HSCROLL, WS_VSCROLL,
+        };
+        unsafe extern "system" fn copy_probe(
+            h: HWND,
+            msg: u32,
+            w: WPARAM,
+            l: LPARAM,
+            _: usize,
+            data: usize,
+        ) -> LRESULT {
+            if msg == WM_COPY {
+                let (mut start, mut end) = (0u32, 0u32);
+                // SAFETY: Synchronous selection query into live, writable u32 values. The
+                // Cell passed as subclass data stays alive until the subclass is removed.
+                unsafe {
+                    SendMessageW(
+                        h,
+                        EM_GETSEL,
+                        Some(WPARAM(&mut start as *mut u32 as usize)),
+                        Some(LPARAM(&mut end as *mut u32 as isize)),
+                    );
+                    (*(data as *const Cell<(u32, u32)>)).set((start, end));
+                }
+                return LRESULT(0);
+            }
+            // SAFETY: Forwards unmodified parameters along the native subclass chain.
+            unsafe { DefSubclassProc(h, msg, w, l) }
+        }
+        struct CopyProbe(HWND);
+        impl Drop for CopyProbe {
+            fn drop(&mut self) {
+                // SAFETY: Removes only our subclass before its borrowed Cell goes out of scope.
+                unsafe {
+                    let _ = RemoveWindowSubclass(self.0, Some(copy_probe), 99);
+                }
+            }
+        }
+        for text in ["Hardware data refreshed successfully!", long] {
+            for buttons in [Buttons::Ok, Buttons::YesNo] {
+                let real = target_dpi(HWND::default());
+                let (size, well) =
+                    client_size(text, true, buttons_of(buttons).len() as i32, real).unwrap();
+                let default = if buttons == Buttons::Ok { IDOK } else { IDYES };
+                let mut spec = FormSpec::new("Codex message-body review", WindowSize::Client(size));
+                spec.style = FormStyle::FixedDialog;
+                spec.message_box = true;
+                spec.accept = Some(default.0 as u16);
+                spec.cancel = (buttons == Buttons::Ok).then_some(IDOK.0 as u16);
+                spec.copy_on_ctrl_c = Some(COPY_ID);
+                let form = Form::create(
+                    HWND::default(),
+                    spec.clone(),
+                    tree(text, Icon::Error, buttons, well),
+                    |_, _| true,
+                )
+                .unwrap();
+                form.edit_set_text(COPY_ID, text);
+                if well {
+                    form.edit_set_text(TEXT_ID, &crlf(text));
+                    form.edit_scroll_to_top(TEXT_ID);
+                }
+                form.show();
+                let copy = form.control(COPY_ID).unwrap();
+                let selection = Cell::new((u32::MAX, u32::MAX));
+                // SAFETY: The subclass borrows selection only during synchronous messages;
+                // its guard removes it before selection or the form is dropped.
+                let installed = unsafe {
+                    SetWindowSubclass(copy, Some(copy_probe), 99, &selection as *const _ as usize)
+                };
+                assert!(installed.as_bool());
+                let probe = CopyProbe(copy);
+                // SAFETY: Keyboard state belongs to this test thread; no desktop input is sent.
+                unsafe {
+                    SetKeyboardState(&[0; 256]).unwrap();
+                    assert_eq!(GetFocus(), form.control(default.0 as u16).unwrap());
+                    let key = |vk: u16| MSG {
+                        hwnd: GetFocus(),
+                        message: WM_KEYDOWN,
+                        wParam: WPARAM(vk as usize),
+                        ..Default::default()
+                    };
+                    assert!(window::pre_translate(&key(VK_TAB.0)));
+                    assert_eq!(
+                        GetFocus(),
+                        if well {
+                            form.control(TEXT_ID).unwrap()
+                        } else if buttons == Buttons::YesNo {
+                            form.control(IDNO.0 as u16).unwrap()
+                        } else {
+                            form.control(IDOK.0 as u16).unwrap()
+                        }
+                    );
+                    let mut keys = [0; 256];
+                    keys[VK_CONTROL.0 as usize] = 0x80;
+                    SetKeyboardState(&keys).unwrap();
+                    assert!(window::pre_translate(&key(u16::from(b'C'))));
+                    SetKeyboardState(&[0; 256]).unwrap();
+                    assert_eq!(
+                        selection.get(),
+                        (0, text.encode_utf16().count() as u32),
+                        "Ctrl+C selects all original text"
+                    );
+                    assert_eq!(testing::text(form.hwnd()).replace("\r\n", "\n"), text);
+                    if well {
+                        let edit = form.control(TEXT_ID).unwrap();
+                        let line = || SendMessageW(edit, EM_GETFIRSTVISIBLELINE, None, None).0;
+                        assert_eq!(line(), 0, "well opens at top");
+                        let page = key(VK_NEXT.0);
+                        // IsDialogMessage may dispatch a key the edit requests itself.
+                        if !window::pre_translate(&page) {
+                            SendMessageW(edit, WM_KEYDOWN, Some(page.wParam), Some(LPARAM(0)));
+                        }
+                        assert!(line() > 0, "PageDown scrolls");
+                        SetKeyboardState(&keys).unwrap();
+                        SendMessageW(
+                            edit,
+                            WM_KEYDOWN,
+                            Some(WPARAM(VK_END.0 as usize)),
+                            Some(LPARAM(0)),
+                        );
+                        assert!(line() > 100, "Ctrl+End reaches tail");
+                        SendMessageW(
+                            edit,
+                            WM_KEYDOWN,
+                            Some(WPARAM(VK_HOME.0 as usize)),
+                            Some(LPARAM(0)),
+                        );
+                        SetKeyboardState(&[0; 256]).unwrap();
+                        assert_eq!(line(), 0, "Ctrl+Home returns to top");
+                        assert!(window::pre_translate(&key(VK_TAB.0)));
+                        assert_eq!(
+                            GetFocus(),
+                            form.control(if buttons == Buttons::Ok { IDOK } else { IDNO }.0 as u16)
+                                .unwrap()
+                        );
+                    }
+                    for dpi in [96, 144] {
+                        let mut outer = SIZE::default();
+                        assert_eq!(
+                            SendMessageW(
+                                form.hwnd(),
+                                WM_GETDPISCALEDSIZE,
+                                Some(WPARAM(dpi as usize)),
+                                Some(LPARAM(&mut outer as *mut SIZE as isize))
+                            )
+                            .0,
+                            1
+                        );
+                        let (style, ex) = window::styles(&spec);
+                        let expected =
+                            dpi::outer_for_client(dpi::scale_size(size, dpi), style, ex, dpi)
+                                .unwrap();
+                        assert_eq!(
+                            (outer.cx, outer.cy),
+                            (expected.w, expected.h),
+                            "production DPI frame"
+                        );
+                        assert!(
+                            outer.cx <= dpi::scale(1280, dpi) && outer.cy <= dpi::scale(672, dpi),
+                            "smallest DESIGN work area"
+                        );
+                    }
+                    if well {
+                        let style =
+                            GetWindowLongPtrW(form.control(TEXT_ID).unwrap(), GWL_STYLE) as u32;
+                        assert_ne!(style & WS_VSCROLL.0, 0);
+                        assert_eq!(style & WS_HSCROLL.0, 0);
+                    }
+                }
+                drop(probe);
+                form.destroy();
+            }
+        }
+        testing::review_keyboard();
+        println!(
+            "RESULT Codex: short/long OK and YesNo default focus, Tab, full Ctrl+C selection/WM_COPY, PageDown/Ctrl+End/Ctrl+Home, and production frame/work-area fit at 96/144 DPI passed; clipboard untouched"
+        );
+    }
+
+    /// `(title, text, buttons, icon, button to press, expected answer)`.
+    type Case = (
+        &'static str,
+        String,
+        Buttons,
+        Icon,
+        MESSAGEBOX_RESULT,
+        Answer,
+    );
+
+    /// Shows every case ownerless, captures `msgbox-{i}-{dpi}dpi.png` and the synthetic other
+    /// DPI into `golden`, presses the button by HWND and checks the text and answer. With
+    /// `keyboard`, the first three cases also exercise Esc, Enter, X and Tab.
+    fn run_boxes(golden: &'static str, cases: Vec<Case>, keyboard: bool) {
         for (i, (title, text, buttons, icon, reply, expected)) in cases.into_iter().enumerate() {
             let title_owned = title.to_owned();
             let helper = std::thread::spawn(move || {
@@ -911,25 +1222,33 @@ mod tests {
                 let shown = testing::text(h);
                 let mut notes = vec![format!("{title_owned}: {shown:?}")];
                 let real = dpi::window_dpi(h);
+                assert_eq!(target_dpi(HWND::default()), real, "ownerless box DPI");
                 notes.push(
                     testing::capture(
                         h,
-                        &Path::new(GOLDEN).join(format!("msgbox-{i}-{real}dpi.png")),
+                        &Path::new(golden).join(format!("msgbox-{i}-{real}dpi.png")),
                     )
                     .unwrap_or_else(|e| e),
                 );
+                notes.push(format!("real {real}: {}", testing::body_note(h)));
                 let other = if real == 96 { 144 } else { 96 };
                 let mut r = RECT::default();
-                // SAFETY: Writable RECT of a live window.
+                let mut c = RECT::default();
+                // SAFETY: Writable RECTs of a live window.
                 unsafe {
                     let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut r);
+                    let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(h, &mut c);
                 }
+                // Scale the client only: Windows keeps the real monitor's frame around a
+                // synthetic DPI change, so a linearly scaled outer rect would starve the body.
                 let f = |v: i32| v * other as i32 / real as i32;
+                let frame_w = r.right - r.left - c.right;
+                let frame_h = r.bottom - r.top - c.bottom;
                 let s = RECT {
                     left: r.left,
                     top: r.top,
-                    right: r.left + f(r.right - r.left),
-                    bottom: r.top + f(r.bottom - r.top),
+                    right: r.left + f(c.right) + frame_w,
+                    bottom: r.top + f(c.bottom) + frame_h,
                 };
                 // SAFETY: Synchronous message with a pointer to a live RECT; the UI thread pumps.
                 unsafe {
@@ -944,13 +1263,14 @@ mod tests {
                 notes.push(
                     testing::capture(
                         h,
-                        &Path::new(GOLDEN).join(format!("msgbox-{i}-synthetic-{other}.png")),
+                        &Path::new(golden).join(format!("msgbox-{i}-synthetic-{other}.png")),
                     )
                     .unwrap_or_else(|e| e),
                 );
+                notes.push(format!("synthetic {other}: {}", testing::body_note(h)));
                 // These cases exercise keyboard translation, not just command-by-id clicks.
                 // A delayed fallback still closes the test window if a keyboard check fails.
-                if i <= 2 {
+                if keyboard && i <= 2 {
                     use windows::Win32::UI::Input::KeyboardAndMouse::{
                         VK_ESCAPE, VK_RETURN, VK_TAB,
                     };
@@ -979,12 +1299,13 @@ mod tests {
                 drop(press);
                 (shown, notes)
             });
-            let answer = show(HWND::default(), text, title, buttons, icon);
+            let answer = show(HWND::default(), &text, title, buttons, icon);
             let (shown, notes) = helper.join().unwrap();
             for n in notes {
                 println!("RESULT {n}");
             }
-            assert_eq!(shown, text);
+            // The well stores CR LF; the label and the hidden copy keep the text as given.
+            assert_eq!(shown.replace("\r\n", "\n"), text);
             assert_eq!(answer, expected, "{title}");
         }
     }

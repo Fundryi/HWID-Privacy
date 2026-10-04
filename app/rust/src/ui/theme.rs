@@ -303,6 +303,8 @@ pub const ICON_PX: i32 = 16;
 pub const MSGBOX_ICON_PX: i32 = 24;
 /// Gap between a button icon and its text.
 pub const ICON_GAP: i32 = 8;
+/// Point size of the probe font that resolves the icon face once (`dpi::icon_face`).
+pub const ICON_PROBE_POINTS: f32 = 12.0;
 
 /// The icon font at `px` logical pixels; the face is resolved once (`dpi::icon_face`).
 pub fn icon_font(pixels: i32) -> FontSpec {
@@ -446,6 +448,8 @@ pub const SECTION_BUTTON_MARGIN: Pad = pad(12, 0, 12, 4);
 pub const SIDEBAR_ACCENT_WIDTH: i32 = 2;
 /// Vertical inset of the accent bar (top and bottom).
 pub const SIDEBAR_ACCENT_INSET: i32 = 4;
+/// Corner radius of the accent bar (device pixels, never scaled; `DESIGN.md` 11.7).
+pub const SIDEBAR_ACCENT_RADIUS: i32 = 1;
 /// Sidebar tiers (`DESIGN.md` section 11): item height, gap below, title height and gap,
 /// subtitle shown. The first tier whose content fits the sidebar is used.
 pub struct SidebarTier {
@@ -642,6 +646,13 @@ pub const MSGBOX_ICON_MARGIN: Pad = pad(0, 0, 14, 0);
 pub const MSGBOX_TEXT_MAX_WIDTH: i32 = 440;
 /// Minimum client width.
 pub const MSGBOX_MIN_WIDTH: i32 = 320;
+/// Width slack added to the measured wrap, so the unscaled width never rounds below it.
+pub const MSGBOX_WIDTH_SLACK: i32 = 6;
+/// Height slack added to the measured body, for the same rounding reason.
+pub const MSGBOX_HEIGHT_SLACK: i32 = 4;
+/// Tallest wrapped text body (logical px). Longer text goes into a scrolling well of this
+/// height, so the box fits every work area of `DESIGN.md` 11 (client 106 + body at 96 DPI).
+pub const MSGBOX_BODY_MAX_HEIGHT: i32 = 360;
 /// Gap between the text and the button row.
 pub const MSGBOX_BUTTON_ROW_MARGIN: Pad = pad(0, 20, 0, 0);
 /// Button minimum width.
