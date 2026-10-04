@@ -197,6 +197,15 @@ Paddings and margins are multiples of 4: content 12, header card 12/8 with an 8 
 - **Masking:** the header has three columns (titles fill, mask and Copy auto-size). The toggle stays enabled, hides with the header during loading and survives refreshes. Toggling re-renders the current section while retaining its first visible line. Whole-token matches use the provider's identifiers, de-duplicated and longest first; values shorter than four characters stay unchanged. Loading/error bodies without IDs stay unchanged. Old View applies the same mask to its fresh collection.
 - **C3 JSON export.** `Export` writes the `.txt` and a `.json` with the same stamp in one click; the success text gains `JSON: {path}`. No new control, no dialog, no footer change. Text bytes are unchanged when masking is off. JSON is pretty (two spaces), CRLF, UTF-8 without BOM: `app`, `version`, local ISO `exported`, `masked`, provider-ordered `sections` with `title`, CRLF-split `lines` (one trailing empty line dropped, empty body gives `[]`) and `ids` (order and duplicates retained). No diagnostic fields. The single clock snapshot names both files. Text is written first; a JSON failure keeps it and shows the existing Export Error box. With masking on, both files use masked sections and the `-MASKED` filename suffix.
 
+### 13.1 Find in the displayed text (C4)
+
+- The main content table has header, find bar, and well rows. Old View has the same shared bar above its well inside the 12 px panel. The bar is hidden until `Ctrl+F`; it is unavailable during main-window loading.
+- The bar is 28 px tall with an 8 px bottom gap: a filling input (minimum 160, cue `Find`, 256 UTF-16 unit limit), 8 px gap, count (minimum 72, auto width, 12/400 `SECONDARY`), 8 px gap, icon-only outline `Previous match` (ChevronUp `E70E`), 4 px gap, `Next match` (ChevronDown `E70D`), 8 px gap, `Close find` (Cancel `E711`). Buttons are 28 x 28; inputs use the kit's radius-6 frame and focus ring. Counts have no status color.
+- `Ctrl+F` opens or focuses the input and selects its query. A nonempty, single-line well selection of up to 256 UTF-16 units seeds the query. Search is plain, case-insensitive (`to_lowercase`) over the exact displayed CRLF text, with match offsets mapped back to UTF-16 for the native selection.
+- Typing searches from the current selection start; Next searches from its end, Previous backwards from its start, both wrapping. The count is `{i} of {n}`, `No matches` for a nonempty unsuccessful query, or empty for an empty query. Previous/Next are disabled at zero matches. The selected match scrolls into view and stays visible while the input has focus.
+- A section, reload, or mask change re-searches changed well text from the top. With no matches the selection is cleared. Closing hides the row, restores the well's height, and focuses the well without clearing its selection. Queries are local to each window and survive closing its bar.
+- `Enter` / `Shift+Enter` in the input and `F3` / `Shift+F3` anywhere while the bar is shown select next / previous. `Esc` closes only with focus in the input or one of the three find buttons; elsewhere it keeps the existing behavior. Tab order is input, Previous, Next, Close, well (disabled buttons are skipped).
+
 ## 14. Icons
 
 Icons are glyphs of the Windows icon font, tinted like the text they sit next to: `Segoe Fluent Icons` on Windows 11, `Segoe MDL2 Assets` on Windows 10 (the same code points; no font file is shipped). The face is resolved once by creating the font and reading back the face GDI selected, because GDI substitutes an unknown face silently. 16 px at 100 percent in buttons and the sidebar, 8 px gap to the text; 24 px in message boxes. A button with an icon measures icon + gap + text, placed as one block (centered in footer and dialog buttons, left in the sidebar).
@@ -234,9 +243,9 @@ Icons are glyphs of the Windows icon font, tinted like the text they sit next to
 | Mask IDs (off) | Hide | `ED1A` |
 | Compare Exports | Switch | `E8AB` |
 | Startup Update Check | Sync | `E895` |
-| find: previous (kit glyph for step 2b) | ChevronUp | `E70E` |
-| find: next (kit glyph for step 2b) | ChevronDown | `E70D` |
-| find: close (kit glyph for step 2b) | Cancel | `E711` |
+| find: previous | ChevronUp | `E70E` |
+| find: next | ChevronDown | `E70D` |
+| find: close | Cancel | `E711` |
 
 The section lookup keeps the C# `GetSectionIcon` order (lower-case `Contains`, first match wins) with `chassis` and `bluetooth` matched before the generic words, so every section gets its own glyph. The C# button texts drop their emoji prefix (`↻ Refresh` is `Refresh` with the Refresh glyph; `⟳ Checking...` is `Checking...`); the texts after the prefix are unchanged.
 
@@ -273,11 +282,10 @@ The rules below are binding for the features C1, C2, C3, C4, C5 and C8 of `docs/
 ### 18.3 Per feature
 
 - **C2 Compare Exports.** Two open-file dialogs (before, after), then a modal window `Compare Exports` (1000 x 700 scaled, minimum 640 x 400): the header card with `Before`/`After` file names (11/600 `SECONDARY` labels, 13/400 `TEXT` names, ellipsis), the summary `Changed n · Added n · Removed n · Same n` in 11/600 `FAINT`, `Copy` 72 x 28; the well (`CARD`, Consolas 10 pt, no wrap) lists rows per section with a kind column `changed` / `removed` / `added` / `same`. No colors in rows (section 3) and none on the summary: a count is not a status and the tool cannot know whether a change is good. Esc closes.
-- **C4 Find.** A 28 px bar between the header card and the well (main) or above the well (Old View), 8 px gap below, hidden until `Ctrl+F`: input (fills, min 160), count `{i} of {n}` / `No matches` in 12/400 `SECONDARY`, icon-only `Previous match` (ChevronUp `E70E`), `Next match` (ChevronDown `E70D`) 4 px apart, `Close find` (Cancel `E711`); gaps 8. A match is the well's selection (the system highlight, section 5 exception). Previous/Next are disabled at 0 matches; the count label is the reason.
 
 ### 18.5 Status map additions (section 3)
 
 | Meaning | Color |
 |---|---|
 | update available (footer button notice) | `INFO` |
-| compare counts, find counts | none (`FAINT` / `SECONDARY` text) |
+| compare counts | none (`FAINT` text) |

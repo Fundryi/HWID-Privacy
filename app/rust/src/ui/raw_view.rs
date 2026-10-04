@@ -119,28 +119,48 @@ fn show_report(owner: HWND, report: String) -> win::Result<()> {
         .word_wrap()
         .keep_selection(),
     );
+    let find = super::find::Find::new(TEXT);
+    let well = Node::leaf(TEXT, edit).fill().cell(0, 1);
+    let mut bar = super::find::bar().cell(0, 0);
+    // Keep the existing well margins, but align the bar with its frame. Move the well's
+    // top inset above the bar so the visible gap stays 8 and the row still costs 36 px.
+    bar.margin.l = well.margin.l;
+    bar.margin.r = well.margin.r;
+    bar.margin.t = well.margin.t;
+    bar.margin.b -= well.margin.t;
     window::run_modal(
         owner,
         spec,
         vec![
-            Node::panel(vec![Node::leaf(TEXT, edit).fill()])
-                .fill()
-                .padding(theme::OUTPUT_PANEL_PADDING),
+            Node::table(
+                vec![super::layout::Track::Percent(100.0)],
+                vec![
+                    super::layout::Track::AutoSize,
+                    super::layout::Track::Percent(100.0),
+                ],
+                vec![bar, well],
+            )
+            .fill()
+            .padding(theme::OUTPUT_PANEL_PADDING),
         ],
         move |form, event| {
             if let Event::Key(key) = event {
-                return on_find_key(form, key);
+                return on_find_key(form, &find, key);
+            }
+            if find.event(form, &event) {
+                return true;
             }
             if let Event::Created = event {
                 form.edit_set_text(TEXT, &report);
                 form.edit_scroll_to_top(TEXT);
             }
+            find.refresh(form);
             true
         },
     )
 }
 
 // Step 2b installs the shared find component here.
-fn on_find_key(_form: &window::Form, _key: window::FindKey) -> bool {
-    false
+fn on_find_key(form: &window::Form, find: &super::find::Find, key: window::FindKey) -> bool {
+    find.key(form, key)
 }
