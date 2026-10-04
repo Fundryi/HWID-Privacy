@@ -573,7 +573,7 @@ fn client_size(hwnd: HWND) -> Size {
 
 fn fill_client(hwnd: HWND, hdc: HDC, brush: &controls::Brush) {
     let mut rc = RECT::default();
-    // SAFETY: Valid window, DC from the erase message, and owned brush.
+    // SAFETY: Valid window, paint buffer DC, and owned brush.
     unsafe {
         let _ = GetClientRect(hwnd, &mut rc);
         FillRect(hdc, &rc, brush.handle());
@@ -583,21 +583,33 @@ fn fill_client(hwnd: HWND, hdc: HDC, brush: &controls::Brush) {
 /// Validates a container's update region, paints its card outline when it has one, and the
 /// focus ring of its focused button (nothing is painted while the window is minimized,
 /// DESIGN.md 8.6).
-fn paint_container(hwnd: HWND, back: Color, card: Option<(Color, i32)>) {
+fn paint_container(hwnd: HWND, back: Color, card: Option<(Color, i32)>, brush: &controls::Brush) {
     let paint = controls::Paint::begin(hwnd);
     let root = root_of(hwnd);
     // SAFETY: Read-only state query of the top-level window.
     if unsafe { IsIconic(root) }.as_bool() {
         return;
     }
-    if let Some((outer, radius)) = card {
-        let dpi = form_state(root).map_or(dpi::BASE_DPI, |s| s.dpi.get());
-        controls::paint_card(hwnd, paint.hdc(), outer, back, dpi::scale(radius, dpi));
-    }
-    controls::paint_focus_ring(hwnd, paint.hdc(), back);
-    // The ring buffer fills its interior with the container color; restore the input's
-    // frame and padding afterward (the native EDIT occupies only its centered text area).
-    controls::paint_input_frames(hwnd, paint.hdc(), back);
+    let size = client_size(hwnd);
+    let area = Rect {
+        x: 0,
+        y: 0,
+        w: size.w,
+        h: size.h,
+    };
+    // The background, rounded card and focus ring must reach the screen together. Drawing
+    // the background in WM_ERASEBKGND exposes the outer color before the card is ready.
+    controls::buffered(paint.hdc(), area, |hdc| {
+        fill_client(hwnd, hdc, brush);
+        if let Some((outer, radius)) = card {
+            let dpi = form_state(root).map_or(dpi::BASE_DPI, |s| s.dpi.get());
+            controls::paint_card(hwnd, hdc, outer, back, dpi::scale(radius, dpi));
+        }
+        controls::paint_focus_ring(hwnd, hdc, back);
+        // The ring buffer fills its interior with the container color; restore the input's
+        // frame and padding afterward (the native EDIT occupies only its centered text area).
+        controls::paint_input_frames(hwnd, hdc, back);
+    });
 }
 
 impl FormState {
@@ -1112,7 +1124,7 @@ fn assign_ids(node: &mut Node, next: &mut u16) {
 fn create_panel(parent: HWND, node: &Node, back: Color, outer: Color) -> win::Result<HWND> {
     let state = Rc::new(PanelState {
         back,
-        // A card erases with the parent's color; the rounded fill is painted over it.
+        // The parent's color appears only under the card's rounded corners.
         brush: controls::Brush::new(if node.card_radius.is_some() {
             outer
         } else {
@@ -1200,14 +1212,11 @@ fn panel_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option
             }
             None
         }
-        WM_ERASEBKGND => {
-            let state: Rc<PanelState> = user_rc(hwnd, atoms().panel)?;
-            fill_client(hwnd, HDC(wparam.0 as *mut core::ffi::c_void), &state.brush);
-            Some(LRESULT(1))
-        }
+        // WM_PAINT covers the background in the same buffer as the card and focus ring.
+        WM_ERASEBKGND => Some(LRESULT(1)),
         WM_PAINT => {
             let state: Rc<PanelState> = user_rc(hwnd, atoms().panel)?;
-            paint_container(hwnd, state.back, state.card);
+            paint_container(hwnd, state.back, state.card, &state.brush);
             Some(LRESULT(0))
         }
         WM_VSCROLL => {
@@ -1311,14 +1320,10 @@ fn form_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
     }
     let state = form_state(hwnd)?;
     match msg {
-        WM_ERASEBKGND => {
-            let brush = state.brush.borrow();
-            let b = brush.as_ref()?;
-            fill_client(hwnd, HDC(wparam.0 as *mut core::ffi::c_void), b);
-            Some(LRESULT(1))
-        }
+        WM_ERASEBKGND => Some(LRESULT(1)),
         WM_PAINT => {
-            paint_container(hwnd, state.spec.back, None);
+            let brush = state.brush.borrow();
+            paint_container(hwnd, state.spec.back, None, brush.as_ref()?);
             Some(LRESULT(0))
         }
         WM_SIZE => {
