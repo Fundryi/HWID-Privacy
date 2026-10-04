@@ -15,7 +15,7 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     out.source("native SetupAPI");
     let result = (|| {
         let set = DevInfoSet::enum_present_all()?;
-        let device_serials = win::usbhub::serials();
+        let device_strings = win::usbhub::descriptors();
         let mut first = true;
         for device in set.devices()? {
             let instance_id = match device.instance_id() {
@@ -26,9 +26,28 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                     continue;
                 }
             };
-            let Some(serial) = serial_from_instance_id(&instance_id) else {
+            if !instance_id
+                .get(..3)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("USB"))
+            {
                 continue;
+            }
+            let serial = serial_from_instance_id(&instance_id);
+            let strings = match device.property_string(SPDRP_DRIVER) {
+                Ok(key) => device_strings.get(&key.to_ascii_uppercase()),
+                Err(error) => {
+                    out.fallback_failed("USB driver key association", &error);
+                    None
+                }
             };
+            let device_serial = strings.and_then(|strings| strings.serial.as_deref());
+            let instance_tail = instance_id.rsplit_once('\\').map(|(_, tail)| tail);
+            if serial.is_none()
+                && !device_serial
+                    .is_some_and(|value| instance_tail.is_some_and(|tail| value != tail))
+            {
+                continue;
+            }
             let name = match device.property_string(SPDRP_FRIENDLYNAME) {
                 Ok(name) => name,
                 Err(error) => {
@@ -53,14 +72,24 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
                 }
             };
             append_device(out, &mut first, &name, serial);
-            match device.property_string(SPDRP_DRIVER) {
-                Ok(key) => {
-                    if let Some(device_serial) = device_serials.get(&key.to_ascii_uppercase()) {
-                        append_device_serial(out, serial, device_serial);
-                    }
+            if let Some(device_serial) = device_serial {
+                append_device_serial(out, instance_tail.unwrap_or_default(), device_serial);
+            }
+            if let Some(strings) = strings {
+                if let Some(manufacturer) = &strings.manufacturer {
+                    out.info("Device Manufacturer", manufacturer);
                 }
+                if let Some(product) = &strings.product {
+                    out.info("Device Product", product);
+                }
+            }
+            match set.container_id(&instance_id) {
+                Ok(Some(container)) => {
+                    out.id("Container ID", &container);
+                }
+                Ok(None) => {}
                 Err(error) => {
-                    out.fallback_failed("USB driver key association", &error);
+                    out.fallback_failed("SetupAPI Container ID", &error);
                 }
             }
         }
@@ -85,13 +114,16 @@ fn serial_from_instance_id(instance_id: &str) -> Option<&str> {
     (!serial.contains(['&', '.', '{'])).then_some(serial)
 }
 
-fn append_device(out: &mut Out, first: &mut bool, name: &str, serial: &str) {
+fn append_device(out: &mut Out, first: &mut bool, name: &str, serial: Option<&str>) {
     // C# parity: Hardware/UsbInfo.cs:41-47. Separators occur only between devices.
     if !*first {
         out.separator();
     }
     *first = false;
-    out.info("Device", name).id("Serial", serial);
+    out.info("Device", name);
+    if let Some(serial) = serial {
+        out.id("Serial", serial);
+    }
 }
 
 fn append_device_serial(out: &mut Out, serial: &str, device_serial: &str) {
@@ -133,9 +165,9 @@ mod tests {
         assert_eq!(out.finish().body, "");
         out = Out::new();
         let mut first = true;
-        append_device(&mut out, &mut first, "USB Receiver", "83917A5E");
+        append_device(&mut out, &mut first, "USB Receiver", Some("83917A5E"));
         append_device_serial(&mut out, "83917A5E", "83917A5E");
-        append_device(&mut out, &mut first, "", "60A44C1F83D2");
+        append_device(&mut out, &mut first, "", Some("60A44C1F83D2"));
         let section = out.finish();
         assert_eq!(
             section.body,
@@ -143,7 +175,7 @@ mod tests {
         );
         assert_eq!(section.ids, ["83917A5E", "60A44C1F83D2"]);
         let mut differing = Out::new();
-        append_device(&mut differing, &mut true, "USB Receiver", "83917A5E");
+        append_device(&mut differing, &mut true, "USB Receiver", Some("83917A5E"));
         append_device_serial(&mut differing, "83917A5E", "83917a5e");
         let differing = differing.finish();
         assert_eq!(

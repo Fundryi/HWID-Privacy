@@ -7,13 +7,17 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CR_SUCCESS, DIGCF_ALLCLASSES, DIGCF_PRESENT, HDEVINFO, SETUP_DI_GET_CLASS_DEVS_FLAGS,
     SETUP_DI_REGISTRY_PROPERTY, SP_DEVINFO_DATA, SPDRP_HARDWAREID, SetupDiDestroyDeviceInfoList,
     SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, SetupDiGetDeviceInstanceIdW,
-    SetupDiGetDeviceRegistryPropertyW, SetupDiRemoveDevice,
+    SetupDiGetDevicePropertyW, SetupDiGetDeviceRegistryPropertyW, SetupDiOpenDeviceInfoW,
+    SetupDiRemoveDevice,
+};
+use windows::Win32::Devices::Properties::{
+    DEVPKEY_Device_ContainerId, DEVPROP_TYPE_GUID, DEVPROPTYPE,
 };
 use windows::Win32::Foundation::{
-    ERROR_GEN_FAILURE, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS,
+    ERROR_GEN_FAILURE, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS, ERROR_NOT_FOUND,
 };
 use windows::Win32::System::Registry::{REG_EXPAND_SZ, REG_MULTI_SZ, REG_SZ};
-use windows::core::{HRESULT, PCWSTR};
+use windows::core::{GUID, HRESULT, PCWSTR};
 
 pub struct DevInfoSet {
     handle: HDEVINFO,
@@ -69,6 +73,67 @@ impl DevInfoSet {
     /// Borrows the native set handle for guarded device removal.
     pub fn as_raw(&self) -> HDEVINFO {
         self.handle
+    }
+
+    /// Reads a present devnode's PnP container GUID by exact instance ID, for any class.
+    /// None means an absent devnode/property or a null GUID; other failures stay errors.
+    pub fn container_id(&self, instance_id: &str) -> Result<Option<String>> {
+        if !is_present(instance_id)? {
+            return Ok(None);
+        }
+        let instance_id = wide::to_wide(instance_id);
+        let mut data = SP_DEVINFO_DATA {
+            cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: self retains the live set; the ID is terminated and data has the SDK size.
+        unsafe {
+            SetupDiOpenDeviceInfoW(
+                self.handle,
+                PCWSTR(instance_id.as_ptr()),
+                None,
+                0,
+                Some(&mut data),
+            )
+        }
+        .map_err(|e| Error::from_win("SetupDiOpenDeviceInfoW (Container ID)", e))?;
+        let mut bytes = [0_u8; 16];
+        let mut kind = DEVPROPTYPE::default();
+        let mut required = 0;
+        // SAFETY: data belongs to this live set; GUID properties occupy exactly 16 bytes.
+        let result = unsafe {
+            SetupDiGetDevicePropertyW(
+                self.handle,
+                &data,
+                &DEVPKEY_Device_ContainerId,
+                &mut kind,
+                Some(&mut bytes),
+                Some(&mut required),
+                0,
+            )
+        };
+        match result {
+            Err(error) if error.code() == HRESULT::from_win32(ERROR_NOT_FOUND.0) => {
+                return Ok(None);
+            }
+            Err(error) => {
+                return Err(Error::from_win(
+                    "SetupDiGetDevicePropertyW (Container ID)",
+                    error,
+                ));
+            }
+            Ok(()) => {}
+        }
+        if kind != DEVPROP_TYPE_GUID || required != 16 {
+            return Err(Error::msg(
+                "SetupAPI Container ID",
+                "invalid GUID property type or size",
+            ));
+        }
+        // SAFETY: all GUID bit patterns are valid; the buffer contains exactly one GUID.
+        // read_unaligned avoids imposing GUID alignment on the byte buffer.
+        let guid = unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<GUID>()) };
+        Ok((guid != GUID::zeroed()).then(|| format!("{{{guid:?}}}")))
     }
 
     /// Removes copied device data belonging to this live snapshot after the caller's guard.

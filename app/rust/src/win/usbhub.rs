@@ -33,8 +33,26 @@ impl Drop for Worker {
     }
 }
 
-/// Reads serials keyed by SPDRP_DRIVER, waiting at most 750 ms for the entire scan.
-pub fn serials() -> HashMap<String, String> {
+#[derive(Default)]
+pub struct DeviceStrings {
+    pub serial: Option<String>,
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
+}
+
+enum StringField {
+    Serial,
+    Manufacturer,
+    Product,
+}
+
+enum ScanValue {
+    Port(String),
+    String(String, StringField, String),
+}
+
+/// Reads device strings keyed by SPDRP_DRIVER, waiting at most 750 ms for the entire scan.
+pub fn descriptors() -> HashMap<String, DeviceStrings> {
     let mut serials = HashMap::new();
     if BUSY
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -71,7 +89,7 @@ pub fn serials() -> HashMap<String, String> {
     let mut ambiguous = HashSet::new();
     loop {
         match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Ok(Ok((key, serial))) => {
+            Ok(Ok(ScanValue::Port(key))) => {
                 if serials.contains_key(&key) || ambiguous.contains(&key) {
                     serials.remove(&key);
                     ambiguous.insert(key);
@@ -80,7 +98,17 @@ pub fn serials() -> HashMap<String, String> {
                         "driver key belongs to multiple ports",
                     ));
                 } else {
-                    serials.insert(key, serial);
+                    serials.insert(key, DeviceStrings::default());
+                }
+            }
+            Ok(Ok(ScanValue::String(key, field, value))) => {
+                if let Some(strings) = serials.get_mut(&key) {
+                    let target = match field {
+                        StringField::Serial => &mut strings.serial,
+                        StringField::Manufacturer => &mut strings.manufacturer,
+                        StringField::Product => &mut strings.product,
+                    };
+                    *target = Some(value);
                 }
             }
             Ok(Err(error)) => record(error),
@@ -156,7 +184,7 @@ fn query(
     ioctl::device_io_control(hub, code, input, capacity)
 }
 
-fn scan(deadline: Instant, tx: &mpsc::Sender<Result<(String, String)>>) -> Result<()> {
+fn scan(deadline: Instant, tx: &mpsc::Sender<Result<ScanValue>>) -> Result<()> {
     for path in hubs()? {
         if Instant::now() >= deadline {
             break;
@@ -172,19 +200,10 @@ fn scan(deadline: Instant, tx: &mpsc::Sender<Result<(String, String)>>) -> Resul
                 if Instant::now() >= deadline {
                     break;
                 }
-                let result = port_serial(&hub, port, deadline);
-                match result {
-                    Ok(None) => {}
-                    Ok(Some(value)) => {
-                        if tx.send(Ok(value)).is_err() {
-                            return Ok(());
-                        }
-                    }
-                    Err(error) => {
-                        if tx.send(Err(error)).is_err() {
-                            return Ok(());
-                        }
-                    }
+                if let Err(error) = port_strings(&hub, port, deadline, tx)
+                    && tx.send(Err(error)).is_err()
+                {
+                    return Ok(());
                 }
             }
             Ok(())
@@ -198,11 +217,12 @@ fn scan(deadline: Instant, tx: &mpsc::Sender<Result<(String, String)>>) -> Resul
     Ok(())
 }
 
-fn port_serial(
+fn port_strings(
     hub: &OwnedHandle,
     port: u32,
     deadline: Instant,
-) -> Result<Option<(String, String)>> {
+    tx: &mpsc::Sender<Result<ScanValue>>,
+) -> Result<()> {
     let mut request = [0; 4096];
     request[..4].copy_from_slice(&port.to_le_bytes());
     let info = query(hub, deadline, CONNECTION_EX, &request, request.len())?;
@@ -210,31 +230,75 @@ fn port_serial(
         return Err(Error::msg("USB connection", "short EX response"));
     }
     if info[31..35] != 1_u32.to_le_bytes() {
-        return Ok(None);
+        return Ok(());
     }
     if info[4] != 18 || info[5] != 1 {
         return Err(Error::msg("USB connection", "invalid device descriptor"));
     }
-    let index = info[20];
-    if index == 0 {
-        return Ok(None);
+    if info[18..21] == [0, 0, 0] {
+        return Ok(());
     }
     let key = driver_key(hub, port, deadline)?;
+    // Declare the port once. Later strings from this port update its entry;
+    // a second port declaring the same key removes all its results as ambiguous.
+    if tx.send(Ok(ScanValue::Port(key.clone()))).is_err() {
+        return Ok(());
+    }
     let languages = descriptor(hub, port, 0, 0, deadline)?;
     let language = *languages
         .first()
         .ok_or_else(|| Error::msg("USB LANGID", "empty language list"))?;
-    let units = descriptor(hub, port, index, language, deadline)?;
-    let serial =
-        String::from_utf16(&units).map_err(|e| Error::msg("USB serial UTF-16", e.to_string()))?;
-    if serial.is_empty() || serial.chars().any(char::is_control) {
-        return Err(Error::msg(
-            "USB serial",
-            "empty or control-containing string",
-        ));
+    // Serial first preserves the existing identity priority under the shared deadline.
+    // Each independently successful string is rechecked before retention, so an
+    // optional name read (including a timeout) cannot discard an already verified serial.
+    for (index, field, operation) in [
+        (info[20], StringField::Serial, "USB serial"),
+        (info[18], StringField::Manufacturer, "USB manufacturer"),
+        (info[19], StringField::Product, "USB product"),
+    ] {
+        if index == 0 {
+            continue;
+        }
+        let result = (|| {
+            let units = descriptor(hub, port, index, language, deadline)?;
+            let value = String::from_utf16(&units)
+                .map_err(|_| Error::msg(operation, "invalid UTF-16 string"))?;
+            if value.chars().any(char::is_control)
+                || (operation == "USB serial" && value.is_empty())
+            {
+                return Err(Error::msg(operation, "empty or control-containing string"));
+            }
+            recheck_port(hub, port, deadline, &request, &info, &key)?;
+            Ok(value)
+        })();
+        match result {
+            Ok(value) if !value.is_empty() => {
+                // Publish immediately: a later synchronous request may outlive the
+                // caller's wait cap, but cannot withhold this verified partial result.
+                if tx
+                    .send(Ok(ScanValue::String(key.clone(), field, value)))
+                    .is_err()
+                {
+                    return Ok(());
+                }
+            }
+            Ok(_) => {}
+            Err(error) => record(error),
+        }
     }
-    // Port identity must survive the string requests; do not associate by VID/PID.
-    let after = query(hub, deadline, CONNECTION_EX, &request, request.len())?;
+    Ok(())
+}
+
+fn recheck_port(
+    hub: &OwnedHandle,
+    port: u32,
+    deadline: Instant,
+    request: &[u8],
+    info: &[u8],
+    key: &str,
+) -> Result<()> {
+    // Port identity must survive each string request; do not associate by VID/PID.
+    let after = query(hub, deadline, CONNECTION_EX, request, request.len())?;
     if after.get(4..22) != info.get(4..22)
         || after.get(31..35) != Some(&1_u32.to_le_bytes())
         || driver_key(hub, port, deadline)? != key
@@ -244,7 +308,7 @@ fn port_serial(
             "port changed during descriptor read",
         ));
     }
-    Ok(Some((key, serial)))
+    Ok(())
 }
 
 fn driver_key(hub: &OwnedHandle, port: u32, deadline: Instant) -> Result<String> {

@@ -345,19 +345,30 @@ Issuer: CN=IFX TPM EK CA, O=Infineon Technologies AG
 Device: SanDisk Ultra USB Device
 Serial: 4C530001281019105732
 Serial (device): 4C530001281019105748
+Device Manufacturer: SanDisk
+Device Product: Ultra
+Container ID: {B9E25D41-73AF-4CA8-9F26-2D805671A493}
+----------------------------------------
+Device: USB Receiver
+Serial (device): 83917A5E
+Device Manufacturer: Logitech
+Device Product: USB Receiver
+Container ID: {4A8BC390-2586-4E71-B642-C37D90E51A28}
 ```
 
 | Label | Meaning | ID | Appears when |
 |---|---|---|---|
 | Device | OS friendly name → description; possibly empty/error | No | Each accepted present devnode. |
 | Serial | Last component of USB/USBSTOR instance ID | Yes | Prefix begins `USB`, tail contains none of `&`, `.`, `{`; even empty/zero tails accepted. |
-| Serial (device) | USB string descriptor serial | Yes | Exact driver-key association and byte-different from instance serial. Match/failure/timeout adds no line. |
+| Serial (device) | USB string descriptor serial | Yes | Exact driver-key association and byte-different from the instance tail, including generated tails. Match/failure/timeout adds no line. |
+| Device Manufacturer / Device Product | Device-reported iManufacturer / iProduct strings, separate from the OS name | No | Nonzero descriptor index, nonempty valid UTF-16 without control characters, successful exact driver-key/port recheck. |
+| Container ID | Windows PnP devnode's container GUID, in braces | Yes | Accepted present devnode has a non-null GUID-typed `DEVPKEY_Device_ContainerId`; firmware/bus-supplied versus Windows-generated origin is not determined. |
 
-**Sources/order.** Present all-class SetupAPI scan: instance ID → `SPDRP_FRIENDLYNAME` → `SPDRP_DEVICEDESC`. Independently enumerate hub interfaces; use `IOCTL_USB_GET_NODE_INFORMATION`, `IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX`, driver-key-name query and `IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION`. Read serial with the first advertised LANGID; associate to devnode `SPDRP_DRIVER`, recheck connection/driver key, reject ambiguous keys. Instance-derived serial stays primary because many devices have no readable descriptor serial.
+**Sources/order.** Present all-class SetupAPI scan: instance ID → `SPDRP_FRIENDLYNAME` → `SPDRP_DEVICEDESC`. Independently enumerate hub interfaces; use `IOCTL_USB_GET_NODE_INFORMATION`, `IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX`, driver-key-name query and `IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION`. Read serial first, then manufacturer and product with the same first advertised LANGID; associate only to exact devnode `SPDRP_DRIVER`, recheck connection/driver key after each string, reject ambiguous keys. Each verified string survives failures in another string read. Instance-derived serial stays primary because many devices have no readable descriptor serial. Generated instance tails still never produce `Serial`; such devnodes get a group only when their exact driver-key match supplies a valid byte-different device serial. No positional or VID/PID-only association is used. `SetupDiGetDevicePropertyW` reads ContainerID by exact present instance ID; missing/null properties are omitted, malformed types/sizes and other failures stay diagnostic-only and do not remove device strings.
 
-**Admin/timing/limits.** Admin app; hub handles use `GENERIC_WRITE` for read-only descriptor IOCTLs, as in USBView. Old section ~3 ms; current unverified, whole enrichment wait ≤750 ms (synchronous worker can finish later; one busy worker blocks a second scan). Not every USB device is shown: generated instance tails are filtered. Composite/hot-unplug/bridge paths vary. Empty result is a blank body. Partial enumeration then failure keeps groups and adds `Error: Unable to retrieve USB information` and `Error: {E}`. Name-read failures can display `Device: {E}` before Serial. Optional hub failures go to helper diagnostics.
+**Admin/timing/limits.** Admin app; hub handles use `GENERIC_WRITE` for read-only descriptor IOCTLs, as in USBView. Elevated WP-A3 capture on the dev PC (2026-10-04): median 4 → 13 ms across five samples; three existing groups retained, two manufacturer/product pairs and three ContainerIDs added. Whole enrichment wait ≤750 ms (synchronous worker can finish later; one busy worker blocks a second scan). Verified strings are delivered immediately, so a later blocking request cannot withhold an earlier field past the wait cap. Not every USB device is shown: generated instance tails without an exact, differing descriptor serial remain filtered. Generated-tail descriptor-backed groups, differing device serials, hot-unplug, ambiguous keys, malformed strings/GUIDs, denied/unsupported properties and stuck-worker paths were not exercised on this hardware. Composite/bridge paths vary. Empty result is a blank body. Partial enumeration then failure keeps groups and adds `Error: Unable to retrieve USB information` and `Error: {E}`. Name-read failures can display `Device: {E}` before Serial. Optional hub failures go to helper diagnostics; ContainerID access-denied/unsupported/malformed failures keep their distinct API codes/details in section diagnostics. Windows PnP ContainerID groups functions and is not asserted to be a raw firmware identity.
 
-**AD:** 01–03, 07, 46, 71, 72, 93. **Not built:** descriptor manufacturer/product strings — device-reported name alongside OS name; extra requests, hotplug checks and association cost; untested.
+**AD:** 01–03, 07, 46, 71, 72, 93, 95–97. **Not built:** parent/composite-function inference beyond exact driver-key association; additional LANGID selection beyond the first advertised language.
 
 ## GPU INFO
 
