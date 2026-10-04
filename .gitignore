@@ -91,3 +91,5 @@ app/rust/target/
 app/rust/golden/*
 !app/rust/golden/README.md
 !app/rust/release.ps1
+!/release.ps1
+!/test-build.ps1
