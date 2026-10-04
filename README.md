@@ -6,13 +6,30 @@
 > **Read it as a website:** [hwid.idkzal.cc](https://hwid.idkzal.cc)
 > **New here?** Start with [Getting Started](guides/getting-started/getting-started.md): what an HWID is, the order of work, and how to check before and after.
 > **Anti-cheats:** see the [Reported anti-cheat status](guides/getting-started/getting-started.md#reported-anti-cheat-status) (evidence matrix: vendor statements, artifact-backed reports, and unverified claims, graded).
-> **HWIDChecker:** a Windows app that lists the identifiers these guides change. [Screenshots and download](#hwid-checker-references).
+> **HWIDChecker:** a Windows app that lists the identifiers these guides change. [Screenshots and download](#hwidchecker).
+
+---
+
+## HWIDChecker
+
+A Windows 10/11 app that lists the hardware identifiers these guides change, exports them, and compares a before and after export. [Download HWIDChecker.exe](/HWIDChecker.exe) and run it as administrator.
+
+![HWIDChecker main window, Mask IDs on: serials, MACs and GUIDs show as X](site/screenshots/main-masked.png)
+
+| ![Compare files: two exports side by side](site/screenshots/compare.png) | ![Ctrl+F find bar in the shown section](site/screenshots/find.png) |
+|---|---|
+| **Compare files.** Two exports side by side. Green: identifier changed. Red: unique identifier still the same. Blue: added, removed, or moved device. Compare now does the same with a saved export against the current system. | **Find.** Ctrl+F searches the shown section; F3 and Shift+F3 step through matches. |
+| ![Old View: the whole report as one text, masked](site/screenshots/old-view.png) | ![Sidebar tools: Auto Update, Compare now, Compare files](site/screenshots/sidebar-tools.png) |
+| **Old View.** The whole report as one text in one window. | **Sidebar tools.** Auto Update checks on start when switched on. Compare now and Compare files open the comparison. |
+
+Mask IDs replaces every serial, MAC and GUID with X in the window, in Copy, in Export (file name gets `-MASKED`) and in Old View. It is off at every start.
 
 ---
 
 ## Table of Contents
 
 - [Hardware Identification (HWID) Privacy Guide](#hardware-identification-hwid-privacy-guide)
+  - [HWIDChecker](#hwidchecker)
   - [Table of Contents](#table-of-contents)
   - [Hardware Categories \& Evasion Strategies](#hardware-categories--evasion-strategies)
     - [1. **Motherboard**](#1-motherboard)
@@ -245,17 +262,7 @@ The TPM carries its own endorsement identity (EK, EK certificate). Clearing the 
 
 ## HWID Checker References
 
-HWIDChecker is a standalone native Rust Windows 10/11 x64 app with 16 hardware sections. Download the executable below and run it as administrator. See [the app readme](app/readme.md) for usage, build, and release commands.
-
-![HWIDChecker main window, Mask IDs on: serials, MACs and GUIDs show as X](site/screenshots/main-masked.png)
-
-| ![Compare files: two exports side by side](site/screenshots/compare.png) | ![Ctrl+F find bar in the shown section](site/screenshots/find.png) |
-|---|---|
-| **Compare files.** Two exports side by side. Green: identifier changed. Red: unique identifier still the same. Blue: added, removed, or moved device. Compare now does the same with a saved export against the current system. | **Find.** Ctrl+F searches the shown section; F3 and Shift+F3 step through matches. |
-| ![Old View: the whole report as one text, masked](site/screenshots/old-view.png) | ![Sidebar tools: Auto Update, Compare now, Compare files](site/screenshots/sidebar-tools.png) |
-| **Old View.** The whole report as one text in one window. | **Sidebar tools.** Auto Update checks on start when switched on. Compare now and Compare files open the comparison. |
-
-Mask IDs replaces every serial, MAC and GUID with X in the window, in Copy, in Export (file name gets `-MASKED`) and in Old View. It is off at every start.
+HWIDChecker is a standalone native Rust Windows 10/11 x64 app with 16 hardware sections. Download the executable below and run it as administrator. Screenshots: see [HWIDChecker](#hwidchecker) at the top. See [the app readme](app/readme.md) for usage, build, and release commands.
 
 - **Download for Windows 10/11 x64**: [HWIDChecker.exe](/HWIDChecker.exe)
 - **How to run, export, and compare before/after**: [Take before and after snapshots](guides/getting-started/getting-started.md#take-before-and-after-snapshots)
