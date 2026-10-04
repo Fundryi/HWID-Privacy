@@ -80,6 +80,8 @@ struct State {
     /// The sections (`hw::PROVIDERS`) in provider order; bodies are raw provider text (`Loading...` while a
     /// load runs).
     sections: RefCell<Vec<Section>>,
+    /// Helper diagnostics drained at the end of the load that supplied these sections.
+    helpers: RefCell<Vec<win::Error>>,
     /// Index of the highlighted sidebar item (C# finds it by its `BackColor`).
     active: Cell<usize>,
     /// Id of the newest load; older results are dropped (F26).
@@ -103,6 +105,7 @@ enum Msg {
         load: u64,
         refresh: bool,
         result: Result<Vec<Section>, String>,
+        helpers: Vec<win::Error>,
     },
 }
 
@@ -184,10 +187,11 @@ fn on_msg(form: &Form, state: &State, msg: Msg) {
             load,
             refresh,
             result,
+            helpers,
         } => {
             // AD-41: a superseded load is dropped whole, including its Refresh message box.
             if load == state.load.get() {
-                finish_load(form, state, refresh, result);
+                finish_load(form, state, refresh, result, helpers);
             }
         }
     }
@@ -298,6 +302,7 @@ fn begin_load(form: &Form, state: &State) -> u64 {
     let load = state.load.get() + 1;
     state.load.set(load);
     state.collected.set(0);
+    state.helpers.borrow_mut().clear();
     // C# parity: SectionedViewForm.cs:506-527 (placeholders from GetAvailableSections, sidebar
     // rebuilt, first section shown and highlighted).
     *state.sections.borrow_mut() = hw::PROVIDERS
@@ -334,20 +339,29 @@ fn spawn_load(form: &Form, state: &State, load: u64, refresh: bool) {
                     let _ = progress.post(Msg::Progress { load, index });
                 })
             });
+            let helpers = win::take_recorded();
             // `false` only when the window is already gone; nobody waits for the result then.
             let _ = poster.post(Msg::Loaded {
                 load,
                 refresh,
                 result,
+                helpers,
             });
         });
     if let Err(error) = spawned {
         let error = win::Error::msg("thread::spawn", error.to_string()).to_string();
-        finish_load(form, state, refresh, Err(error));
+        finish_load(form, state, refresh, Err(error), Vec::new());
     }
 }
 
-fn finish_load(form: &Form, state: &State, refresh: bool, result: Result<Vec<Section>, String>) {
+fn finish_load(
+    form: &Form,
+    state: &State,
+    refresh: bool,
+    result: Result<Vec<Section>, String>,
+    helpers: Vec<win::Error>,
+) {
+    *state.helpers.borrow_mut() = helpers;
     match result {
         Ok(fresh) => {
             for section in state.sections.borrow_mut().iter_mut() {
@@ -508,14 +522,7 @@ fn export(form: &Form, state: &State) {
     // sections, which the main window never has.
     let result = {
         let sections = state.sections.borrow();
-        let masked;
-        let sections = if state.mask.get() {
-            masked = sections.iter().map(report::masked).collect::<Vec<_>>();
-            &masked[..]
-        } else {
-            &sections[..]
-        };
-        write_export(sections, state.mask.get())
+        write_export(&sections, &state.helpers.borrow(), state.mask.get())
     };
     match result {
         Ok((path, json)) => msgbox::show(
@@ -540,13 +547,17 @@ fn export(form: &Form, state: &State) {
 }
 
 /// Writes the export next to the exe (UTF-8 without BOM, same-second files overwritten).
-fn write_export(sections: &[Section], masked: bool) -> win::Result<(PathBuf, PathBuf)> {
+fn write_export(
+    sections: &[Section],
+    helpers: &[win::Error],
+    masked: bool,
+) -> win::Result<(PathBuf, PathBuf)> {
     // C# parity: FileExportService.cs:18-31 with AppDomain.BaseDirectory.
     let exe = std::env::current_exe().map_err(|e| io_error("Locate executable folder", e))?;
     let folder = exe
         .parent()
         .ok_or_else(|| win::Error::msg("Locate executable folder", "no parent folder"))?;
-    // One clock snapshot names both files and timestamps their contents. The legacy
+    // One clock snapshot names all files and timestamps their contents. The legacy
     // export_stamp helper takes two snapshots and keeps its public contract unchanged.
     // SAFETY: GetLocalTime has no caller-owned pointers and cannot fail.
     let now = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
@@ -560,10 +571,22 @@ fn write_export(sections: &[Section], masked: bool) -> win::Result<(PathBuf, Pat
     let stem = format!("HWID-EXPORT-{date}-{time}{suffix}");
     let path = folder.join(format!("{stem}.txt"));
     let json = folder.join(format!("{stem}.json"));
+    let diag = folder.join(format!("{stem}.diag.txt"));
+    let diagnostics = report::diagnostics(sections, helpers, masked);
+    let masked_sections;
+    let sections = if masked {
+        masked_sections = sections.iter().map(report::masked).collect::<Vec<_>>();
+        &masked_sections[..]
+    } else {
+        sections
+    };
     std::fs::write(&path, report::export_text(sections))
         .map_err(|e| io_error("Write export file", e))?;
     std::fs::write(&json, report::export_json(sections, &exported, masked)?)
         .map_err(|e| io_error("Write export file", e))?;
+    if let Err(error) = std::fs::write(&diag, diagnostics) {
+        win::record(io_error("Write export diagnostics", error));
+    }
     Ok((path, json))
 }
 
@@ -1719,7 +1742,7 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
 
         assert!(!form.is_checked(MASK_IDS));
         assert_eq!(text_of(form.control(MASK_IDS).unwrap()), "Mask IDs, off");
-        let export = |masked: bool| -> serde_json::Value {
+        let export = |masked: bool| -> (serde_json::Value, String) {
             take(log);
             let mut expected = String::new();
             for (index, provider) in hw::PROVIDERS.iter().enumerate() {
@@ -1747,6 +1770,12 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
                     .unwrap(),
             );
             assert_eq!(txt.with_extension("json"), json);
+            let diag = txt.with_extension("diag.txt");
+            let diagnostics = std::fs::read(&diag).expect("export diagnostics exists");
+            assert!(!diagnostics.starts_with(&[0xef, 0xbb, 0xbf]));
+            let diagnostics = String::from_utf8(diagnostics).unwrap();
+            assert!(!diagnostics.replace("\r\n", "").contains('\n'));
+            assert!(diagnostics.contains("\r\n[helpers]\r\n"));
             assert_eq!(std::fs::read(&txt).unwrap(), expected.as_bytes());
             let bytes = std::fs::read(&json).unwrap();
             assert!(!bytes.starts_with(&[0xef, 0xbb, 0xbf]));
@@ -1777,13 +1806,13 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
                     &stamp[17..19]
                 )
             );
-            for path in [txt, json] {
+            for path in [txt, json, diag] {
                 std::fs::copy(&path, Path::new(GOLDEN).join(path.file_name().unwrap())).unwrap();
                 std::fs::remove_file(path).unwrap();
             }
-            value
+            (value, diagnostics)
         };
-        let original = export(false);
+        let (original, original_diagnostics) = export(false);
         form.click(FIRST_SECTION);
         let body = form.text(CONTENT);
         let edit = form.control(CONTENT).unwrap();
@@ -1846,7 +1875,43 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
             String::from_utf8(clipboard.stdout).unwrap().trim_end(),
             form.text(CONTENT)
         );
-        let masked = export(true);
+        let (masked, masked_diagnostics) = export(true);
+        let ids: Vec<String> = original["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|section| section["ids"].as_array().unwrap())
+            .map(|id| id.as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(
+            masked_diagnostics,
+            report::masked(&Section {
+                body: original_diagnostics,
+                ids: ids.clone(),
+                ..Default::default()
+            })
+            .body,
+            "both exports retain the same load diagnostics"
+        );
+        // Whole-token rule, as the masker uses: `00000000` inside `0x00000000` is not an ID.
+        let whole_token = |text: &str, id: &str| {
+            text.match_indices(id).any(|(at, _)| {
+                !text[..at]
+                    .chars()
+                    .next_back()
+                    .is_some_and(char::is_alphanumeric)
+                    && !text[at + id.len()..]
+                        .chars()
+                        .next()
+                        .is_some_and(char::is_alphanumeric)
+            })
+        };
+        for id in ids.iter().filter(|id| id.chars().count() >= 4) {
+            assert!(
+                !whole_token(&masked_diagnostics, id),
+                "provider ID is absent from masked diagnostics"
+            );
+        }
         for (index, provider) in hw::PROVIDERS.iter().enumerate() {
             let before = &original["sections"][index];
             let section = Section {

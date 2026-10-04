@@ -26,22 +26,29 @@ pub fn mask_value(value: &str) -> String {
 
 /// Masks only whole-token occurrences of provider-marked identifiers in a copy.
 pub fn masked(section: &Section) -> Section {
-    let mut values: Vec<&str> = section
-        .ids
-        .iter()
-        .map(String::as_str)
+    let mut result = section.clone();
+    result.body = mask_text(&section.body, section.ids.iter().map(String::as_str));
+    for value in &mut result.ids {
+        if value.chars().count() >= MASK_MIN_LEN {
+            *value = mask_value(value);
+        }
+    }
+    result
+}
+
+fn mask_text<'a>(text: &str, ids: impl Iterator<Item = &'a str>) -> String {
+    let mut values: Vec<&str> = ids
         .filter(|value| value.chars().count() >= MASK_MIN_LEN)
         .collect();
     values.sort_unstable_by_key(|value| (std::cmp::Reverse(value.len()), *value));
     values.dedup();
-    let mut result = section.clone();
-    result.body.clear();
+    let mut result = String::new();
     // Match against the original text, so an overlapping shorter ID cannot consume an
     // already-masked replacement (or change the boundaries used for a later match).
     let mut offset = 0;
-    while offset < section.body.len() {
-        let rest = &section.body[offset..];
-        let start = !section.body[..offset]
+    while offset < text.len() {
+        let rest = &text[offset..];
+        let start = !text[..offset]
             .chars()
             .next_back()
             .is_some_and(char::is_alphanumeric);
@@ -54,19 +61,43 @@ pub fn masked(section: &Section) -> Section {
                     .is_some_and(char::is_alphanumeric)
         });
         if let Some(value) = found {
-            result.body.push_str(&mask_value(value));
+            result.push_str(&mask_value(value));
             offset += value.len();
         } else if let Some(c) = rest.chars().next() {
-            result.body.push(c);
+            result.push(c);
             offset += c.len_utf8();
         }
     }
-    for value in &mut result.ids {
-        if value.chars().count() >= MASK_MIN_LEN {
-            *value = mask_value(value);
-        }
-    }
     result
+}
+
+/// Formats dump/export diagnostics as CRLF text, optionally masking all sections' IDs.
+pub fn diagnostics(sections: &[Section], helpers: &[Error], masked: bool) -> String {
+    let mut text = String::new();
+    for section in sections {
+        text.push_str(&format!(
+            "{}\r\nTime: {} ms\r\nSource: {}\r\n",
+            section.title, section.elapsed_ms, section.source
+        ));
+        for failure in &section.failures {
+            text.push_str(&format!("Failed fallback: {failure}\r\n"));
+        }
+        text.push_str("\r\n");
+    }
+    text.push_str("[helpers]\r\n");
+    for error in helpers {
+        text.push_str(&format!("{error}\r\n"));
+    }
+    if masked {
+        mask_text(
+            &text,
+            sections
+                .iter()
+                .flat_map(|section| section.ids.iter().map(String::as_str)),
+        )
+    } else {
+        text
+    }
 }
 
 /// Serializes already-prepared sections as pretty CRLF JSON without diagnostic fields.
@@ -340,6 +371,80 @@ fn ordinal_upper(ch: char) -> char {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn diagnostics_preserves_dump_format_and_helper_order() {
+        let sections = [
+            super::Section {
+                title: "FIRST",
+                source: "native é".into(),
+                failures: vec!["WMI: unavailable".into(), "registry: denied".into()],
+                elapsed_ms: 17,
+                ..Default::default()
+            },
+            super::Section {
+                title: "EMPTY",
+                ..Default::default()
+            },
+        ];
+        let helpers = [
+            super::Error {
+                op: "probe",
+                code: 5,
+                detail: "denied".into(),
+            },
+            super::Error::msg("fallback", "unavailable"),
+        ];
+        let text = super::diagnostics(&sections, &helpers, false);
+        assert_eq!(
+            text.as_bytes(),
+            concat!(
+                "FIRST\r\nTime: 17 ms\r\nSource: native é\r\n",
+                "Failed fallback: WMI: unavailable\r\nFailed fallback: registry: denied\r\n\r\n",
+                "EMPTY\r\nTime: 0 ms\r\nSource: \r\n\r\n[helpers]\r\n",
+                "probe failed: 0x00000005 denied\r\nfallback failed: 0x00000000 unavailable\r\n"
+            )
+            .as_bytes()
+        );
+        assert_eq!(super::diagnostics(&[], &[], false), "[helpers]\r\n");
+        assert_eq!(
+            super::diagnostics(&sections, &[], false),
+            text.split("probe failed:").next().unwrap()
+        );
+    }
+
+    #[test]
+    fn masked_diagnostics_uses_all_ids_whole_tokens_and_four_character_minimum() {
+        let sections = [
+            super::Section {
+                title: "AB12",
+                source: "CD34 ABC".into(),
+                failures: vec!["probe {AB12-CD34} xAB12 AB12z éAB12 AB12é".into()],
+                ids: ["AB12", "AB12-CD34", "ABC"].map(str::to_owned).into(),
+                elapsed_ms: 7,
+                ..Default::default()
+            },
+            super::Section {
+                title: "SECOND",
+                ids: vec!["CD34".into(), "AB12".into()],
+                ..Default::default()
+            },
+        ];
+        let helpers = [super::Error::msg("helper", "AB12 CD34 ABC (AB12-CD34)")];
+        assert_eq!(
+            super::diagnostics(&sections, &helpers, true),
+            concat!(
+                "XXXX\r\nTime: 7 ms\r\nSource: XXXX ABC\r\n",
+                "Failed fallback: probe {XXXX-XXXX} xAB12 AB12z éAB12 AB12é\r\n\r\n",
+                "SECOND\r\nTime: 0 ms\r\nSource: \r\n\r\n[helpers]\r\n",
+                "helper failed: 0x00000000 XXXX XXXX ABC (XXXX-XXXX)\r\n"
+            )
+        );
+        let raw = super::diagnostics(&sections, &helpers, false);
+        assert!(raw.starts_with("AB12\r\n"));
+        assert!(raw.ends_with("AB12 CD34 ABC (AB12-CD34)\r\n"));
+        assert_eq!(sections[0].source, "CD34 ABC");
+    }
+
     #[test]
     fn mask_respects_provider_ids_boundaries_overlap_and_unicode() {
         let mut section = super::Section {
