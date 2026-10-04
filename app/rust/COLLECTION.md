@@ -421,7 +421,7 @@ This deliberately illustrates differing WMI and cached registry values, not one 
 
 ## NETWORK ADAPTERS (NIC's)
 
-[Provider](src/hw/network.rs), [IP Helper](src/win/iphlp.rs).
+[Provider](src/hw/network.rs), [IP Helper](src/win/iphlp.rs), [NDIS OID](src/win/ndis.rs).
 
 ```text
 Name: Intel(R) Ethernet Controller I225-V
@@ -431,6 +431,7 @@ Adapter Type: Ethernet
 Hardware ID: PCI\VEN_8086&DEV_15F3&SUBSYS_87D21043&REV_03
 MAC Address (Overridden): 02:7C:39:61:B4:8E
 Permanent MAC: 3C:FD:FE:72:19:A6
+Permanent MAC (OID): 3C:FD:FE:72:19:A6
 ```
 
 | Label | Meaning | ID | Appears when |
@@ -441,14 +442,17 @@ Permanent MAC: 3C:FD:FE:72:19:A6
 | Hardware ID | First SetupAPI hardware ID | Yes | Cached PNP match exists. |
 | MAC Address / MAC Address (Overridden) | WMI current address | Yes | Every accepted adapter, even empty. |
 | Permanent MAC | Driver-reported permanent address or `Unavailable` | Yes for address; no for unavailable | Every accepted adapter. |
+| Permanent MAC (OID) | Six-byte driver-reported `OID_802_3_PERMANENT_ADDRESS`, uppercase colon-separated | Yes | A uniquely matched present miniport interface opens and returns exactly six bytes. Immediately after Permanent MAC; absent on OID failure. |
 
 **Sources/order.** Inventory/names/type/DeviceID/current MAC: `root\cimv2:Win32_NetworkAdapter`; hardware ID: shared SetupAPI by PNPDeviceID. Permanent MAC: `GetIfTable2.PermanentPhysicalAddress`, matched uniquely to WMI GUID, nonzero and ≤32 bytes. If permanent known, case-insensitive current/permanent inequality selects Overridden (empty current does not). Otherwise registry `NetworkAddress` presence determines that label: HKLM `SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}\{numeric subkey}`, using DeviceInstanceID exact or MatchingDeviceId prefix matching. Effective comparison takes precedence over stale registry config. Native-only replacement was rejected because it did not preserve all WMI fields with useful speed gain.
 
-**Admin/timing/limits.** Admin app; WMI/driver/registry. Latest ~123 ms. Requires non-null MAC, PhysicalAdapter not false, PCI/USB-like bus (or MLX4/MLX5), physical Ethernet/WiFi type (or Mellanox), and no virtual/VPN/TAP/TUN/bridge/security-client keyword in name/product. This is a heuristic, not complete physical inventory; empty accepted set leaves a blank body. Permanent address remains a miniport report, not EEPROM proof. Registry fallback can match stale/prefix entries. Failures can add `MAC override lookup: {E}` or `Hardware ID lookup: {E}`.
+**OID corroboration/source priority.** SetupAPI enumerates present `GUID_NDIS_LAN_CLASS` miniport interfaces and obtains each interface's associated device instance ID. Exact case-insensitive PNPDeviceID matching selects accepted WMI adapters; multiple matching interfaces suppress that adapter's OID line with an ambiguity diagnostic. Read-only `IOCTL_NDIS_QUERY_GLOBAL_STATS` requests only `OID_802_3_PERMANENT_ADDRESS`. Its value is independent of the existing GetIfTable2 line and never selects the Overridden label or replaces an unavailable GetIfTable2 value. Report the returned bytes even if zero, locally administered, or different from GetIfTable2. OID agreement is corroboration from the miniport, not independent EEPROM/factory authenticity. The IOCTL is deprecated and Wi-Fi behavior can differ. Absent interface, unsupported IOCTL/OID, access denial, malformed response, enumeration/open failure, and timeout remain diagnostics only; Win32 error codes are retained without device identifiers. Existing WMI, GetIfTable2, registry, and hardware-ID results survive every OID failure.
+
+**Admin/timing/limits.** Admin app; WMI/driver/registry. Elevated WP-A5 measurement on 2026-10-04: section median 118 ms baseline → 119 ms final (initial after run: 126 ms), Mellanox ConnectX-3 Ethernet Adapter; OID and GetIfTable2 agree. Existing section bytes match after removing the one OID line. The OID scan waits at most 750 ms total and retains completed results; synchronous calls cannot be forcibly stopped, so a worker owns its buffers/handles until return and a busy guard caps outstanding scans at one. Enumeration is capped at 1024 interfaces and interface-detail allocation at 64 KiB. Wi-Fi, other NIC vendors, multiple NICs, disagreement, absent/unsupported/denied/malformed responses, hotplug, timeout and repeated-collection busy paths remain untested on hardware. Requires non-null MAC, PhysicalAdapter not false, PCI/USB-like bus (or MLX4/MLX5), physical Ethernet/WiFi type (or Mellanox), and no virtual/VPN/TAP/TUN/bridge/security-client keyword in name/product. This is a heuristic, not complete physical inventory; empty accepted set leaves a blank body. Permanent address remains a miniport report, not EEPROM proof. Registry fallback can match stale/prefix entries. Failures can add `MAC override lookup: {E}` or `Hardware ID lookup: {E}`.
 
 Excluded name/product substrings (case-insensitive): VIRTUAL, VPN, TAP, TUN, TUNNEL, VMWARE, HYPER-V, VIRTUALBOX, CISCO, CHECKPOINT, FORTINET, JUNIPER, CITRIX, SOFTETHER, OPENVPN, WIREGUARD, GHOST, HAMACHI, NDIS, BRIDGE, LOOPBACK. Bus accepts PNP prefixes `PCI\`, `USB\`, `MLX4\`, `MLX5\` or embedded `PCI_`/`USB_`.
 
-**AD:** 01–03, 20, 46. **Not built:** NDIS `OID_802_3_PERMANENT_ADDRESS` corroboration — agreement/disagreement evidence; device-open/miniport and deprecated IOCTL compatibility cost, no independent trust proven. Vendor NIC NVM/EEPROM or PCIe DSN — possible factory inventory; vendor-specific access/optional capability and driver research cost, untested.
+**AD:** 01–03, 20, 46, 94. **Not built:** Vendor NIC NVM/EEPROM or PCIe DSN — possible factory inventory; vendor-specific access/optional capability and driver research cost, untested.
 
 ## BLUETOOTH ADAPTERS
 

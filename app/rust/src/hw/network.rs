@@ -6,7 +6,7 @@ use crate::{
     win::{
         self,
         iphlp::{self, Interface},
-        registry, wmi,
+        ndis, registry, wmi,
     },
 };
 use windows::core::GUID;
@@ -113,12 +113,24 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             Vec::new()
         }
     };
+    let oid = ndis::permanent_macs(
+        adapters
+            .iter()
+            .map(|adapter| adapter.pnp_device_id.clone())
+            .collect(),
+    );
+    for error in &oid.failures {
+        out.fallback_failed("NDIS OID", error);
+    }
     let mut sources = vec!["WMI"];
     if hardware_ids.is_some() {
         sources.push("SetupAPI");
     }
     if !interfaces.is_empty() {
         sources.push("native");
+    }
+    if !oid.addresses.is_empty() {
+        sources.push("NDIS OID");
     }
     for (index, adapter) in adapters.iter().enumerate() {
         let mut override_error = None;
@@ -140,6 +152,9 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             .and_then(|map| map.get(&adapter.pnp_device_id.to_uppercase()))
             .map(String::as_str);
         append_adapter(adapter, hardware_id, permanent.as_deref(), overridden, out);
+        if let Some(address) = oid.addresses.get(&adapter.pnp_device_id.to_uppercase()) {
+            out.id("Permanent MAC (OID)", address);
+        }
         if let Some(error) = override_error {
             out.text(&format!("MAC override lookup: {error}"));
         }

@@ -10,6 +10,7 @@ pub mod hash;
 pub mod http;
 pub mod ioctl;
 pub mod iphlp;
+pub mod ndis;
 pub mod nvidia;
 mod panic_guard;
 pub use panic_guard::{catch_panic, is_guarded};
