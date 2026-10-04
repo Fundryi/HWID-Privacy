@@ -18,6 +18,7 @@ use std::{
     },
     time::Duration,
 };
+use windows::Win32::Foundation::ERROR_EVT_CHANNEL_NOT_FOUND;
 
 // Ten 15-second process attempts plus local config/clear/restore calls get a bounded budget.
 const CLEAR_TIMEOUT: Duration = Duration::from_secs(180);
@@ -39,6 +40,23 @@ pub(super) enum Attempt {
     Failed(String),
     RestoreFailed { cleared: bool, message: String },
 }
+
+pub(super) fn probe_skip(standard: bool, enabled: &Result<bool>) -> Option<Attempt> {
+    match enabled {
+        // C# parity: EventLogCleaningService.cs:453-468,495 (disabled standard logs are attempted).
+        Ok(false) if !standard => Some(Attempt::Disabled),
+        // C9: only proven absence skips a standard log; other probe failures still attempt it.
+        Err(error)
+            if !standard
+                || (error.op == "EvtOpenChannelConfig"
+                    && error.code == ERROR_EVT_CHANNEL_NOT_FOUND.0) =>
+        {
+            Some(Attempt::NotFound)
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn batch(
     names: Vec<String>,
     standard: bool,
@@ -76,16 +94,12 @@ pub(super) fn batch(
         CLEAR_TIMEOUT,
         cancel,
         move |name, token| {
-            // C# parity: EventLogCleaningService.cs:453-468 (standard logs skip the probe; unknown additional logs count as not found).
-            if !standard {
-                match evt::is_channel_enabled(name) {
-                    Ok(false) => return Ok(Attempt::Disabled),
-                    Ok(true) => {}
-                    Err(error) => {
-                        progress(&format!("Error in {name}: {error}"));
-                        return Ok(Attempt::NotFound);
-                    }
-                }
+            let enabled = evt::is_channel_enabled(name);
+            if let Err(error) = &enabled {
+                progress(&format!("Error in {name}: {error}"));
+            }
+            if let Some(skipped) = probe_skip(standard, &enabled) {
+                return Ok(skipped);
             }
             checkpoint(token)?;
             let current = attempts.fetch_add(1, Ordering::Relaxed) + 1;
