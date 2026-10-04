@@ -50,7 +50,6 @@ const sidebar = [
     text: 'Tools',
     items: [
       { text: 'HWIDChecker', link: `${gettingStarted}#hwidcheckerexe` },
-      { text: 'Batch scripts', link: `${gettingStarted}#batch-script-fallback` },
     ],
   },
 ]
@@ -132,7 +131,7 @@ export default defineConfig({
         if (href && /(^|\/)README\.md(#|$)/.test(href)) tokens[idx].attrSet('href', href.replace('README.md', 'overview.md'))
         if (href && !/^[a-z]+:|^#/i.test(href)) {
           const file = path.posix.resolve('/', path.posix.dirname(env.relativePath), decodeURI(href.split('#')[0])).slice(1)
-          const kind = /\.(zip|exe|bat)$/i.test(file) ? 'raw' : file.startsWith('app/') ? 'blob' : null
+          const kind = /\.(zip|exe)$/i.test(file) ? 'raw' : file.startsWith('app/') ? 'blob' : null
           if (kind) tokens[idx].attrSet('href', `${repo}/${kind}/main/${encodeURI(file)}`)
         }
         return render(tokens, idx, options, env, self)

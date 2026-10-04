@@ -116,7 +116,7 @@ Before changing anything, have all of the following:
 
 ## Tools
 
-- **HWIDChecker.exe** from the repository root. Use it for the before-and-after identity comparison. The source of its monitor checks is [`MonitorInfo.cs`](../../app/src/Hardware/MonitorInfo.cs). **[A]**
+- **HWIDChecker.exe** from the repository root. Use it for the before-and-after identity comparison. The source of its monitor checks is [`monitor.rs`](../../app/rust/src/hw/monitor.rs). **[A]**
 - **[MonitorInfoView](https://www.nirsoft.net/utils/monitor_info_view.html)**. It reads EDID records stored by Windows and can export an EDID to a binary file. **[A]**
 - **[AW EDID Editor](https://www.analogway.com/products/aw-edid-editor)**. It creates and edits standard binary or text EDID files and supports EDID 1.3/1.4, CTA-861-G, and DisplayID 1.3 according to its vendor. **[A]**
 - **[Custom Resolution Utility (CRU)](https://www.monitortests.com/forum/Thread-Custom-Resolution-Utility-CRU)**. It creates Windows software overrides. It does not rewrite display hardware. **[A]**
@@ -313,9 +313,9 @@ Verification is not just "the picture came back." Use the same connection path b
 
 HWIDChecker first queries `root\wmi:WmiMonitorID`. **Manufacturer**, **Model**, **Serial Number**, **Product Code**, and **Manufacturing Date** come from that WMI class. It separately reads bytes `0x0C` to `0x0F` from a registry EDID and prints the unsigned value in decimal as **EDID Serial (numeric)**. **[A]**
 
-The numeric-serial lookup matches only the three-letter manufacturer ID. It does not match the product code, model, or WMI instance. With two monitors from the same manufacturer, the displayed numeric serial can come from the wrong registry entry. Confirm the raw EDID when that distinction matters. **[A]**
+The Rust numeric-serial lookup uses the exact WMI device instance to read its registry EDID. It never substitutes another monitor with the same manufacturer. Registry-derived identity and extension data retain their source labels; read or checksum failures are recorded in diagnostics. Registry data is cached Windows state, so confirm the raw EDID when a fresh hardware read matters. **[A]**
 
-If WMI returns no monitors, HWIDChecker scans the registry instead. That fallback can include disconnected entries. It displays **Manufacturer**, the `0xFC` **Model**, the `0xFF` **Serial Number**, and the numeric serial when present. It does not display **Product Code** or **Manufacturing Date** on the fallback path. **[A]**
+If WMI fails or returns no monitors, HWIDChecker scans the registry instead. That fallback can include disconnected entries, marked **Presence: Not connected** when a successful SetupAPI snapshot confirms absence. It displays **Manufacturer**, the `0xFC` **Model**, the `0xFF` **Serial Number**, and the numeric serial when present, plus registry-labeled product code and available manufacturing/model-year fields. **[A]**
 
 After identity verification, test the real display behavior:
 

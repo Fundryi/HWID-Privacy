@@ -8,7 +8,7 @@ use super::{
     layout::{Kind, Node, Rect, Size},
     theme,
 };
-use crate::ui::controls::{Align, ButtonSpec, Ctl, EditBorder, EditSpec, LabelSpec, ListSpec};
+use crate::ui::controls::{Align, ButtonSpec, Ctl, EditSpec, LabelSpec, ListSpec};
 use crate::ui::layout::{Anchor, FlowDir, Point, Track};
 use crate::win::wide::to_wide;
 use std::path::{Path, PathBuf};
@@ -677,14 +677,11 @@ fn main_replica() -> Vec<Node> {
                     .cell(0, 1),
                 Node::leaf(
                     CONTENT_EDIT,
-                    Ctl::Edit(
-                        EditSpec::new(
-                            theme::CONTENT_FONT,
-                            theme::TEXT_BOX_TEXT,
-                            theme::TEXT_BOX_BACKGROUND,
-                        )
-                        .border(EditBorder::FixedSingle),
-                    ),
+                    Ctl::Edit(EditSpec::new(
+                        theme::CONTENT_FONT,
+                        theme::TEXT_BOX_TEXT,
+                        theme::TEXT_BOX_BACKGROUND,
+                    )),
                 )
                 .fill()
                 .cell(0, 2),

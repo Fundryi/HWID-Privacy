@@ -325,8 +325,8 @@ mod tests {
             .expect("private WMI reference");
         let mut comparison = format!(
             "# WP-03 source comparison (private)\n\n\
-             C# GoldenDump baseline is a separate owner gate. These old values use the exact\n\
-             C# WQL in a non-admin Rust harness, not the C# executable.\n\n\
+             These historical reference values use the original C# WQL in a Rust harness.\n\
+             No retired executable or comparison harness is required.\n\n\
              Changed-source prefix byte-identical: {}\n\n\
              | Old C# WQL line | New Rust line | Source | Reason / approval |\n\
              |---|---|---|---|\n",

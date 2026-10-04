@@ -100,45 +100,6 @@ pub fn diagnostics(sections: &[Section], helpers: &[Error], masked: bool) -> Str
     }
 }
 
-/// Serializes already-prepared sections as pretty CRLF JSON without diagnostic fields.
-pub fn export_json(
-    sections: &[Section],
-    exported: &str,
-    masked: bool,
-) -> crate::win::Result<String> {
-    #[derive(serde::Serialize)]
-    struct ExportSection<'a> {
-        title: &'a str,
-        lines: Vec<&'a str>,
-        ids: &'a [String],
-    }
-    #[derive(serde::Serialize)]
-    struct Export<'a> {
-        app: &'static str,
-        version: &'static str,
-        exported: &'a str,
-        masked: bool,
-        sections: Vec<ExportSection<'a>>,
-    }
-    let export = Export {
-        app: "HWIDChecker",
-        version: env!("CARGO_PKG_VERSION"),
-        exported,
-        masked,
-        sections: sections
-            .iter()
-            .map(|section| ExportSection {
-                title: section.title,
-                lines: section.body.split_terminator("\r\n").collect(),
-                ids: &section.ids,
-            })
-            .collect(),
-    };
-    serde_json::to_string_pretty(&export)
-        .map(|json| json.replace('\n', "\r\n"))
-        .map_err(|error| Error::msg("Serialize export JSON", error.to_string()))
-}
-
 #[derive(Default)]
 pub struct Out {
     section: Section,
@@ -495,47 +456,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn json_export_preserves_rows_ids_and_excludes_diagnostics() {
-        let sections = [
-            super::Section {
-                title: "FIXTURE",
-                body: "  Serial: AB12\r\nquote: \"\\é😀\r\n\r\n".into(),
-                ids: vec!["AB12".into(), "AB12".into()],
-                source: "PRIVATE SOURCE".into(),
-                failures: vec!["PRIVATE FAILURE".into()],
-                elapsed_ms: 17,
-            },
-            super::Section {
-                title: "EMPTY",
-                ..Default::default()
-            },
-        ];
-        let raw = super::export_json(&sections, "2026-10-04T09:30:00", false).unwrap();
-        assert!(raw.starts_with("{\r\n  \"app\": \"HWIDChecker\",\r\n"));
-        assert!(!raw.replace("\r\n", "").contains('\n'));
-        assert!(!raw.contains("PRIVATE"));
-        let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(json.as_object().unwrap().len(), 5);
-        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(json["exported"], "2026-10-04T09:30:00");
-        assert_eq!(json["masked"], false);
-        assert_eq!(
-            json["sections"][0]["lines"],
-            serde_json::json!(["  Serial: AB12", "quote: \"\\é😀", ""])
-        );
-        assert_eq!(
-            json["sections"][0]["ids"],
-            serde_json::json!(["AB12", "AB12"])
-        );
-        assert_eq!(json["sections"][0].as_object().unwrap().len(), 3);
-        assert_eq!(json["sections"][1]["lines"], serde_json::json!([]));
-        assert_eq!(json["sections"][1]["title"], "EMPTY");
-        let masked = sections.iter().map(super::masked).collect::<Vec<_>>();
-        let raw = super::export_json(&masked, "2026-10-04T09:30:00", true).unwrap();
-        assert!(!raw.contains("AB12"));
-        assert!(raw.contains("\"masked\": true"));
-    }
     use super::*;
 
     const RULE: &str = "=============================================================================================\r\n";

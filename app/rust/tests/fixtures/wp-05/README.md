@@ -1,7 +1,7 @@
 # WP-05 parser fixtures
 
 All identifiers and certificate names here are fabricated. These are synthetic
-Format-List parser cases derived from `app/src/Hardware/TpmInfo.cs:240-272`, not
+Format-List parser cases derived from the [historical TPM parser](https://github.com/Fundryi/HWID-Privacy/blob/3768ddc9c21c9e64f8ada067d8466c7e9f7460e3/app/src/Hardware/TpmInfo.cs#L240-L272), not
 a claim of an elevated hardware capture or native EK verification. The input
 exercises multiple certificates, case-insensitive section names, ignored wrapped
 lines, and the legacy last-certificate-wins behavior. The expected file uses LF;

@@ -1,5 +1,5 @@
 #include <windows.h>
-1 ICON "../src/Resources/app.ico"
+1 ICON "assets/app.ico"
 1 RT_MANIFEST "app.manifest"
 1 VERSIONINFO
  FILEVERSION HWID_VERSION_MAJOR,HWID_VERSION_MINOR,HWID_VERSION_PATCH,0

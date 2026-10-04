@@ -1,56 +1,11 @@
-# Build outputs
-[Bb]in/
-[Oo]bj/
-[Dd]ebug/
-[Rr]elease/
-build/
-x64/
-x86/
-[Aa][Rr][Mm]/
-[Aa][Rr][Mm]64/
-bld/
+# Local logs
 [Ll]og/
 [Ll]ogs/
 
-# .NET
-*.user
-*.suo
-*.cache
-*.dll
-*.pdb
-*.nupkg
-*.snupkg
-project.lock.json
-**/packages/*
-!**/packages/build/
-*.nuget.props
-*.nuget.targets
-
-# IDE — Visual Studio
+# Local IDE state
 .vs/
-*.rsuser
-*.userosscache
-*.sln.docstates
-*.userprefs
-
-# IDE — JetBrains Rider
 .idea/
-*.sln.iml
-
-# IDE — ReSharper
-_ReSharper*/
-*.[Rr]e[Ss]harper
-*.DotSettings.user
-
-# Visual Studio profiler
-*.psess
-*.vsp
-*.vspx
-*.sap
-
-# Code coverage
-*.coverage
-*.coveragexml
+/*.code-workspace
 
 # OS
 Thumbs.db
@@ -58,23 +13,16 @@ ehthumbs.db
 Desktop.ini
 .DS_Store
 
-# Windows installer files
-*.cab
-*.msi
-*.msm
-*.msp
-
 # Windows shortcuts
 *.lnk
 
-# Local-only docs, AI config & scripts
+# Local-only docs and AI config
 /docs/
 AGENTS.md
 AI_TOOLS.md
 CLAUDE.md
 CLAUDE.local.md
 RESTRUCTURE-PLAN.md
-release.ps1
 
 # Misc
 *.txt
@@ -86,10 +34,8 @@ site/node_modules/
 site/.vitepress/dist/
 site/.vitepress/cache/
 
-# Rust port build outputs and private hardware captures
+# Rust build outputs and private hardware captures
 app/rust/target/
 app/rust/golden/*
 !app/rust/golden/README.md
-!app/rust/release.ps1
-!/release.ps1
-!/test-build.ps1
+!app/rust/scripts/*.ps1

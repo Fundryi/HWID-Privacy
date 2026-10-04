@@ -1,39 +1,19 @@
-# Private golden captures
+# Private captures
 
-This folder holds local C# baselines, Rust reports, diagnostics, timings, and
-comparison evidence for the Rust port. Everything except this README is
-git-ignored. Real identifiers never leave this folder: do not commit, upload,
-or paste its captures into an agent report or public issue. Committed fixtures
-under `../tests/fixtures/` must contain fabricated identifiers only.
+Keep Rust reports, diagnostics, timings, and manual verification evidence here.
+Everything except this README is git-ignored. Do not commit, upload, or paste
+real identifiers into reports or public issues. Committed data under
+`../tests/fixtures/` must contain fabricated identifiers only.
 
-From PowerShell, run `../check.ps1` for the checks that need no elevation.
-Hardware modes require an **elevated PowerShell**:
+Run `pwsh -NoProfile -File app/rust/scripts/check.ps1` from the repository root
+for formatting, lint, tests, and executable checks. It needs no hardware capture.
 
-```powershell
-./app/rust/check.ps1 -Golden
-./app/rust/check.ps1 -Golden -Sections 'USB DEVICES', 'CPU'
-./app/rust/check.ps1 -Ghosts
-./app/rust/check.ps1 -Logs
-./app/rust/check.ps1 -Timing
-```
+For read-only hardware inspection, run the built executable as administrator
+with `--dump <private-file>`, `--ghosts <private-file>`, `--logs <private-file>`,
+or `--time <private-file>`. Use an absolute output path under this ignored
+folder and a new subfolder for each run. Inspect `--dump` diagnostics too.
+Never use cleaning or update installation as part of a read-only capture.
 
-Run those commands from the repository root. They build GoldenDump from
-`app/tools/GoldenDump/` and only invoke read-only switches. They never clean
-devices or logs, publish, or copy an executable to the repository root.
-
-Each hardware run saves its files under `owner-pc/<timestamp>-<unique-id>/`
-in the main checkout's golden folder (located via Git's common directory).
-Golden runs capture C# twice to expose volatile values and record the source
-commit and executable hashes. Full reports require all 14 sections in order.
-Selected Rust sections must be implemented. Comparisons preserve UTF-8 BOMs,
-CRLF, padding and all other bytes; only USB device groups are sorted by ordinal
-order before comparison.
-
-Golden differences print the section, line number and JSON-escaped line
-(including whitespace), marked **needs approval**, and fail the check. Consult
-the main checkout's `docs/rust-port/approved-diffs.md`; the script does not
-approve or automatically match its rules. The orchestrator reviews every
-difference, including volatile lines. Ghost comparisons ignore the InstanceId
-and C# legacy Presence columns and enforce both membership rules from WP-11.
-Logs compare in their emitted order. Timing is informational and flags Rust
-medians more than 20 percent slower than C#.
+Historical C# parity captures remain private. Reproducing them requires a
+separate historical checkout and its matching harness; the current gate
+verifies the Rust implementation and its fabricated fixtures.

@@ -251,7 +251,7 @@ Stop further writes. Use only the exact board vendor's documented recovery metho
 - [Microsoft: suspend BitLocker for non-Microsoft firmware updates](https://learn.microsoft.com/en-us/troubleshoot/windows-client/windows-security/suspend-bitlocker-protection-non-microsoft-updates)
 - [AMI: AFU for Aptio V](https://www.ami.com/resources/ami-firmware-utility-afu-a-secure-update-utility-for-aptio-v-uefi-bios-firmware/)
 - [ASUS: How to use USB BIOS FlashBack](https://www.asus.com/support/faq/1038568/)
-- [Fundryi/HWID-Privacy HWIDChecker source](https://github.com/Fundryi/HWID-Privacy/tree/main/app/src/Hardware)
+- [Fundryi/HWID-Privacy HWIDChecker source](../../app/rust/src/hw/)
 - [Insyde: development tools](https://www.insyde.com/products/development-tools/)
 - [TQ: TQMxE39M BIOS tools (H2OSDE)](https://support.tq-group.com/en/x86/tqmxe39m/bios/bios_tools)
 - [TQ: TQMxE38C BIOS tools (H2OSDE)](https://support.tq-group.com/en/x86/tqmxe38c/bios/bios_tools)

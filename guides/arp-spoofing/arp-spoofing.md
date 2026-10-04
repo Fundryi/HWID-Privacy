@@ -317,7 +317,7 @@ The IPv6 router and neighbor MACs should belong to the isolation device's downst
 
 ## Verify with HWIDChecker
 
-`HWIDChecker.exe` displays a section named **ARP INFO/CACHE**. The current source first queries the Windows IP Helper neighbor table. On that path it groups entries by interface and displays IPv4 and IPv6 neighbors whose MAC address passes its filters. It removes entries with Windows state value `1` (`NlnsIncomplete`), zero-length or all-zero MAC addresses, and broadcast or multicast MAC addresses. It does not explicitly remove Windows state value `0` (`NlnsUnreachable`). If the native query fails, it falls back to `arp -a`. The fallback is IPv4-only, locale-dependent, and displays only rows containing the English word `dynamic`. [A] [`ArpInfo.cs`](../../app/src/Hardware/ArpInfo.cs), [`IpHlpApi.cs`](../../app/src/Services/Win32/IpHlpApi.cs), [Microsoft `NL_NEIGHBOR_STATE`](https://learn.microsoft.com/en-us/windows/win32/api/nldef/ne-nldef-nl_neighbor_state)
+`HWIDChecker.exe` displays a section named **ARP INFO/CACHE**. The current source first queries the Windows IP Helper neighbor table. On that path it groups entries by interface and displays IPv4 and IPv6 neighbors whose MAC address passes its filters. It removes entries with Windows state value `1` (`NlnsIncomplete`), zero-length or all-zero MAC addresses, and broadcast or multicast MAC addresses. It does not explicitly remove Windows state value `0` (`NlnsUnreachable`). If the native query fails, it falls back to `arp -a`. The fallback is IPv4-only, locale-dependent, and displays only rows containing the English word `dynamic`. [A] [`arp.rs`](../../app/rust/src/hw/arp.rs), [`iphlp.rs`](../../app/rust/src/win/iphlp.rs), [Microsoft `NL_NEIGHBOR_STATE`](https://learn.microsoft.com/en-us/windows/win32/api/nldef/ne-nldef-nl_neighbor_state)
 
 1. Run `HWIDChecker.exe` from the repository root.
 2. Find **ARP INFO/CACHE**.
@@ -423,5 +423,5 @@ Use a wired LAN connection and the configured LAN IP first. If that fails, resto
 - [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
 - [NetworkManager settings for `nmcli`](https://www.networkmanager.dev/docs/api/latest/nm-settings-nmcli.html)
 - [NetworkManager `nmcli` manual](https://www.networkmanager.dev/docs/api/latest/nmcli.html)
-- [HWIDChecker ARP provider](../../app/src/Hardware/ArpInfo.cs)
-- [HWIDChecker Windows neighbor-table wrapper](../../app/src/Services/Win32/IpHlpApi.cs)
+- [HWIDChecker ARP provider](../../app/rust/src/hw/arp.rs)
+- [HWIDChecker Windows neighbor-table wrapper](../../app/rust/src/win/iphlp.rs)

@@ -244,11 +244,9 @@ The TPM carries its own endorsement identity (EK, EK certificate). Clearing the 
 
 ## HWID Checker References
 
-HWIDChecker is a native Rust Windows 10/11 x64 app. It requires administrator rights on every launch and needs no .NET runtime or VC++ redistributable. See [the app readme](app/readme.md) for build and publish commands. The legacy C# app in `app/src/` remains buildable and is no longer shipped.
+HWIDChecker is a standalone native Rust Windows 10/11 x64 app with 16 hardware sections. Download the executable below and run it as administrator. See [the app readme](app/readme.md) for usage, build, and release commands.
 
-- **UNIVERSAL**: [HWIDChecker.exe](/HWIDChecker.exe)
-- **Windows 10**: [HWID Checker Script](/app/scripts/hwid-check-w10.bat)
-- **Windows 11**: [HWID Checker Script](/app/scripts/hwid-check-w11.bat)
+- **Download for Windows 10/11 x64**: [HWIDChecker.exe](/HWIDChecker.exe)
 - **How to run, export, and compare before/after**: [Take before and after snapshots](guides/getting-started/getting-started.md#take-before-and-after-snapshots)
 
 ---

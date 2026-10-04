@@ -1,8 +1,8 @@
 # WP-01 disk fixtures
 
 All device-specific values here are fabricated. These are synthetic SDK-layout
-fixtures, not sanitized captures from this PC: the worker shell cannot open
-physical drives with the C# GENERIC_READ access. Hardware-derived descriptor and
+fixtures, not sanitized captures from this PC: at fixture creation, the worker shell could not open
+physical drives with the historical C# GENERIC_READ access. Hardware-derived descriptor and
 layout fixtures still require an elevated owner capture and identifier replacement.
 Real runtime data is confined to the ignored main-checkout golden/wp-01 directory.
 

@@ -1,20 +1,24 @@
 # HWID Checker Architecture
 
-HWIDChecker is a native Rust Windows x64 inspector, cleaner, and updater. The shipped executable comes from `app/rust/`. It uses native Win32 controls and a static CRT and needs neither .NET nor the VC++ redistributable. Every launch requires administrator rights. The C# WinForms implementation in `app/src/` remains buildable for reference and rollback; it is no longer shipped.
+HWIDChecker is a native Rust Windows x64 inspector, cleaner, and updater. The shipped executable comes from `app/rust/`. It uses native Win32 controls and a static CRT, with no additional runtime installation. Every launch requires administrator rights.
 
 ## Build and publish
 
 From the repository root:
 
 ```powershell
-pwsh -NoProfile -File app/rust/check.ps1
-dotnet build app/HWID-CHECKER.sln -c Release -p:Platform=x64
-dotnet msbuild app/rust/HWIDChecker.Rust.proj -t:Publish
+pwsh -NoProfile -File app/rust/scripts/check.ps1
+.\app\rust\scripts\build-test.ps1
+.\app\rust\scripts\release.ps1 -DryRun
 ```
 
-Build produces the Rust release exe under `app/rust/target/release/` and leaves the root exe unchanged. Publish runs `app/rust/release.ps1`: the base checks, the Cargo `dist` build, and dist PE/import/manifest validation. Only after success does the Rust Publish target copy `app/rust/target/dist/HWIDChecker.exe` to the root. C# has no PostPublish copy target. The Rust release script performs no version bump, commit, tag, push, or upload.
+`build-test.ps1` produces the release test exe under `app/rust/target/release/`; `-Safe` builds debug and `-Run` launches the selected build. It leaves the root exe unchanged. `build-dist.ps1` runs `check.ps1`, builds Cargo `dist`, validates PE/imports/manifest, and prints its size, version, and hash without staging or publishing.
+
+The owner `scripts/release.ps1` requires clean `main`, refreshes Cargo's version and lockfile, invokes `build-dist.ps1`, verifies the dist version, and copies exactly `app/rust/target/dist/HWIDChecker.exe` to the root. It verifies the copied hash and version. `-DryRun` restores both version files and the root exe; a real release requires `YES` and race checks before commit, tag, atomic push, and GitHub release. Supported version switches are `-Minor`, `-Major`, and `-Version X.Y.Z`. Scripts derive the Rust root from their own directory and the repository root from the parent of `app`, so the caller's working directory does not matter. Cargo target overrides are refused for staging.
 
 ## Source layout and contracts
+
+Rust comments marked `C# parity` record historical formatting and behavior decisions. Their C# filenames and line numbers refer to the [pre-retirement source snapshot](https://github.com/Fundryi/HWID-Privacy/tree/3768ddc9c21c9e64f8ada067d8466c7e9f7460e3/app/src), not files needed to build or test Rust. Fabricated compatibility fixtures remain active.
 
 | Path under `app/rust/src/` | Responsibility |
 |---|---|
@@ -48,7 +52,7 @@ Debug builds guard destructive operations unless `HWID_ALLOW_DESTRUCTIVE=1` is s
 
 `update.rs` uses the unchanged channel `https://github.com/Fundryi/HWID-Privacy/raw/main/HWIDChecker.exe` through `win/http.rs`. It compares SHA-256 of the download and running exe, independent of version ordering. It retains the checked bytes, validates size/hash and x64 PE before installation, renames the running image to a unique sibling, creates the replacement, and starts it before exiting. Write/restart errors attempt rollback; startup removes old siblings. See [auto-update.md](auto-update.md).
 
-Deployed C# clients in `app/src/Services/AutoUpdateService.cs` use the same URL and hash comparison. They download to a temp exe and use a batch file to copy and restart. The payload has no managed-assembly requirement, so the native exe can replace the C# exe.
+Deployed C# clients use the same URL and hash comparison. Their historical download/copy/restart protocol and the retained `csharp-last` fallback are documented in [auto-update.md](auto-update.md). The root `HWIDChecker.exe` path and name are part of that installed-client contract and must never change.
 
 ## Editing routes
 
@@ -60,6 +64,6 @@ Deployed C# clients in `app/src/Services/AutoUpdateService.cs` use the same URL 
 | Device/whitelist | `clean/devices.rs`, `clean/whitelist.rs`, related UI and SetupAPI wrappers |
 | Event logs | `clean/eventlog/`, `win/evt.rs`, `ui/clean_logs.rs` |
 | Updater | `update.rs`, `win/http.rs`, `ui/update_progress.rs` |
-| Build/staging | `HWIDChecker.Rust.proj`, `release.ps1`, `check.ps1`, Cargo config and resource manifest |
+| Build/staging | `rust/scripts/`, Cargo config, `rust/app.rc`, `rust/assets/app.ico`, and resource manifest |
 
-Read `AGENTS.md` first, preserve public contracts and established report text, then run `check.ps1` and check the actual changed behavior. Update this document when module ownership, contracts, data flow, or deployment changes.
+Read local `AGENTS.md` when present, preserve public contracts and established report text, then run `app/rust/scripts/check.ps1` and check the actual changed behavior. Update this document when module ownership, contracts, data flow, or deployment changes.

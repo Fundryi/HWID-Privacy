@@ -384,5 +384,5 @@ If the programmer cannot identify the SPD device, clear the required reversible 
 - **[A] Intel platform write-disable example:** [Intel Core Ultra 200S/200HX Host Configuration register](https://edc.intel.com/content/www/us/en/design/publications/core-ultra-p200s-series-processors-soc-i-o-registers/001/host-configuration-hcfg-offset-40/)
 - **[A] ESD-safe module handling:** [Kingston desktop DIMM installation](https://www.kingston.com/en/support/technical/how-to-install-memory-desktop-pc)
 - **[A] WMIC removal status:** [Microsoft deprecated Windows client features](https://learn.microsoft.com/en-us/windows/whats-new/deprecated-features)
-- **[A] HWIDChecker implementation:** [`RamInfo.cs`](../../app/src/Hardware/RamInfo.cs) and [`app.manifest`](../../app/src/app.manifest)
+- **[A] HWIDChecker implementation:** [`ram.rs`](../../app/rust/src/hw/ram.rs) and [`app.manifest`](../../app/rust/app.manifest)
 - **[A] DDR4 programmer capability example:** [Century Micro SPD PROGRAMMER 2 specifications](https://century-micro.co.jp/spdpgm2/spec.php)

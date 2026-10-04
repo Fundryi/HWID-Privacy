@@ -3,7 +3,7 @@ name: Rust check
 on:
   push:
     branches: [main, 'rust/**']
-    paths: ['app/rust/**']
+    paths: ['app/rust/**', '.github/workflows/rust-check.yml']
 
 permissions:
   contents: read
@@ -16,4 +16,4 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check Rust build, imports and manifest
         shell: pwsh
-        run: ./app/rust/check.ps1
+        run: ./app/rust/scripts/check.ps1
