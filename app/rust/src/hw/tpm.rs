@@ -1,4 +1,4 @@
-//! TPM status and legacy endorsement-key text, with explicit source diagnostics.
+//! TPM status and native endorsement-key fields, with legacy fallbacks.
 
 use crate::{
     hw::{Ctx, first_ok},
@@ -16,7 +16,7 @@ struct Info {
     source: &'static str,
 }
 
-/// Collects TPM status and EK identifiers through the legacy WMI/PowerShell chain.
+/// Collects TPM status and EK identifiers, retaining the WMI/PowerShell fallbacks.
 pub fn collect(_ctx: &Ctx, out: &mut Out) -> win::Result<()> {
     let info = match first_ok(
         out,
@@ -223,6 +223,16 @@ fn true_property(text: &str, name: &str) -> bool {
 }
 
 fn append_ek(out: &mut Out, status_source: &str) {
+    match tpm::native_ek() {
+        Ok(fields) => {
+            render_ek(out, &fields);
+            out.source(&format!("{status_source} (status); NCrypt/crypt32 (EK)"));
+            return;
+        }
+        Err(error) => {
+            out.fallback_failed("Native EK", &error);
+        }
+    }
     match tpm::powershell_ek() {
         Ok(output) => {
             if let Some(error) = &output.failure {
@@ -363,6 +373,28 @@ mod tests {
 
     #[test]
     fn ek_text_keeps_last_certificate_single_line_values_and_identifier_records() {
+        // Fabricated CNG RSA public blob. The independently encoded PKCS#1 fixture
+        // has a sign-padding zero before its 64-byte modulus; hashing the CNG blob
+        // itself, SPKI, or a little-endian modulus must not produce this digest.
+        let mut public = Vec::new();
+        for word in [0x31415352u32, 512, 3, 64, 0, 0] {
+            public.extend(word.to_le_bytes());
+        }
+        public.extend([1, 0, 1, 0x91]);
+        public.extend(1u8..64);
+        assert_eq!(
+            tpm::rsa_public_hash(&public).expect("fabricated CNG public blob"),
+            "6bb76d695bfad220fbfbfd93ac1ca7c67b387d986b42c828f5c506d63ba3107f"
+        );
+        for length in 0..public.len() {
+            assert!(tpm::rsa_public_hash(&public[..length]).is_err());
+        }
+        for offset in [0, 4, 8, 12, 16, 20] {
+            let mut corrupt = public.clone();
+            corrupt[offset..offset + 4].fill(0xff);
+            assert!(tpm::rsa_public_hash(&corrupt).is_err());
+        }
+        assert!(tpm::certificate_fields(b"not a certificate").is_err());
         let fields = parse_ek(include_str!(
             "../../tests/fixtures/wp-05/ek-format-list.fixture"
         ));
