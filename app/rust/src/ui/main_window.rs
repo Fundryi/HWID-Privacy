@@ -4,7 +4,7 @@
 //! loading overlay shown; one worker runs all providers; the sections fill only when all are done
 //! (OPT-4). Each load has an id, so only the newest load's result is applied (F26, AD-41).
 
-use super::controls::{ButtonSpec, Ctl, EditBorder, EditSpec, LabelSpec};
+use super::controls::{ButtonSpec, Ctl, EditSpec, LabelSpec};
 use super::layout::{Anchor, FlowDir, Kind, Node, Size, Track};
 use super::msgbox::{self, Buttons, Icon};
 use super::theme::glyph;
@@ -690,12 +690,15 @@ fn content() -> Node {
     .padding(theme::HEADER_PADDING)
     .margin(theme::HEADER_MARGIN)
     .cell(0, 0);
+    // C# parity: SectionedViewForm.cs:214 uses `BorderStyle.FixedSingle`. The kit keeps the
+    // default `Fixed3D` edge (DESIGN.md 5): the 1 px `BORDER` ring is painted over the client
+    // edge with the scroll bars inside it, like every other well. A `WS_BORDER` multiline edit
+    // draws its own light frame inside the client area and leaves the bars outside it.
     let edit = EditSpec::new(
         theme::CONTENT_FONT,
         theme::TEXT_BOX_TEXT,
         theme::TEXT_BOX_BACKGROUND,
-    )
-    .border(EditBorder::FixedSingle);
+    );
     let loaded = Node::table(
         vec![Track::Percent(100.0)],
         vec![Track::AutoSize, Track::Percent(100.0)],
