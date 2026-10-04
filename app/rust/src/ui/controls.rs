@@ -1937,6 +1937,79 @@ impl CtlState {
 
     // -- checked list ----------------------------------------------------------------------
 
+    fn set_list_checked(&self, l: &ListData, index: usize, checked: bool) {
+        if l.checked
+            .borrow()
+            .get(index)
+            .is_none_or(|old| *old == checked)
+        {
+            return;
+        }
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EVENT_OBJECT_NAMECHANGE, LB_DELETESTRING, LB_GETTOPINDEX, LB_INSERTSTRING,
+            LB_SETCURSEL, LB_SETTOPINDEX, OBJID_CLIENT,
+        };
+        // The crate's Accessibility feature is not enabled; this existing user32 API
+        // needs no additional dependency or Cargo feature.
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn NotifyWinEvent(event: u32, hwnd: HWND, object: i32, child: i32);
+        }
+        let len = send(self.hwnd, LB_GETTEXTLEN, index, 0).0;
+        if len == LB_ERR as isize {
+            win::record(win::Error::msg(
+                "Update checked list",
+                "item text unavailable",
+            ));
+            return;
+        }
+        let mut buf = vec![0u16; len as usize + 1];
+        send(self.hwnd, LB_GETTEXT, index, buf.as_mut_ptr() as isize);
+        let old = from_wide(&buf);
+        let wide = to_wide(&list_accessible_name(list_display_name(&old), checked));
+        let selected = send(self.hwnd, LB_GETCURSEL, 0, 0).0;
+        let top = send(self.hwnd, LB_GETTOPINDEX, 0, 0).0;
+        // LISTBOX has no set-item-text message. Replace in place without flashing or
+        // changing the selected row/scroll position; owner drawing omits the state suffix.
+        send(self.hwnd, WM_SETREDRAW, 0, 0);
+        send(self.hwnd, LB_DELETESTRING, index, 0);
+        if send(self.hwnd, LB_INSERTSTRING, index, wide.as_ptr() as isize).0 == index as isize {
+            l.checked.borrow_mut()[index] = checked;
+        } else {
+            let original = to_wide(&old);
+            let restored = send(
+                self.hwnd,
+                LB_INSERTSTRING,
+                index,
+                original.as_ptr() as isize,
+            )
+            .0;
+            if restored != index as isize {
+                l.checked.borrow_mut().remove(index);
+            }
+            win::record(win::Error::msg(
+                "Update checked list",
+                format!(
+                    "item replacement failed; restored={}",
+                    restored == index as isize
+                ),
+            ));
+        }
+        send(self.hwnd, LB_SETCURSEL, selected as usize, 0);
+        send(self.hwnd, LB_SETTOPINDEX, top as usize, 0);
+        send(self.hwnd, WM_SETREDRAW, 1, 0);
+        invalidate(self.hwnd);
+        // SAFETY: Announces the updated native name of this live list's 1-based child.
+        unsafe {
+            NotifyWinEvent(
+                EVENT_OBJECT_NAMECHANGE,
+                self.hwnd,
+                OBJID_CLIENT.0,
+                index as i32 + 1,
+            );
+        }
+    }
+
     fn update_item_height(&self) {
         let Data::List(_) = &self.data else {
             return;
@@ -1961,10 +2034,10 @@ impl CtlState {
         }
         let mut result = None;
         if !l.kill_next_select.get() {
-            let mut checked = l.checked.borrow_mut();
             let i = index as usize;
-            checked[i] = !checked[i];
-            result = Some((i, checked[i]));
+            let checked = !l.checked.borrow()[i];
+            self.set_list_checked(l, i, checked);
+            result = l.checked.borrow().get(i).map(|checked| (i, *checked));
         }
         invalidate(self.hwnd);
         result
@@ -2032,7 +2105,14 @@ impl CtlState {
                 w: text_bounds.w - 1,
                 h: text_bounds.h - 2,
             };
-            draw_text(hdc, &text, font, string_bounds, fore, DT_NOPREFIX);
+            draw_text(
+                hdc,
+                list_display_name(&text),
+                font,
+                string_bounds,
+                fore,
+                DT_NOPREFIX,
+            );
             if focus {
                 let rc = rect(text_bounds);
                 // SAFETY: Valid DC and rectangle.
@@ -2606,12 +2686,17 @@ pub fn list_set_items(hwnd: HWND, items: &[(String, bool)]) {
         return;
     };
     send(hwnd, LB_RESETCONTENT, 0, 0);
-    *l.checked.borrow_mut() = items.iter().map(|(_, c)| *c).collect();
-    for (text, _) in items {
-        let wide = to_wide(text);
-        if send(hwnd, LB_ADDSTRING, 0, wide.as_ptr() as isize).0 == LB_ERR as isize {
+    l.checked.borrow_mut().clear();
+    for (text, checked) in items {
+        let wide = to_wide(&list_accessible_name(text, *checked));
+        if send(hwnd, LB_ADDSTRING, 0, wide.as_ptr() as isize).0 < 0 {
+            win::record(win::Error::msg(
+                "Populate checked list",
+                "item insertion failed",
+            ));
             break;
         }
+        l.checked.borrow_mut().push(*checked);
     }
     invalidate(hwnd);
 }
@@ -2631,11 +2716,18 @@ pub fn list_set_checked(hwnd: HWND, index: usize, checked: bool) {
     if let Some(st) = state_of(hwnd)
         && let Data::List(l) = &st.data
     {
-        if let Some(c) = l.checked.borrow_mut().get_mut(index) {
-            *c = checked;
-        }
-        invalidate(hwnd);
+        st.set_list_checked(l, index, checked);
     }
+}
+
+fn list_accessible_name(text: &str, checked: bool) -> String {
+    format!("{text}, {}", if checked { "checked" } else { "unchecked" })
+}
+
+fn list_display_name(text: &str) -> &str {
+    text.strip_suffix(", unchecked")
+        .or_else(|| text.strip_suffix(", checked"))
+        .unwrap_or(text)
 }
 
 /// `ProgressBar.Value`.
