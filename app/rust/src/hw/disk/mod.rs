@@ -21,6 +21,7 @@ struct DiskInfo {
     device_id: String,
     model: String,
     serial: String,
+    nvme_ids: Vec<(&'static str, String)>,
     firmware: String,
     hardware_id: Option<(String, bool)>,
     volumes: Vec<(String, String)>,
@@ -97,6 +98,7 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             device_id,
             model: value("Model", "Unknown Model"),
             serial: value("SerialNumber", "Unknown Serial"),
+            nvme_ids: Vec::new(),
             firmware: value("FirmwareRevision", ""),
             details: Vec::new(),
             failures: Vec::new(),
@@ -107,6 +109,44 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
             .and_then(|v| trim_net(&v).parse::<i32>().ok())
             .filter(|&n| n >= 0);
         if let Some(index) = index {
+            match storage::physical_nvme_identity(index as u32) {
+                Ok(Some(identity)) => {
+                    match identity.controller_serial {
+                        Ok(Some(serial)) => disk.nvme_ids.push(("NVMe Controller Serial", serial)),
+                        Ok(None) => {}
+                        Err(error) => {
+                            out.fallback_failed(
+                                &format!("{} NVMe Controller Serial", disk.device_id),
+                                &error,
+                            );
+                        }
+                    }
+                    match identity.namespace {
+                        Ok(namespace) => {
+                            if let Some(eui64) = namespace.eui64 {
+                                disk.nvme_ids.push(("NVMe Namespace EUI-64", eui64));
+                            }
+                            if let Some(nguid) = namespace.nguid {
+                                disk.nvme_ids.push(("NVMe Namespace NGUID", nguid));
+                            }
+                        }
+                        Err(error) => {
+                            out.fallback_failed(
+                                &format!("{} NVMe Namespace", disk.device_id),
+                                &error,
+                            );
+                        }
+                    }
+                    if !disk.nvme_ids.is_empty() {
+                        sources.push("native (NVMe Identify)");
+                    }
+                }
+                Ok(None) => {}
+                // Optional enrichment must not change existing failure/status lines.
+                Err(error) => {
+                    out.fallback_failed(&format!("{} NVMe Identify", disk.device_id), &error);
+                }
+            }
             match storage::physical_identifier(index as u32) {
                 Ok(Some(id)) => {
                     sources.push("native (storage)");

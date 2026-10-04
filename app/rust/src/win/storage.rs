@@ -11,7 +11,7 @@ use std::{
 use windows::Win32::{
     Foundation::GENERIC_READ,
     Storage::FileSystem::{
-        GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
+        BusTypeNvme, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
         IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
     },
     System::{
@@ -162,6 +162,154 @@ pub fn physical_identifier(index: u32) -> Result<Option<Identifier>> {
             &query,
             4096,
         )?)
+    })
+}
+
+/// Independently collected controller and namespace identities, never Windows Serial.
+pub struct NvmeIdentity {
+    /// Identify Controller SN, with fixed-width padding removed.
+    pub controller_serial: Result<Option<String>>,
+    /// Identify Namespace binary identities in their original byte order.
+    pub namespace: Result<NvmeNamespace>,
+}
+
+/// Optional namespace identities; all-zero fields mean not supplied.
+#[derive(Debug, PartialEq, Eq)]
+pub struct NvmeNamespace {
+    /// Uppercase EUI-64, without separators.
+    pub eui64: Option<String>,
+    /// Uppercase NGUID, without separators.
+    pub nguid: Option<String>,
+}
+
+/// Reads NVMe Identify through storage property queries, gated by bus.
+pub fn physical_nvme_identity(index: u32) -> Result<Option<NvmeIdentity>> {
+    let nvme = bounded("StorageDeviceProperty", move || {
+        let handle = ioctl::open_device(&format!(r"\\.\PHYSICALDRIVE{index}"), GENERIC_READ.0)?;
+        let data = ioctl::device_io_control(
+            &handle,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            &[0; size_of::<STORAGE_PROPERTY_QUERY>()],
+            4096,
+        )?;
+        let size = dword(&data, offset_of!(STORAGE_DEVICE_DESCRIPTOR, Size))? as usize;
+        let bus_end = offset_of!(STORAGE_DEVICE_DESCRIPTOR, BusType) + 4;
+        if size < bus_end || size > data.len() {
+            return Err(Error::msg(
+                "storage descriptor",
+                "invalid device descriptor size",
+            ));
+        }
+        Ok(dword(&data, offset_of!(STORAGE_DEVICE_DESCRIPTOR, BusType))? == BusTypeNvme.0 as u32)
+    })?;
+    if !nvme {
+        return Ok(None);
+    }
+    // Separate bounded calls retain a successful identity if the other query fails
+    // or times out. Namespace SubValue=0 addresses this physical drive's namespace.
+    let controller_serial = nvme_identify(index, true).and_then(|data| parse_nvme_serial(&data));
+    let namespace = nvme_identify(index, false).and_then(|data| parse_nvme_namespace(&data));
+    Ok(Some(NvmeIdentity {
+        controller_serial,
+        namespace,
+    }))
+}
+
+const NVME_IDENTIFY_SIZE: usize = 4096;
+const PROTOCOL_START: usize = offset_of!(STORAGE_PROTOCOL_DATA_DESCRIPTOR, ProtocolSpecificData);
+
+fn nvme_identify(index: u32, controller: bool) -> Result<Vec<u8>> {
+    bounded("NVMe Identify", move || {
+        let handle = ioctl::open_device(&format!(r"\\.\PHYSICALDRIVE{index}"), GENERIC_READ.0)?;
+        // STORAGE_PROPERTY_QUERY.AdditionalParameters starts at byte 8, not
+        // sizeof(STORAGE_PROPERTY_QUERY): the SDK includes a one-byte tail.
+        let mut query = [0u8; PROTOCOL_START + size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>()];
+        let property = if controller {
+            StorageAdapterProtocolSpecificProperty
+        } else {
+            StorageDeviceProtocolSpecificProperty
+        };
+        for (offset, value) in [
+            (0, property.0 as u32),
+            (4, PropertyStandardQuery.0 as u32),
+            (8, ProtocolTypeNvme.0 as u32),
+            (12, NVMeDataTypeIdentify.0 as u32),
+            (16, u32::from(controller)), // CNS: controller=1, namespace=0.
+            (24, size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() as u32),
+            (28, NVME_IDENTIFY_SIZE as u32),
+        ] {
+            query[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let data = ioctl::device_io_control(
+            &handle,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            &query,
+            8192, // Slack avoids the shared helper retrying a completely full reply.
+        )?;
+        Ok(nvme_payload(&data)?.to_vec())
+    })
+}
+
+fn nvme_payload(data: &[u8]) -> Result<&[u8]> {
+    let header_size = size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() as u32;
+    if dword(data, 0)? != header_size
+        || dword(data, 4)? != header_size
+        || dword(data, 8)? != ProtocolTypeNvme.0 as u32
+        || dword(data, 12)? != NVMeDataTypeIdentify.0 as u32
+    {
+        return Err(Error::msg("NVMe Identify", "invalid protocol descriptor"));
+    }
+    let offset = dword(data, 24)? as usize;
+    let length = dword(data, 28)? as usize;
+    if offset < size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() || length < NVME_IDENTIFY_SIZE {
+        return Err(Error::msg(
+            "NVMe Identify",
+            "invalid protocol payload size or offset",
+        ));
+    }
+    let start = PROTOCOL_START.checked_add(offset);
+    start
+        .and_then(|start| {
+            start
+                .checked_add(length)
+                .and_then(|end| data.get(start..end))
+        })
+        .ok_or_else(|| Error::msg("NVMe Identify", "protocol payload exceeds returned buffer"))
+}
+
+fn parse_nvme_serial(payload: &[u8]) -> Result<Option<String>> {
+    let serial = bytes::<20>(payload, 4)?;
+    // Some devices NUL-pad instead of space-pad. Reject control/non-ASCII bytes
+    // inside the serial rather than injecting them into the report's tree.
+    let padding = |b: &u8| *b == 0 || *b == b' ';
+    let start = serial
+        .iter()
+        .position(|b| !padding(b))
+        .unwrap_or(serial.len());
+    let end = serial
+        .iter()
+        .rposition(|b| !padding(b))
+        .map_or(start, |i| i + 1);
+    let serial = &serial[start..end];
+    if serial.iter().any(|b| !(0x20..=0x7e).contains(b)) {
+        return Err(Error::msg(
+            "NVMe Identify",
+            "invalid controller serial encoding",
+        ));
+    }
+    Ok((!serial.is_empty()).then(|| serial.iter().map(|&b| char::from(b)).collect()))
+}
+
+fn parse_nvme_namespace(payload: &[u8]) -> Result<NvmeNamespace> {
+    let identifier = |value: &[u8]| {
+        value
+            .iter()
+            .any(|&b| b != 0)
+            .then(|| value.iter().map(|b| format!("{b:02X}")).collect())
+    };
+    Ok(NvmeNamespace {
+        eui64: identifier(&bytes::<8>(payload, 120)?),
+        nguid: identifier(&bytes::<16>(payload, 104)?),
     })
 }
 
@@ -414,6 +562,46 @@ mod tests {
 
     #[test]
     fn storage_descriptor_fixtures() {
+        let nvme: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/wp-01/nvme.json"))
+                .expect("NVMe fixture JSON");
+        assert_eq!(PROTOCOL_START, 8);
+        assert_eq!(offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters), 8);
+        assert_eq!(size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>(), 40);
+        for case in nvme["cases"].as_array().expect("NVMe cases") {
+            let mut data = vec![0; case["length"].as_u64().expect("length") as usize];
+            for segment in case["segments"].as_array().expect("segments") {
+                let offset = segment["offset"].as_u64().expect("offset") as usize;
+                let value = fixture_bytes(segment);
+                data[offset..offset + value.len()].copy_from_slice(&value);
+            }
+            let parse = |data: &[u8]| -> Result<Value> {
+                let payload = nvme_payload(data)?;
+                if case["kind"] == "controller" {
+                    Ok(serde_json::json!(parse_nvme_serial(payload)?))
+                } else {
+                    let ids = parse_nvme_namespace(payload)?;
+                    Ok(serde_json::json!({"eui64": ids.eui64, "nguid": ids.nguid}))
+                }
+            };
+            if case["error"] == true {
+                assert!(parse(&data).is_err(), "{}", case["name"]);
+            } else {
+                assert_eq!(
+                    parse(&data).expect("valid NVMe reply"),
+                    case["expected"],
+                    "{}",
+                    case["name"]
+                );
+                for end in 0..data.len() {
+                    assert!(
+                        parse(&data[..end]).is_err(),
+                        "{} prefix {end}",
+                        case["name"]
+                    );
+                }
+            }
+        }
         let fixture: Value =
             serde_json::from_str(include_str!("../../tests/fixtures/wp-01/storage.json"))
                 .expect("fixture JSON");
