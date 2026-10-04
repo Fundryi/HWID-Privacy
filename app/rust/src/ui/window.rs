@@ -867,6 +867,10 @@ impl FormState {
             }
         };
         let old = self.dpi.get();
+        // A redraw lock cannot make nested native HWND surfaces present atomically. Keep a
+        // complete client image above them until the single DPI layout and repaint finish.
+        let cover =
+            super::dpi_present::DpiCover::new(self.hwnd.get(), client_size(self.hwnd.get()));
         {
             let Ok(mut tree) = self.tree.try_borrow_mut() else {
                 return;
@@ -909,6 +913,18 @@ impl FormState {
                 }
             }
         };
+        if let Some(cover) = &cover {
+            let (style, ex) = styles(&self.spec);
+            if let Ok(frame) = dpi::outer_for_client(Size::default(), style, ex, new_dpi) {
+                let previous = client_size(self.hwnd.get());
+                // Never shrink the cover before the parent: that exposes old native surfaces
+                // around a smaller snapshot. The new client clips an oversized cover instead.
+                cover.resize(Size {
+                    w: (target.right - target.left - frame.w).max(previous.w),
+                    h: (target.bottom - target.top - frame.h).max(previous.h),
+                });
+            }
+        }
         // SAFETY: Moves our own window to the rectangle Windows suggested for the new DPI.
         unsafe {
             let _ = SetWindowPos(
@@ -929,9 +945,17 @@ impl FormState {
         self.relayout();
         // SAFETY: Repaint everything at the new scale.
         unsafe {
-            let _ =
-                windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd.get()), None, true);
+            use windows::Win32::Graphics::Gdi::{
+                RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
+            };
+            let _ = RedrawWindow(
+                Some(self.hwnd.get()),
+                None,
+                None,
+                RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW,
+            );
         }
+        drop(cover);
     }
 
     fn focus_changed(&self, hwnd: HWND) {

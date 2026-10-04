@@ -6,6 +6,7 @@ pub mod compare;
 pub mod confirm_removal;
 pub mod controls;
 pub mod dpi;
+mod dpi_present;
 mod find;
 pub mod layout;
 pub mod main_window;

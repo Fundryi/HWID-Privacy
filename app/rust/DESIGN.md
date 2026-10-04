@@ -151,6 +151,20 @@ Control sizes and paddings come from the C# layout (section 1), not from the han
 10. **Nothing is larger than the screen.** Section 11.
 11. **Find key routing.** Forms opt into `FormSpec::find_keys`: `Ctrl+F`, `F3`/`Shift+F3`, `Enter`/`Shift+Enter` in a single-line input, and `Esc` with the focused control id reach `Event::Key(FindKey)` before dialog navigation. The handler returns true only when consumed. Main and Old View currently use named no-op handlers; step 2b supplies find behavior. Neither sets `accept`/`cancel`.
 
+### DPI presentation (section 8.8)
+
+A monitor move keeps one complete client snapshot above the native children while fonts,
+the suggested window rectangle, and the single layout pass change. The snapshot is a
+temporary, opaque layered child, scaled as one image, with no activation or input handling.
+It grows to cover a larger client but never shrinks ahead of its parent: the new client clips
+the oversized old image until the repaint is ready, avoiding exposed old child surfaces.
+Repaint the entire HWND tree synchronously, including container focus rings and native EDIT
+frames, then release the snapshot after the compositor flush. Native controls keep their
+own text, selection, scroll position, keyboard focus and rendering. No persistent overlay,
+timer, `WS_EX_COMPOSITED`, or additional layout pass. `WM_SETFONT` keeps redraw disabled;
+`WM_GETDPISCALEDSIZE` continues to preserve the logical client size. A failed snapshot
+allocation is recorded and falls back to the normal native repaint.
+
 ## 9. Not adopted (and why)
 
 - **Frameless window with custom caption buttons:** the native title bar keeps Snap Layouts, native resizing, and screen reader support with no extra code. The DWM colors give the same look.
