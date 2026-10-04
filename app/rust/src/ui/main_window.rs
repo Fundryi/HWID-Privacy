@@ -117,11 +117,15 @@ fn parts() -> (FormSpec, Vec<Node>, Handler) {
     spec.start = StartPosition::CenterScreen;
     spec.maximize_if_too_big = true; // AD-38
     let state = Rc::new(State::default());
+    let find = super::find::Find::new(CONTENT);
     let handler = move |form: &Form, event: Event| {
         if let Event::Key(key) = event {
-            return on_find_key(form, key);
+            return on_find_key(form, &find, key);
         }
-        handle(form, &state, event);
+        if !find.event(form, &event) {
+            handle(form, &state, event);
+        }
+        find.refresh(form);
         true
     };
     (spec, tree(), Box::new(handler))
@@ -230,8 +234,8 @@ fn on_updates(form: &Form, _state: &State) {
 }
 
 // Step 2b owns find behavior; unhandled keys keep the existing dialog navigation.
-fn on_find_key(_form: &Form, _key: window::FindKey) -> bool {
-    false
+fn on_find_key(form: &Form, find: &super::find::Find, key: window::FindKey) -> bool {
+    find.key(form, key)
 }
 
 fn load_settings(form: &Form, state: &State) {
@@ -820,13 +824,14 @@ fn content() -> Node {
     .keep_selection();
     let loaded = Node::table(
         vec![Track::Percent(100.0)],
-        vec![Track::AutoSize, Track::Percent(100.0)],
+        vec![Track::AutoSize, Track::AutoSize, Track::Percent(100.0)],
         vec![
             header,
+            super::find::bar().cell(0, 1),
             Node::leaf(CONTENT, Ctl::Edit(edit))
                 .fill()
                 .margin(theme::NO_PAD)
-                .cell(0, 1),
+                .cell(0, 2),
         ],
     )
     .id(CONTENT_TABLE)

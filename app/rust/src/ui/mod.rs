@@ -5,6 +5,7 @@ pub mod clean_logs;
 pub mod confirm_removal;
 pub mod controls;
 pub mod dpi;
+mod find;
 pub mod layout;
 pub mod main_window;
 pub mod msgbox;
