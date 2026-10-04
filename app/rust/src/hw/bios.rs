@@ -13,8 +13,11 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         out.fallback_failed("SMBIOS", &error);
         firmware_error = Some(error);
     }
-    let has_information = collect_with(smbios, out, |class| {
-        wmi::query(wmi::Namespace::Cimv2, &format!("SELECT * FROM {class}"))
+    let has_information = collect_with(smbios, out, |class, names| {
+        wmi::query(
+            wmi::Namespace::Cimv2,
+            &format!("SELECT {} FROM {class}", names.join(", ")),
+        )
     });
     // AD-03: show the firmware failure when WMI supplies no replacement values.
     if !has_information && let Some(error) = firmware_error {
@@ -26,9 +29,10 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
 fn collect_with(
     smbios: Option<&Smbios>,
     out: &mut Out,
-    mut query: impl FnMut(&str) -> win::Result<Vec<wmi::Row>>,
+    mut query: impl FnMut(&str, &[&str]) -> win::Result<Vec<wmi::Row>>,
 ) -> bool {
     let mut failures = Vec::new();
+    let (fields, uuid) = smbios_fields(smbios);
     let bios = query_fields(
         "Win32_BIOS",
         [
@@ -37,12 +41,14 @@ fn collect_with(
             "SMBIOSBIOSVersion",
             "SerialNumber",
         ],
+        [fields[0].is_empty(), fields[1].is_empty(), true, true],
         &mut query,
         &mut failures,
     );
     let product = query_fields(
         "Win32_ComputerSystemProduct",
         ["Vendor", "UUID", "IdentifyingNumber"],
+        [true, uuid.is_empty(), true],
         &mut query,
         &mut failures,
     );
@@ -70,10 +76,18 @@ fn collect_with(
 fn query_fields<const N: usize>(
     class: &'static str,
     names: [&str; N],
-    query: &mut impl FnMut(&str) -> win::Result<Vec<wmi::Row>>,
+    needed: [bool; N],
+    query: &mut impl FnMut(&str, &[&str]) -> win::Result<Vec<wmi::Row>>,
     failures: &mut Vec<(&'static str, win::Error)>,
 ) -> [String; N] {
-    match query(class) {
+    // Only omit a fallback property when the existing renderer already prefers SMBIOS.
+    // The four WMI-only properties remain authoritative, including on query failure.
+    let selected: Vec<_> = names
+        .iter()
+        .zip(needed)
+        .filter_map(|(&name, needed)| needed.then_some(name))
+        .collect();
+    match query(class, &selected) {
         // C# parity: BiosInfo.cs:30-47. Later WMI rows overwrite even null/empty properties.
         Ok(rows) => names.map(|name| {
             rows.last()
@@ -87,12 +101,7 @@ fn query_fields<const N: usize>(
     }
 }
 
-fn write_information(
-    smbios: Option<&Smbios>,
-    bios: &[String; 4],
-    product: &[String; 3],
-    out: &mut Out,
-) {
+fn smbios_fields(smbios: Option<&Smbios>) -> ([&str; 8], String) {
     let mut fields = [""; 8];
     let mut uuid = String::new();
     if let Some(smbios) = smbios {
@@ -134,6 +143,16 @@ fn write_information(
             }
         }
     }
+    (fields, uuid)
+}
+
+fn write_information(
+    smbios: Option<&Smbios>,
+    bios: &[String; 4],
+    product: &[String; 3],
+    out: &mut Out,
+) {
+    let (fields, uuid) = smbios_fields(smbios);
     let prefer_direct = |direct: &str, fallback: &str| {
         if direct.is_empty() {
             fallback.to_owned()
@@ -141,7 +160,7 @@ fn write_information(
             direct.to_owned()
         }
     };
-    // C# parity: BiosInfo.cs:50-78. No trimming, no SystemVersion; four fields remain WMI-only.
+    // C# parity: BiosInfo.cs:50-78. No trimming; four fields remain WMI-only.
     out.info("Manufacturer", &prefer_direct(fields[0], &bios[0]))
         .info("Vendor", &product[0])
         .info("Version", &prefer_direct(fields[1], &bios[1]))
@@ -170,6 +189,89 @@ fn write_information(
             }
         }
     }
+    if let Some(smbios) = smbios {
+        let version = smbios.structures.iter().rev().find_map(|record| {
+            (record.kind == 1)
+                .then(|| record.byte(6).map(|index| record.string(index)))
+                .flatten()
+        });
+        if let Some(version) = version.filter(|value| useful_new_value(value)) {
+            out.info("System Version", version);
+        }
+        // Type 11 is free-form OEM text, not necessarily an identifier. Only admit
+        // explicit identifier labels; do not promote arbitrary vendor messages.
+        for record in smbios.structures.iter().filter(|record| record.kind == 11) {
+            for index in 1..=record.byte(4).unwrap_or_default() {
+                let text = record.string(index);
+                if text.chars().any(char::is_control) {
+                    continue;
+                }
+                let Some((label, value)) = text.split_once([':', '=']) else {
+                    continue;
+                };
+                if !matches!(
+                    label.trim().to_ascii_lowercase().as_str(),
+                    "serial"
+                        | "serial number"
+                        | "serialnumber"
+                        | "s/n"
+                        | "sn"
+                        | "asset tag"
+                        | "sku"
+                        | "part number"
+                        | "p/n"
+                ) || !useful_new_value(value)
+                    || fields
+                        .iter()
+                        .copied()
+                        .chain(bios.iter().map(String::as_str))
+                        .any(|existing| existing.trim() == value.trim())
+                    || product
+                        .iter()
+                        .any(|existing| existing.trim() == value.trim())
+                    || uuid == value.trim()
+                {
+                    continue;
+                }
+                out.info(
+                    &format!("OEM String (0x{:04X}, {index})", record.handle),
+                    text,
+                )
+                .id_value(value.trim());
+            }
+        }
+    }
+}
+
+/// Filters only optional new firmware fields; legacy values remain byte-identical.
+pub(super) fn useful_new_value(value: &str) -> bool {
+    if value.chars().any(char::is_control) {
+        return false;
+    }
+    let value = value.trim();
+    !value.is_empty()
+        && !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "default string"
+                | "to be filled by o.e.m."
+                | "to be filled by oem"
+                | "not specified"
+                | "not applicable"
+                | "not available"
+                | "unspecified"
+                | "unknown"
+                | "none"
+                | "n/a"
+                | "system version"
+                | "system sku"
+                | "system family"
+                | "system serial number"
+                | "chassis serial number"
+                | "no asset tag"
+        )
+        && !value
+            .chars()
+            .all(|c| matches!(c, '0' | 'f' | 'F' | '-' | ' '))
 }
 
 #[cfg(test)]
@@ -207,6 +309,7 @@ mod tests {
                 "System Manufacturer: Micro-Star International Co., Ltd.\r\n",
                 "System Product: MS-7D75\r\nSystem Serial: SYS2410D5A7286\r\n",
                 "System SKU: SKU-B650-042\r\nSystem Family: Desktop Family\r\n",
+                "System Version: 1.0\r\n",
             )
         );
         assert_eq!(
@@ -260,6 +363,63 @@ mod tests {
                 "IdentifyingNumber: PRD2410A7216\r\nSerialNumber: BIOS2410G0936\r\n",
             )
         );
+        let mut smbios = fixture();
+        let raw: Vec<u8> = include_str!("../../tests/fixtures/wp-02/oem-identifiers.hex")
+            .split_whitespace()
+            .map(|byte| u8::from_str_radix(byte, 16).expect("fixture hex"))
+            .collect();
+        smbios.structures.extend(
+            win::firmware::parse_smbios(&raw)
+                .expect("OEM fixture")
+                .structures,
+        );
+        let mut out = Out::new();
+        write_information(Some(&smbios), &bios, &product, &mut out);
+        let enriched = out.finish();
+        assert_eq!(
+            enriched.body,
+            format!(
+                "{}OEM String (0x000B, 1): Serial Number: OEM2410A82716\r\n",
+                section.body
+            )
+        );
+        assert_eq!(
+            enriched.ids.last().map(String::as_str),
+            Some("OEM2410A82716")
+        );
+        for count in [0, 255] {
+            smbios.structures.last_mut().expect("OEM record").formatted[4] = count;
+            let mut out = Out::new();
+            write_information(Some(&smbios), &bios, &product, &mut out);
+            assert_eq!(
+                out.finish().body,
+                if count == 0 {
+                    &section.body
+                } else {
+                    &enriched.body
+                }
+                .as_str()
+            );
+        }
+        smbios
+            .structures
+            .last_mut()
+            .expect("OEM record")
+            .formatted
+            .truncate(4);
+        let mut out = Out::new();
+        write_information(Some(&smbios), &bios, &product, &mut out);
+        assert_eq!(out.finish().body, section.body);
+        for placeholder in [
+            "Default string",
+            "To Be Filled By O.E.M.",
+            "Unknown",
+            "000000",
+            "FFFF-FFFF",
+            "\r\n",
+        ] {
+            assert!(!useful_new_value(placeholder));
+        }
     }
 
     #[test]
@@ -272,8 +432,16 @@ mod tests {
         ] {
             let mut calls = Vec::new();
             let mut out = Out::new();
-            collect_with(Some(&smbios), &mut out, |class| {
+            collect_with(Some(&smbios), &mut out, |class, names| {
                 calls.push(class.to_owned());
+                assert_eq!(
+                    names,
+                    if class == "Win32_BIOS" {
+                        ["SMBIOSBIOSVersion", "SerialNumber"]
+                    } else {
+                        ["Vendor", "IdentifyingNumber"]
+                    }
+                );
                 if failed.contains(&class) {
                     Err(win::Error {
                         op: "WMI query",
@@ -303,7 +471,7 @@ mod tests {
                     .contains("IdentifyingNumber: \r\nSerialNumber: \r\n")
             );
             assert_eq!(section.failures.len(), failed.len());
-            let mut ending = "System Family: Desktop Family\r\n".to_owned();
+            let mut ending = "System Version: 1.0\r\n".to_owned();
             for class in failed {
                 ending.push_str(&format!(
                     "WMI query failed: {class}: WMI query failed: 0x80041003 fabricated access denied\r\n"
@@ -313,7 +481,23 @@ mod tests {
             assert!(!section.body.contains("Error retrieving"));
         }
         let mut out = Out::new();
-        collect_with(None, &mut out, |_| Ok(Vec::new()));
+        collect_with(None, &mut out, |class, names| {
+            assert_eq!(
+                names,
+                if class == "Win32_BIOS" {
+                    [
+                        "Manufacturer",
+                        "Version",
+                        "SMBIOSBIOSVersion",
+                        "SerialNumber",
+                    ]
+                    .as_slice()
+                } else {
+                    ["Vendor", "UUID", "IdentifyingNumber"].as_slice()
+                }
+            );
+            Ok(Vec::new())
+        });
         assert_eq!(
             out.finish().body,
             concat!(
@@ -321,6 +505,25 @@ mod tests {
                 "UUID: \r\nIdentifyingNumber: \r\nSerialNumber: \r\n",
             )
         );
+        let mut partial = fixture();
+        for record in &mut partial.structures {
+            match record.kind {
+                0 => record.formatted[5] = 0,
+                1 => record.formatted.truncate(8),
+                _ => {}
+            }
+        }
+        collect_with(Some(&partial), &mut Out::new(), |class, names| {
+            assert_eq!(
+                names,
+                if class == "Win32_BIOS" {
+                    ["Version", "SMBIOSBIOSVersion", "SerialNumber"]
+                } else {
+                    ["Vendor", "UUID", "IdentifyingNumber"]
+                }
+            );
+            Ok(Vec::new())
+        });
     }
 
     #[test]
@@ -340,14 +543,17 @@ mod tests {
             let mut faults = Vec::new();
             for failed in ["Win32_BIOS", "Win32_ComputerSystemProduct"] {
                 let mut out = Out::new();
-                collect_with(ctx.smbios(), &mut out, |class| {
+                collect_with(ctx.smbios(), &mut out, |class, names| {
                     if class == failed {
                         Err(win::Error::msg(
                             "WMI query",
                             "injected single-query failure",
                         ))
                     } else {
-                        wmi::query(wmi::Namespace::Cimv2, &format!("SELECT * FROM {class}"))
+                        wmi::query(
+                            wmi::Namespace::Cimv2,
+                            &format!("SELECT {} FROM {class}", names.join(", ")),
+                        )
                     }
                 });
                 let section = out.finish();
