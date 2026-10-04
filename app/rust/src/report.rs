@@ -12,6 +12,100 @@ pub struct Section {
     pub elapsed_ms: u128,
 }
 
+const MASK_MIN_LEN: usize = 4;
+
+/// Masks ASCII letters and digits without changing separators or character widths.
+pub fn mask_value(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { 'X' } else { c })
+        .collect()
+}
+
+/// Masks only whole-token occurrences of provider-marked identifiers in a copy.
+pub fn masked(section: &Section) -> Section {
+    let mut values: Vec<&str> = section
+        .ids
+        .iter()
+        .map(String::as_str)
+        .filter(|value| value.chars().count() >= MASK_MIN_LEN)
+        .collect();
+    values.sort_unstable_by_key(|value| (std::cmp::Reverse(value.len()), *value));
+    values.dedup();
+    let mut result = section.clone();
+    result.body.clear();
+    // Match against the original text, so an overlapping shorter ID cannot consume an
+    // already-masked replacement (or change the boundaries used for a later match).
+    let mut offset = 0;
+    while offset < section.body.len() {
+        let rest = &section.body[offset..];
+        let start = !section.body[..offset]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphanumeric);
+        let found = values.iter().find(|value| {
+            start
+                && rest.starts_with(**value)
+                && !rest[value.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_alphanumeric)
+        });
+        if let Some(value) = found {
+            result.body.push_str(&mask_value(value));
+            offset += value.len();
+        } else if let Some(c) = rest.chars().next() {
+            result.body.push(c);
+            offset += c.len_utf8();
+        }
+    }
+    for value in &mut result.ids {
+        if value.chars().count() >= MASK_MIN_LEN {
+            *value = mask_value(value);
+        }
+    }
+    result
+}
+
+/// Serializes already-prepared sections as pretty CRLF JSON without diagnostic fields.
+pub fn export_json(
+    sections: &[Section],
+    exported: &str,
+    masked: bool,
+) -> crate::win::Result<String> {
+    #[derive(serde::Serialize)]
+    struct ExportSection<'a> {
+        title: &'a str,
+        lines: Vec<&'a str>,
+        ids: &'a [String],
+    }
+    #[derive(serde::Serialize)]
+    struct Export<'a> {
+        app: &'static str,
+        version: &'static str,
+        exported: &'a str,
+        masked: bool,
+        sections: Vec<ExportSection<'a>>,
+    }
+    let export = Export {
+        app: "HWIDChecker",
+        version: env!("CARGO_PKG_VERSION"),
+        exported,
+        masked,
+        sections: sections
+            .iter()
+            .map(|section| ExportSection {
+                title: section.title,
+                lines: section.body.split_terminator("\r\n").collect(),
+                ids: &section.ids,
+            })
+            .collect(),
+    };
+    serde_json::to_string_pretty(&export)
+        .map(|json| json.replace('\n', "\r\n"))
+        .map_err(|error| Error::msg("Serialize export JSON", error.to_string()))
+}
+
 #[derive(Default)]
 pub struct Out {
     section: Section,
@@ -244,6 +338,97 @@ fn ordinal_upper(ch: char) -> char {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mask_respects_provider_ids_boundaries_overlap_and_unicode() {
+        let mut section = super::Section {
+            title: "FIXTURE",
+            body:
+                "AB12 AB12-CD34 xAB12 AB12z éAB12 AB12é (AB12)\r\nN/A 0 1 éß😀9\r\nUnmarked: XY99"
+                    .into(),
+            ids: ["AB12", "AB12-CD34", "AB12", "N/A", "0", "1", "éß😀9"]
+                .map(str::to_owned)
+                .into(),
+            source: "native".into(),
+            failures: vec!["diagnostic AB12".into()],
+            elapsed_ms: 7,
+        };
+        let masked = super::masked(&section);
+        assert_eq!(
+            masked.body,
+            "XXXX XXXX-XXXX xAB12 AB12z éAB12 AB12é (XXXX)\r\nN/A 0 1 éß😀X\r\nUnmarked: XY99"
+        );
+        assert_eq!(
+            masked.ids,
+            ["XXXX", "XXXX-XXXX", "XXXX", "N/A", "0", "1", "éß😀X"]
+        );
+        assert_eq!(
+            masked.body.encode_utf16().count(),
+            section.body.encode_utf16().count()
+        );
+        assert_eq!(
+            (
+                masked.title,
+                masked.source,
+                masked.failures,
+                masked.elapsed_ms
+            ),
+            (
+                section.title,
+                section.source.clone(),
+                section.failures.clone(),
+                section.elapsed_ms
+            )
+        );
+        assert!(section.body.starts_with("AB12"));
+        section.ids.clear();
+        assert_eq!(super::masked(&section).body, section.body);
+        assert_eq!(
+            super::mask_value("{ab12-34CD} eui.0000_0001. \\ é9"),
+            "{XXXX-XXXX} XXX.XXXX_XXXX. \\ éX"
+        );
+    }
+
+    #[test]
+    fn json_export_preserves_rows_ids_and_excludes_diagnostics() {
+        let sections = [
+            super::Section {
+                title: "FIXTURE",
+                body: "  Serial: AB12\r\nquote: \"\\é😀\r\n\r\n".into(),
+                ids: vec!["AB12".into(), "AB12".into()],
+                source: "PRIVATE SOURCE".into(),
+                failures: vec!["PRIVATE FAILURE".into()],
+                elapsed_ms: 17,
+            },
+            super::Section {
+                title: "EMPTY",
+                ..Default::default()
+            },
+        ];
+        let raw = super::export_json(&sections, "2026-10-04T09:30:00", false).unwrap();
+        assert!(raw.starts_with("{\r\n  \"app\": \"HWIDChecker\",\r\n"));
+        assert!(!raw.replace("\r\n", "").contains('\n'));
+        assert!(!raw.contains("PRIVATE"));
+        let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(json.as_object().unwrap().len(), 5);
+        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(json["exported"], "2026-10-04T09:30:00");
+        assert_eq!(json["masked"], false);
+        assert_eq!(
+            json["sections"][0]["lines"],
+            serde_json::json!(["  Serial: AB12", "quote: \"\\é😀", ""])
+        );
+        assert_eq!(
+            json["sections"][0]["ids"],
+            serde_json::json!(["AB12", "AB12"])
+        );
+        assert_eq!(json["sections"][0].as_object().unwrap().len(), 3);
+        assert_eq!(json["sections"][1]["lines"], serde_json::json!([]));
+        assert_eq!(json["sections"][1]["title"], "EMPTY");
+        let masked = sections.iter().map(super::masked).collect::<Vec<_>>();
+        let raw = super::export_json(&masked, "2026-10-04T09:30:00", true).unwrap();
+        assert!(!raw.contains("AB12"));
+        assert!(raw.contains("\"masked\": true"));
+    }
     use super::*;
 
     const RULE: &str = "=============================================================================================\r\n";

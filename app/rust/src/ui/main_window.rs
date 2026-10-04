@@ -35,6 +35,7 @@ const LOADING_PROGRESS: u16 = 12;
 /// The header card and text well (hidden while a load runs).
 const CONTENT_TABLE: u16 = 13;
 const COPY: u16 = 14;
+const MASK_IDS: u16 = 28;
 const LOADING_BOX: u16 = 15;
 const SIDEBAR_CELL: u16 = 16;
 const TOOLS: u16 = 17;
@@ -87,6 +88,7 @@ struct State {
     /// DPI of the last layout the footer bounds belong to (0 = none yet).
     layout_dpi: Cell<u32>,
     settings: RefCell<settings::Settings>,
+    mask: Cell<bool>,
 }
 
 enum Msg {
@@ -147,6 +149,7 @@ fn handle(form: &Form, state: &State, event: Event) {
         Event::Timer(SPIN_TIMER) => form.spin(SPINNER),
         Event::Click(id) => on_click(form, state, id),
         Event::Toggled(STARTUP_UPDATES, checked) => set_startup_updates(form, state, checked),
+        Event::Toggled(MASK_IDS, checked) => set_mask(form, state, checked),
         _ => {}
     }
 }
@@ -204,7 +207,7 @@ fn on_click(form: &Form, state: &State, id: u16) {
         OLD_VIEW => {
             // C# parity: SectionedViewForm.cs:821-872.
             set_button_text(form, OLD_VIEW, false, OLD_VIEW_LOADING);
-            raw_view::show(form.hwnd());
+            raw_view::show(form.hwnd(), state.mask.get());
             set_button_text(form, OLD_VIEW, true, OLD_VIEW_TEXT);
         }
         _ => {
@@ -434,6 +437,13 @@ fn show_section(form: &Form, state: &State, index: usize) {
         let Some(section) = sections.get(index) else {
             return;
         };
+        let masked;
+        let section = if state.mask.get() {
+            masked = report::masked(section);
+            &masked
+        } else {
+            section
+        };
         (
             section.title,
             report::section_content(&section.body),
@@ -445,6 +455,22 @@ fn show_section(form: &Form, state: &State, index: usize) {
     form.set_text(SECTION_META, &format!("Section {} of {count}", index + 1));
     form.edit_set_text(CONTENT, &content);
     form.edit_scroll_to_top(CONTENT);
+}
+
+fn set_mask(form: &Form, state: &State, checked: bool) {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::Controls::{EM_GETFIRSTVISIBLELINE, EM_LINESCROLL};
+    use windows::Win32::UI::WindowsAndMessaging::SendMessageW;
+
+    state.mask.set(checked);
+    let Some(edit) = form.control(CONTENT) else {
+        return;
+    };
+    // SAFETY: Synchronous, pointer-free messages to this form's live EDIT control.
+    let first = unsafe { SendMessageW(edit, EM_GETFIRSTVISIBLELINE, None, None).0 };
+    show_section(form, state, state.active.get());
+    // SAFETY: The same live EDIT; show_section resets its scroll position to the top.
+    unsafe { SendMessageW(edit, EM_LINESCROLL, Some(WPARAM(0)), Some(LPARAM(first))) };
 }
 
 fn highlight(form: &Form, state: &State, index: usize) {
@@ -462,13 +488,24 @@ fn section_id(index: usize) -> u16 {
 fn export(form: &Form, state: &State) {
     // C# parity: SectionedViewForm.cs:708-744. The `No data to export` branch needs zero
     // sections, which the main window never has.
-    let text = report::export_text(&state.sections.borrow());
-    match write_export(&text) {
-        Ok(path) => msgbox::show(
+    let result = {
+        let sections = state.sections.borrow();
+        let masked;
+        let sections = if state.mask.get() {
+            masked = sections.iter().map(report::masked).collect::<Vec<_>>();
+            &masked[..]
+        } else {
+            &sections[..]
+        };
+        write_export(sections, state.mask.get())
+    };
+    match result {
+        Ok((path, json)) => msgbox::show(
             form.hwnd(),
             &format!(
-                "Export completed successfully!\nSaved to: {}",
-                path.display()
+                "Export completed successfully!\nSaved to: {}\nJSON: {}",
+                path.display(),
+                json.display()
             ),
             "Export",
             Buttons::Ok,
@@ -485,16 +522,31 @@ fn export(form: &Form, state: &State) {
 }
 
 /// Writes the export next to the exe (UTF-8 without BOM, same-second files overwritten).
-fn write_export(text: &str) -> win::Result<PathBuf> {
+fn write_export(sections: &[Section], masked: bool) -> win::Result<(PathBuf, PathBuf)> {
     // C# parity: FileExportService.cs:18-31 with AppDomain.BaseDirectory.
     let exe = std::env::current_exe().map_err(|e| io_error("Locate executable folder", e))?;
     let folder = exe
         .parent()
         .ok_or_else(|| win::Error::msg("Locate executable folder", "no parent folder"))?;
-    let (date, time) = win::time::export_stamp();
-    let path = folder.join(format!("HWID-EXPORT-{date}-{time}.txt"));
-    std::fs::write(&path, text).map_err(|e| io_error("Write export file", e))?;
-    Ok(path)
+    // One clock snapshot names both files and timestamps their contents. The legacy
+    // export_stamp helper takes two snapshots and keeps its public contract unchanged.
+    // SAFETY: GetLocalTime has no caller-owned pointers and cannot fail.
+    let now = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    let date = format!("{:02}.{:02}.{:04}", now.wDay, now.wMonth, now.wYear);
+    let time = format!("{:02};{:02};{:02}", now.wHour, now.wMinute, now.wSecond);
+    let exported = format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+        now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond
+    );
+    let suffix = if masked { "-MASKED" } else { "" };
+    let stem = format!("HWID-EXPORT-{date}-{time}{suffix}");
+    let path = folder.join(format!("{stem}.txt"));
+    let json = folder.join(format!("{stem}.json"));
+    std::fs::write(&path, report::export_text(sections))
+        .map_err(|e| io_error("Write export file", e))?;
+    std::fs::write(&json, report::export_json(sections, &exported, masked)?)
+        .map_err(|e| io_error("Write export file", e))?;
+    Ok((path, json))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -795,11 +847,20 @@ fn content() -> Node {
     .min(theme::COPY_BUTTON_SIZE)
     .anchor(Anchor::NONE)
     .margin(theme::NO_PAD)
+    .cell(2, 0);
+    let mask = Node::leaf(
+        MASK_IDS,
+        Ctl::Button(ButtonSpec::outline("Mask IDs").icon(glyph::HIDE).toggle()),
+    )
+    .auto_size()
+    .min(theme::MASK_BUTTON_SIZE)
+    .anchor(Anchor::NONE)
+    .margin(theme::ACTION_BUTTON_MARGIN)
     .cell(1, 0);
     let header = Node::table(
-        vec![Track::Percent(100.0), Track::AutoSize],
+        vec![Track::Percent(100.0), Track::AutoSize, Track::AutoSize],
         vec![Track::AutoSize],
-        vec![titles, copy],
+        vec![titles, mask, copy],
     )
     .fill()
     .auto_size()
@@ -958,7 +1019,7 @@ mod live {
     };
     use windows::core::BOOL;
 
-    const GOLDEN: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\feat-trunk";
+    const GOLDEN: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\feat-mask-json";
     const TICK: usize = 0x7E57;
     const CLOSE_WHILE_BUSY: usize = 0x7E58;
 
@@ -1319,7 +1380,7 @@ mod live {
     #[test]
     #[ignore = "opens a real window and collects real hardware data"]
     fn fit_matrix() {
-        const OUT: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\feat-trunk\fit";
+        const OUT: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\feat-mask-json\fit";
         std::fs::create_dir_all(OUT).unwrap();
         std::fs::create_dir_all(GOLDEN).unwrap();
         assert!(dpi::set_per_monitor_v2_for_tests(), "PerMonitorV2");
@@ -1339,6 +1400,7 @@ mod live {
         pump_while(Duration::from_secs(150), || loading(&form));
         pump_for(300);
         trunk_tools_check(&form);
+        mask_json_check(&form, &log);
         let real = dpi::window_dpi(form.hwnd());
         // C8's longest idle caption must still fit before the behavior lands in step 2c.
         form.set_text(UPDATES, "Update available");
@@ -1613,6 +1675,197 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
         assert!(fit_failures.is_empty(), "{fit_failures:?}");
         trunk_primitives_check();
         msgbox::testing::review_keyboard();
+    }
+
+    fn mask_json_check(form: &Form, log: &Mutex<Vec<String>>) {
+        use windows::Win32::UI::Controls::{EM_GETFIRSTVISIBLELINE, EM_LINESCROLL};
+        use windows::Win32::UI::Input::KeyboardAndMouse::{VK_RETURN, VK_SPACE};
+        use windows::Win32::UI::WindowsAndMessaging::{MSG, WM_KEYUP};
+
+        assert!(!form.is_checked(MASK_IDS));
+        assert_eq!(text_of(form.control(MASK_IDS).unwrap()), "Mask IDs, off");
+        let export = |masked: bool| -> serde_json::Value {
+            take(log);
+            let mut expected = String::new();
+            for (index, provider) in hw::PROVIDERS.iter().enumerate() {
+                form.click(section_id(index));
+                expected.push_str(&format!(
+                    "===== {} =====\r\n{}\r\n\r\n",
+                    provider.title,
+                    form.text(CONTENT)
+                ));
+            }
+            form.click(EXPORT);
+            let boxes = take(log);
+            let body = boxes
+                .iter()
+                .find(|text| text.starts_with("box Export | "))
+                .unwrap();
+            let txt = PathBuf::from(
+                body.lines()
+                    .find_map(|line| line.strip_prefix("Saved to: "))
+                    .unwrap(),
+            );
+            let json = PathBuf::from(
+                body.lines()
+                    .find_map(|line| line.strip_prefix("JSON: "))
+                    .unwrap(),
+            );
+            assert_eq!(txt.with_extension("json"), json);
+            assert_eq!(std::fs::read(&txt).unwrap(), expected.as_bytes());
+            let bytes = std::fs::read(&json).unwrap();
+            assert!(!bytes.starts_with(&[0xef, 0xbb, 0xbf]));
+            assert!(
+                !String::from_utf8(bytes.clone())
+                    .unwrap()
+                    .replace("\r\n", "")
+                    .contains('\n')
+            );
+            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value["masked"], masked);
+            assert_eq!(
+                value["sections"].as_array().unwrap().len(),
+                hw::PROVIDERS.len()
+            );
+            let stamp = value["exported"].as_str().unwrap();
+            assert_eq!(stamp.len(), 19);
+            let suffix = if masked { "-MASKED" } else { "" };
+            assert_eq!(
+                txt.file_name().unwrap().to_string_lossy(),
+                format!(
+                    "HWID-EXPORT-{}.{}.{}-{};{};{}{suffix}.txt",
+                    &stamp[8..10],
+                    &stamp[5..7],
+                    &stamp[..4],
+                    &stamp[11..13],
+                    &stamp[14..16],
+                    &stamp[17..19]
+                )
+            );
+            for path in [txt, json] {
+                std::fs::copy(&path, Path::new(GOLDEN).join(path.file_name().unwrap())).unwrap();
+                std::fs::remove_file(path).unwrap();
+            }
+            value
+        };
+        let original = export(false);
+        form.click(FIRST_SECTION);
+        let body = form.text(CONTENT);
+        let edit = form.control(CONTENT).unwrap();
+        let well = rect_of(edit, false);
+        // Exercise a genuinely scrolled native well even when this PC has few disks.
+        // SAFETY: Resizes only this test's child EDIT; relayout restores it below.
+        unsafe {
+            SetWindowPos(
+                edit,
+                None,
+                0,
+                0,
+                well.right - well.left,
+                (well.bottom - well.top) / 3,
+                SWP_NOMOVE | SWP_NOZORDER,
+            )
+            .unwrap();
+        }
+        // SAFETY: Pointer-free native scroll messages to this test's live well.
+        let first = unsafe {
+            SendMessageW(edit, EM_LINESCROLL, Some(WPARAM(0)), Some(LPARAM(5)));
+            SendMessageW(edit, EM_GETFIRSTVISIBLELINE, None, None).0
+        };
+        assert!(first > 0, "real disk report scrolls");
+        let toggle = form.control(MASK_IDS).unwrap();
+        form.focus(MASK_IDS);
+        let enter = MSG {
+            hwnd: toggle,
+            message: WM_KEYDOWN,
+            wParam: WPARAM(VK_RETURN.0 as usize),
+            ..Default::default()
+        };
+        assert!(window::pre_translate(&enter));
+        assert!(form.is_checked(MASK_IDS));
+        assert_eq!(text_of(toggle), "Mask IDs, on");
+        assert_ne!(form.text(CONTENT), body);
+        // SAFETY: Pointer-free read of the live well's first visible line.
+        let masked_first = unsafe { SendMessageW(edit, EM_GETFIRSTVISIBLELINE, None, None).0 };
+        assert_eq!(masked_first, first);
+        // SAFETY: Native Space down/up to the focused test control; no global input.
+        unsafe {
+            SendMessageW(toggle, WM_KEYDOWN, Some(WPARAM(VK_SPACE.0 as usize)), None);
+            SendMessageW(toggle, WM_KEYUP, Some(WPARAM(VK_SPACE.0 as usize)), None);
+        }
+        assert!(!form.is_checked(MASK_IDS));
+        assert_eq!(form.text(CONTENT), body, "off restores exact original text");
+        form.relayout();
+        form.click(MASK_IDS);
+        form.click(COPY);
+        let clipboard = std::process::Command::new("pwsh")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); Get-Clipboard -Raw",
+            ])
+            .output()
+            .unwrap();
+        assert!(clipboard.status.success());
+        assert_eq!(
+            String::from_utf8(clipboard.stdout).unwrap().trim_end(),
+            form.text(CONTENT)
+        );
+        let masked = export(true);
+        for (index, provider) in hw::PROVIDERS.iter().enumerate() {
+            let before = &original["sections"][index];
+            let section = Section {
+                title: provider.title,
+                body: before["lines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|line| line.as_str().unwrap())
+                    .collect::<Vec<_>>()
+                    .join("\r\n"),
+                ids: serde_json::from_value(before["ids"].clone()).unwrap(),
+                ..Default::default()
+            };
+            let expected = report::masked(&section);
+            assert_eq!(
+                masked["sections"][index]["ids"],
+                serde_json::json!(expected.ids)
+            );
+            assert_eq!(
+                masked["sections"][index]["lines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|line| line.as_str().unwrap())
+                    .collect::<Vec<_>>()
+                    .join("\r\n"),
+                expected.body
+            );
+        }
+        form.click(REFRESH);
+        pump_while(Duration::from_secs(150), || loading(form));
+        assert!(!loading(form));
+        assert!(form.is_checked(MASK_IDS), "mask survives refresh");
+        assert_eq!(text_of(toggle), "Mask IDs, on");
+        form.click(OLD_VIEW);
+        let raw = std::fs::read_to_string(Path::new(GOLDEN).join("rust-oldview.txt")).unwrap();
+        assert!(raw.contains("XXXX"), "fresh Old View is masked");
+        let disk_ids = original["sections"][0]["ids"].as_array().unwrap();
+        let serial = disk_ids
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .find(|id| id.len() > 8 && id.chars().all(|c| c.is_ascii_alphanumeric()))
+            .unwrap();
+        assert!(
+            !raw.contains(serial),
+            "stable disk serial is absent in masked Old View"
+        );
+        form.click(FIRST_SECTION);
+        form.focus(MASK_IDS);
+        bmps_to_png();
+        println!(
+            "RESULT C1/C3: off restores exact body; Enter/Space/click, accessible names, scroll preservation, both real exports, ISO/filename match, 14 sections, CRLF/no BOM, provider-ID masking, refresh persistence and fresh masked Old View passed"
+        );
     }
 
     // Extend the existing real-HWND run rather than adding mock layout tests.
@@ -1979,6 +2232,7 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
         let path = boxes
             .iter()
             .find_map(|b| b.split("Saved to: ").nth(1))
+            .and_then(|tail| tail.lines().next())
             .map(PathBuf::from)
             .unwrap();
         assert!(boxes[0].starts_with("box Export | Export completed successfully!\nSaved to: "));
