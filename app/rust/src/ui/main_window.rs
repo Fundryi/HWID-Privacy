@@ -223,10 +223,21 @@ fn on_click(form: &Form, state: &State, id: u16) {
 fn compare_exports(_form: &Form) {}
 
 // Step 2c owns these two hooks; the trunk never checks on start.
-fn start_update_check(_form: &Form, _state: &State) {}
+fn start_update_check(form: &Form, state: &State) {
+    if state.settings.borrow().check_updates_on_start() {
+        update_progress::check_on_start(*form, UPDATES);
+    }
+}
 
 fn on_updates(form: &Form, _state: &State) {
-    update_progress::check_and_update(form.hwnd(), form.control(UPDATES).unwrap_or_default());
+    let button = form.control(UPDATES).unwrap_or_default();
+    if let Some(downloaded) = update_progress::take_startup_update(*form) {
+        form.set_button_fore(UPDATES, None);
+        form.set_text(UPDATES, update_progress::UPDATES_TEXT);
+        update_progress::offer(form.hwnd(), button, downloaded);
+    } else {
+        update_progress::check_and_update(form.hwnd(), button);
+    }
 }
 
 // Step 2b owns find behavior; unhandled keys keep the existing dialog navigation.

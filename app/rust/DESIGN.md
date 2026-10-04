@@ -113,7 +113,7 @@ Control sizes and paddings come from the C# layout (section 1), not from the han
 
 - **Toggle.** A button can carry an on/off state. On: the CheckMark glyph (`E73E`) replaces an outline button's icon and adds the held look (`HOVER` fill, `BORDER_STRONG` outline). Sidebar host retains its leading icon, adds `TEXT` text and shows the CheckMark right-aligned, 12 px inset. Off: the host's rest look with its own icon. The accessible name is `{caption}, on` or `{caption}, off`; the drawn caption never changes. Space, Enter and click toggle. No status color: a toggle's state is not a status.
 - **Icon-only button.** 28 x 28, icon centered, the text is the accessible name only (8.3).
-- **Button text color override.** A button's text and icon can take a status color (`Form::set_button_fore`; `None` restores the kind's color). Fills and the disabled `FAINT` are unchanged. Step 2c will use `INFO` for the `Update available` notice.
+- **Button text color override.** A button's text and icon can take a status color (`Form::set_button_fore`; `None` restores the kind's color). Fills and the disabled `FAINT` are unchanged. C8 uses `INFO` for the `Update available` notice.
 
 - **Primary:** `TEXT` fill, `BG` text, no border. Hover `#E4E4E7`, pressed `#D4D4D8`. Disabled: `BORDER` fill, `FAINT` text. One per window: the main action.
 - **Outline (default):** `CARD` fill, 1 px `BORDER`. Hover: `HOVER` fill and `BORDER_STRONG`. Pressed: `BORDER` fill. Disabled: `FAINT` text.
@@ -188,6 +188,7 @@ Paddings and margins are multiples of 4: content 12, header card 12/8 with an 8 
 
 ## 13. States of the main window
 
+- **C8 Startup update check.** When the saved opt-in is on, check in parallel with the hardware load, with cancellation on owner close. No window, box or `Checking...` state during this check; errors are recorded only. An available result changes the idle `Updates` footer button to `Update available`, text and unchanged Sync icon in `INFO`, outline and hover fills unchanged. Keep one footer row at the minimum window (about 861 of 884 px). Manual intent takes priority over a late startup result, even if the manual flow has already finished. Closing releases the retained bytes.
 - **Loading:** the content pane shows only the loading state, centered: the indicator (a 32 px ring in `BORDER` with a `TEXT` quarter arc, 3 px stroke, one turn per 1.2 s, repainted every 33 ms by a form timer), the title `Loading hardware information...` (15/600 `TEXT`, 16 px below the ring) and the counter `Collected {n} of 14 sections` (12/400 `FAINT`, 4 px below the title). The counter follows `hw::collect_all`'s `on_done` callback; the sections still fill all at the end (OPT-4). No text well, no scroll bars, no `Loading...` text is visible. Every sidebar item is `FAINT` until its section is collected, then `SECONDARY` again; the active item keeps `TEXT`. The footer stays as in C#.
 - **Loaded:** the header card (title 18/600 `TEXT`, meta `Section {i} of {n}` 11/600, the `Copy` button at the right) and the text well.
 - **Section meta color** by the body (status map): `INFO` while the body is `Loading...` (a load that failed leaves it so, like C#); `DANGER` when any line starts with `Error retrieving`; `WARNING` when a line contains `Unavailable (` or starts with `Error:` or `Error in`, and for the empty body `No data available`; otherwise `FAINT`. The title stays `TEXT`; the body is never colored.
@@ -249,6 +250,8 @@ Every `MessageBox.Show` of the C# app is a kit form of class `HWIDChecker.Messag
 
 ## 16. Update window
 
+The startup notice click consumes the retained download and starts at the existing `Update Available` Yes/No prompt, without `Checking...` or another download. No releases it and restores `Updates` in its normal color. Yes uses the same replay, 500 ms completed hold and install path as a manual check; failure shows the existing `Update Error` box and restores the button. The ordinary manual check, its texts and the channel URL remain unchanged.
+
 Outer 400 x 150 (scaled by DPI, AD-39), fixed. Padding 16. The app icon (32 px; the stock application icon when the exe has no icon resource, as in the test harness) at the left, 12 px gap, then one column that holds the step text (`Preparing download...`, `Downloading new version...`, `Preparing to restart...`; 15/600 `TEXT`, the window's heading), the status line under it (12/400; `SECONDARY` for the byte counts, `SUCCESS` for `Download completed successfully`), and the progress pill (8 px) 12 px below, so texts and bar share one left edge. Same texts, states and timing as AD-34; status color only on the status line. The progress bar is a painted control of the kit (no native progress class, so no classic 3D edge); its marquee runs on the control's own 30 ms timer.
 
 ## 17. Dialogs
@@ -258,7 +261,7 @@ Outer 400 x 150 (scaled by DPI, AD-39), fixed. Padding 16. The app icon (32 px; 
 - Confirm Device Removal: message 13/400 `TEXT`, warning 12/400 `WARNING`, the three buttons centered; `Yes (Autoclose)` is the primary and accept button.
 - Old View: the well in a 12 px panel, minimum 640 x 400, opens unselected at the top.
 - Native open-file picker: `win::dialog::open_file(owner, title, filters, initial_dir)` uses `IFileOpenDialog`; cancel does nothing, errors are recorded. Native chrome keeps the Windows theme (section 9).
-- Portable settings: `HWIDChecker.settings.json` next to the exe; pretty JSON, CRLF, UTF-8 without BOM, atomic replacement, unknown keys retained. `check_updates_on_start` defaults false on missing/corrupt/unreadable data (record the error). The sidebar reads on creation and saves immediately; failure reverts the toggle and shows `Settings Error` / `Could not save settings: {error}` / error icon / OK. Step 1 stores the setting only; no startup check yet. Compare Exports is a no-op scaffold until step 2d.
+- Portable settings: `HWIDChecker.settings.json` next to the exe; pretty JSON, CRLF, UTF-8 without BOM, atomic replacement, unknown keys retained. `check_updates_on_start` defaults false on missing/corrupt/unreadable data (record the error). The sidebar reads on creation and saves immediately; failure reverts the toggle and shows `Settings Error` / `Could not save settings: {error}` / error icon / OK. Turning it on affects the next start only; `Updates` checks now. Compare Exports is a no-op scaffold until step 2d.
 
 ## 18. Features in design (2026-10-04; not in code yet)
 
@@ -270,7 +273,6 @@ The rules below are binding for the features C1, C2, C3, C4, C5 and C8 of `docs/
 - **C2 Compare Exports.** Two open-file dialogs (before, after), then a modal window `Compare Exports` (1000 x 700 scaled, minimum 640 x 400): the header card with `Before`/`After` file names (11/600 `SECONDARY` labels, 13/400 `TEXT` names, ellipsis), the summary `Changed n · Added n · Removed n · Same n` in 11/600 `FAINT`, `Copy` 72 x 28; the well (`CARD`, Consolas 10 pt, no wrap) lists rows per section with a kind column `changed` / `removed` / `added` / `same`. No colors in rows (section 3) and none on the summary: a count is not a status and the tool cannot know whether a change is good. Esc closes.
 - **C3 JSON export.** `Export` writes the `.txt` and a `.json` with the same stamp in one click; the success text gains `JSON: {path}`. No new control, no dialog, no footer change.
 - **C4 Find.** A 28 px bar between the header card and the well (main) or above the well (Old View), 8 px gap below, hidden until `Ctrl+F`: input (fills, min 160), count `{i} of {n}` / `No matches` in 12/400 `SECONDARY`, icon-only `Previous match` (ChevronUp `E70E`), `Next match` (ChevronDown `E70D`) 4 px apart, `Close find` (Cancel `E711`); gaps 8. A match is the well's selection (the system highlight, section 5 exception). Previous/Next are disabled at 0 matches; the count label is the reason.
-- **C8 Startup update check (behavior pending).** The opt-in toggle and settings persistence are implemented (sections 11 and 17). Step 2c adds the start check in parallel with the load, never shows a box, and on success turns the `Updates` footer button into `Update available` in `INFO` (status map: notice). The click skips the check and continues at the existing `Update Available` box with the kept download. Row width at the minimum window stays one footer row (about 861 of 884 px).
 
 ### 18.5 Status map additions (section 3)
 

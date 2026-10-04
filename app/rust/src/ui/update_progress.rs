@@ -18,7 +18,7 @@ use super::window::{Event, Form, FormSpec, FormStyle, StartPosition, WindowSize}
 use crate::update::{self, Downloaded, UpdateCheck};
 use crate::win::{self, process::Cancel};
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use windows::Win32::Foundation::HWND;
 
 // C# parity: UI/Forms/SectionedViewForm.cs:255,778,812 (the `⟳` prefix is the button's
@@ -53,18 +53,114 @@ struct Flow {
     pending: RefCell<Option<Downloaded>>,
 }
 
+#[derive(Default)]
+struct StartCheck {
+    cancel: Cancel,
+    manual_started: Cell<bool>,
+    pending: RefCell<Option<Downloaded>>,
+}
+
+thread_local! {
+    // The owned hidden form owns the download. Only weak references live here, so closing
+    // the main window releases it even when the user never clicks the notice.
+    static START_CHECKS: RefCell<Vec<(Form, Weak<StartCheck>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Checks silently on a worker, retaining an available update until this owner consumes it.
+pub fn check_on_start(owner: Form, button: u16) {
+    let state = Rc::new(StartCheck::default());
+    let cancel = state.cancel.clone();
+    let weak = Rc::downgrade(&state);
+    let receiver = Form::create(owner.hwnd(), spec(), Vec::new(), move |_, event| {
+        match event {
+            Event::Worker(value) => {
+                if let Ok(result) = value.downcast::<Result<UpdateCheck, String>>() {
+                    match *result {
+                        Ok(UpdateCheck::Available(downloaded))
+                            if !state.manual_started.get()
+                                && owner.text(button) == UPDATES_TEXT =>
+                        {
+                            *state.pending.borrow_mut() = Some(downloaded);
+                            owner.set_button_fore(button, Some(theme::INFO));
+                            owner.set_text(button, "Update available");
+                        }
+                        Ok(_) => {} // Up to date, or the manual flow won; release the bytes.
+                        Err(error) => win::record(win::Error::msg("Update check (start)", error)),
+                    }
+                }
+            }
+            Event::Destroyed => {
+                state.cancel.cancel();
+                state.pending.borrow_mut().take();
+                START_CHECKS.with_borrow_mut(|checks| checks.retain(|(form, _)| *form != owner));
+            }
+            _ => {}
+        }
+        true
+    });
+    let receiver = match receiver {
+        Ok(receiver) => receiver,
+        Err(error) => return win::record(error),
+    };
+    START_CHECKS.with_borrow_mut(|checks| checks.push((owner, weak)));
+    let Some(poster) = receiver.poster() else {
+        receiver.destroy();
+        return win::record(win::Error::msg(
+            "Update check (start)",
+            "window closed before check",
+        ));
+    };
+    if let Err(error) = spawn("update check (start)", move || {
+        let result = win::catch_panic(|| update::check_with_progress(&cancel, &mut |_, _| {}))
+            .unwrap_or_else(|panic| Err(panicked("Update check (start)", &panic)));
+        // A closed owner drops the result, including any retained download.
+        let _delivered = poster.post(result);
+    }) {
+        receiver.destroy();
+        win::record(win::Error::msg("Update check (start)", error));
+    }
+}
+
+/// Consumes the startup notice and gives manual intent priority over any late startup result.
+pub fn take_startup_update(owner: Form) -> Option<Downloaded> {
+    START_CHECKS.with_borrow(|checks| {
+        let state = checks
+            .iter()
+            .find(|(form, _)| *form == owner)?
+            .1
+            .upgrade()?;
+        state.manual_started.set(true);
+        state.pending.borrow_mut().take()
+    })
+}
+
+/// Offers the retained startup download without checking or downloading again.
+pub fn offer(owner: HWND, button: HWND, downloaded: Downloaded) {
+    controls::set_enabled(button, false);
+    if let Err(error) = start(owner, button, Some(downloaded)) {
+        msgbox::show(
+            active_owner(),
+            &format!("Update failed: {error}"),
+            "Update Error",
+            Buttons::Ok,
+            Icon::Error,
+        );
+        restore(button);
+    }
+}
+
 /// Checks for updates and drives the modal update flow for its originating button.
 pub fn check_and_update(owner: HWND, button: HWND) {
     // C# parity: UI/Forms/SectionedViewForm.cs:775-779.
     controls::set_enabled(button, false);
     controls::set_text(button, CHECKING_TEXT);
-    if let Err(error) = start(owner, button) {
+    if let Err(error) = start(owner, button, None) {
         check_failed(&error);
         restore(button);
     }
 }
 
-fn start(owner: HWND, button: HWND) -> Result<(), String> {
+fn start(owner: HWND, button: HWND, downloaded: Option<Downloaded>) -> Result<(), String> {
     let flow = Rc::new(Flow {
         button,
         cancel: Cancel::new(),
@@ -91,6 +187,11 @@ fn start(owner: HWND, button: HWND) -> Result<(), String> {
     let Some(poster) = form.poster() else {
         return Err(win::Error::msg("Update window", "window closed before the check").to_string());
     };
+    if let Some(downloaded) = downloaded {
+        // Use the same prompt, replay and install path as a manual check, without a worker GET.
+        let _delivered = poster.post(Msg::Checked(Ok(UpdateCheck::Available(downloaded))));
+        return Ok(());
+    }
     spawn("update check", move || {
         let result = win::catch_panic(|| update::check_with_progress(&cancel, &mut |_, _| {}))
             .unwrap_or_else(|panic| Err(panicked("Update check", &panic)));
@@ -342,6 +443,7 @@ fn active_owner() -> HWND {
 fn restore(button: HWND) {
     // C# parity: UI/Forms/SectionedViewForm.cs:810-813 (`finally`).
     controls::set_enabled(button, true);
+    controls::set_button_fore(button, None);
     controls::set_text(button, UPDATES_TEXT);
 }
 
