@@ -44,3 +44,15 @@ features:
     details: "EDID identity through an emulator.<span class=\"chips\"><span class=\"chip medium\">Risk: medium</span><span class=\"chip\">Difficulty: medium</span></span>"
     link: /guides/monitor-spoofing/monitor-spoofing
 ---
+
+## HWIDChecker
+
+![HWIDChecker main window, Mask IDs on: serials, MACs and GUIDs show as X](./screenshots/main-masked.png)
+
+Native Windows 10/11 app, no runtime needed, administrator rights on every launch. It lists the identifiers from every guide in one window, exports them as text, and compares an export with the current system.
+
+| ![Compare files: two exports side by side](./screenshots/compare.png) | ![Ctrl+F find bar in the shown section](./screenshots/find.png) |
+|---|---|
+| Compare files. Green: identifier changed. Red: identifier unchanged. | Find. Ctrl+F searches the shown section. |
+
+[Download HWIDChecker.exe](https://github.com/Fundryi/HWID-Privacy/raw/main/HWIDChecker.exe) · [How to take before and after snapshots](/guides/getting-started/getting-started#hwidcheckerexe)
