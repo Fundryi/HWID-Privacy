@@ -281,25 +281,24 @@ try {
     $metadata = (Invoke-Checked cargo @('metadata', '--locked', '--no-deps', '--format-version', '1')) | ConvertFrom-Json
     $version = ($metadata.packages | Where-Object name -eq 'hwidchecker').version
     if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Unsupported app version: $version" }
-    $rc = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'app.rc') -Raw
-    $numeric = ($version -replace '\.', ',') + ',0'
-    foreach ($field in @('FILEVERSION', 'PRODUCTVERSION')) {
-        $match = [regex]::Match($rc, "(?m)^\s*$field\s+([0-9,\s]+)$")
-        if (-not $match.Success -or ($match.Groups[1].Value -replace '\s', '') -cne $numeric) {
-            throw "app.rc $field must equal $numeric (Cargo version $version)."
-        }
-    }
-    foreach ($field in @('FileVersion', 'ProductVersion')) {
-        $match = [regex]::Match($rc, ('VALUE\s+"' + $field + '",\s*"([^"\\]+)\\0"'))
-        if (-not $match.Success -or $match.Groups[1].Value -cne $version) {
-            throw "app.rc $field must equal $version (Cargo version)."
-        }
-    }
-    Write-Host "Resource versions match Cargo $version."
     $target = $metadata.target_directory
     if ($env:CARGO_BUILD_TARGET) { $target = Join-Path $target $env:CARGO_BUILD_TARGET }
     $binary = Join-Path $target 'release/HWIDChecker.exe'
     if (-not (Test-Path -LiteralPath $binary)) { throw "Release executable not found: $binary" }
+    $info = (Get-Item -LiteralPath $binary).VersionInfo
+    foreach ($field in @('FileVersion', 'ProductVersion')) {
+        if ($info.$field -cne $version) {
+            throw "Executable $field must equal $version (Cargo version); got $($info.$field)."
+        }
+    }
+    foreach ($field in @('File', 'Product')) {
+        $numeric = '{0}.{1}.{2}.{3}' -f $info."${field}MajorPart", $info."${field}MinorPart",
+            $info."${field}BuildPart", $info."${field}PrivatePart"
+        if ($numeric -cne "$version.0") {
+            throw "Executable ${field}Version numeric parts must equal $version.0; got $numeric."
+        }
+    }
+    Write-Host "Executable resource versions match Cargo $version."
     $tools = Get-BuildTools
     Assert-Imports $tools.Dumpbin $binary
     Assert-Manifest $tools.Mt $binary

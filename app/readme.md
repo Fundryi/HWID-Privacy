@@ -7,6 +7,9 @@
 - [HWID Checker Project](#hwid-checker-project)
   - [Table of Contents](#table-of-contents)
   - [Building the Project](#building-the-project)
+    - [Test build](#test-build)
+    - [Release a new version](#release-a-new-version)
+    - [Roll back](#roll-back)
   - [Requirements](#requirements)
   - [Features](#features)
     - [Core Functionality](#core-functionality)
@@ -21,24 +24,31 @@
 
 ## Building the Project
 
-From repository root:
+Run these commands from the repository root in PowerShell 7.
 
-```bash
-pwsh -NoProfile -File app/rust/check.ps1
-dotnet msbuild app/rust/HWIDChecker.Rust.proj -t:Publish
+### Test build
+
+```powershell
+.\test-build.ps1
 ```
 
-To build both Rust and the legacy C# app without changing the root exe:
+Builds a release test exe and prints its path without changing the shipped root exe. Add `-Safe` for a debug build with destructive actions guarded as dry runs; add `-Run` to open it (`-Safe -Run` clears the destructive-action override for that launch).
 
-```bash
-dotnet build "app/HWID-CHECKER.sln" -c Release -p:Platform=x64
+Visual Studio: open `app/HWID-CHECKER.sln`, select `Release | x64`, then **Build Solution**; the root exe stays unchanged.
+
+### Release a new version
+
+```powershell
+.\release.ps1
 ```
 
-Output:
+Releases the next patch from a clean `main`; use `-Minor` for new features, `-Major` for big changes, or `-Version X.Y.Z` for an exact higher version. It updates Cargo's version and lockfile, checks and builds the exe, shows its hash and pending commits, then asks for `YES` before committing, tagging, pushing and creating the GitHub release. GitHub CLI (`gh`) must be signed in.
 
-- Published executable: `app/rust/target/dist/HWIDChecker.exe`
-- The Rust Publish target runs `release.ps1` (base checks, dist build, PE/import/manifest checks), then copies the dist exe to repository root (`HWIDChecker.exe`).
-- Ordinary Build leaves the root exe unchanged. The legacy C# PostPublish copy target has been removed.
+Add `-DryRun` to check and build without going live; it restores the version files and root exe afterward.
+
+### Roll back
+
+The [csharp-last GitHub release](https://github.com/Fundryi/HWID-Privacy/releases/tag/csharp-last) holds the last C# exe. To roll back the Rust app, revert and commit the code, then run `release.ps1` with a version higher than the current release; or restore an older root exe from Git history, commit it and push `main`. Installed copies offer it on their next update check because updates compare hashes.
 
 ## Requirements
 
