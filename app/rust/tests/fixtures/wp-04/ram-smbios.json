@@ -1,0 +1,82 @@
+{
+  "strings": [
+    "DIMM_A2  ",
+    "Kingston",
+    "KSM32RD8/32HCR   ",
+    "7C3E91A2  "
+  ],
+  "cases": [
+    {
+      "name": "16 GiB MB size",
+      "formatted_hex": "11 20 00 00 00 00 00 00 00 00 00 00 00 40 00 00 01 00 00 00 00 00 00 02 04 00 03 00 00 00 00 00",
+      "capacity_bytes": 17179869184,
+      "populated": true
+    },
+    {
+      "name": "1 TiB extended MB",
+      "formatted_hex": "11 20 00 00 00 00 00 00 00 00 00 00 ff 7f 00 00 01 00 00 00 00 00 00 02 04 00 03 00 00 00 10 00",
+      "capacity_bytes": 1099511627776,
+      "populated": true
+    },
+    {
+      "name": "1 KiB unit bit",
+      "formatted_hex": "11 20 00 00 00 00 00 00 00 00 00 00 01 80 00 00 01 00 00 00 00 00 00 02 04 00 03 00 00 00 00 00",
+      "capacity_bytes": 1024,
+      "populated": true
+    },
+    {
+      "name": "32766 MiB legacy maximum",
+      "formatted_hex": "11 20 00 00 00 00 00 00 00 00 00 00 fe 7f 00 00 01 00 00 00 00 00 00 02 04 00 03 00 00 00 00 00",
+      "capacity_bytes": 34357641216,
+      "populated": true
+    },
+    {
+      "name": "empty slot",
+      "formatted_hex": "11 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00 00 00 00 02 04 00 03 00 00 00 00 00",
+      "capacity_bytes": null,
+      "populated": false
+    },
+    {
+      "name": "unknown size",
+      "formatted_hex": "11 20 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 01 00 00 00 00 00 00 02 04 00 03 00 00 00 00 00",
+      "capacity_bytes": null,
+      "populated": true
+    },
+    {
+      "name": "zero KB is unknown",
+      "formatted_hex": "11 20 00 00 00 00 00 00 00 00 00 00 00 80 00 00 01 00 00 00 00 00 00 02 04 00 03 00 00 00 00 00",
+      "capacity_bytes": null,
+      "populated": true
+    },
+    {
+      "name": "missing size high byte",
+      "formatted_hex": "11 0d 00 00 00 00 00 00 00 00 00 00 00",
+      "capacity_bytes": null,
+      "populated": true
+    },
+    {
+      "name": "truncated extended size",
+      "formatted_hex": "11 1f 00 00 00 00 00 00 00 00 00 00 ff 7f 00 00 01 00 00 00 00 00 00 02 04 00 03 00 00 00 10",
+      "capacity_bytes": null,
+      "populated": true
+    },
+    {
+      "name": "extended reserved bit",
+      "formatted_hex": "11 20 00 00 00 00 00 00 00 00 00 00 ff 7f 00 00 01 00 00 00 00 00 00 02 04 00 03 00 00 00 10 80",
+      "capacity_bytes": 1099511627776,
+      "populated": true
+    },
+    {
+      "name": "extended zero",
+      "formatted_hex": "11 20 00 00 00 00 00 00 00 00 00 00 ff 7f 00 00 01 00 00 00 00 00 00 02 04 00 03 00 00 00 00 00",
+      "capacity_bytes": null,
+      "populated": true
+    },
+    {
+      "name": "invalid string index",
+      "formatted_hex": "11 20 00 00 00 00 00 00 00 00 00 00 00 40 00 00 01 00 00 00 00 00 00 02 04 00 09 00 00 00 00 00",
+      "capacity_bytes": 17179869184,
+      "populated": true
+    }
+  ]
+}
