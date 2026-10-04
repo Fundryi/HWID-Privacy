@@ -4,6 +4,7 @@
 .vp-doc blockquote {
   max-width: 75ch;
 }
+.vp-doc p:has(> img:only-child) { max-width: none; }
 
 /* Brand: the app's accent blue (ThemeColors.PrimaryButton #0078D7).
    Text uses a lighter tint so links stay readable on the dark background. */
