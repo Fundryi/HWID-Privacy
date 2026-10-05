@@ -64,7 +64,12 @@ fn legacy(out: &mut Out, mut unresolved: Vec<win::Error>) -> Result<(), win::Err
         Ok(Vec::new())
     } {
         Ok(rows) if !rows.is_empty() => {
-            let mac = registry_mac(out, &mut unresolved);
+            // LocalRadioAddress has no adapter association. Never share it across radios.
+            let mac = if rows.len() == 1 {
+                registry_mac(out, &mut unresolved)
+            } else {
+                None
+            };
             out.source(if mac.is_some() {
                 "WMI USB Bluetooth + registry"
             } else {
@@ -74,8 +79,6 @@ fn legacy(out: &mut Out, mut unresolved: Vec<win::Error>) -> Result<(), win::Err
                 let name = row
                     .str("Name")
                     .unwrap_or_else(|| "Unknown Bluetooth Adapter".into());
-                // C# parity: Hardware/BluetoothInfo.cs:35-44. Only this fallback
-                // repeats the one global address; the native path pairs each radio.
                 adapters.push((
                     name,
                     mac.clone().unwrap_or_else(|| "MAC not available".into()),

@@ -6,12 +6,12 @@ Read this file first when changing collection or planning a new identifier. Ever
 
 - **Settings and startup updates.** Auto Update stores `check_updates_on_start` in `%LOCALAPPDATA%\HWIDChecker\settings.json`, with directory creation as needed. On startup, if the new file is absent, the legacy `HWIDChecker.settings.json` beside the exe is copied there before its old copy is deleted; migration failures are recorded without crashing. Existing new settings win. The default is off; enabling it only checks on start and shows the footer update notice. This setting does not change hardware collection or export locations.
 - **Administrator only.** The manifest requires elevation; the entrypoint also rejects a non-admin process before collection. A non-admin launch may start, but collection need not work; do not add non-admin fallbacks or change handles for that purpose. Each section below inherits this requirement. Prefer firmware tables, device protocol commands and descriptors when they preserve the existing information.
-- **16 parallel sections.** [Provider order and `Ctx`](src/hw/mod.rs), [collection](src/hw/collection.rs): all selected workers start before waiting, each with a 60-second deadline from its own start. Results return in app order. Timeout replaces that section with a timeout body; late results cannot replace it. Workers are detached, so abandoning a wait does not cancel an in-flight OS call.
+- **15 parallel sections.** [Provider order and `Ctx`](src/hw/mod.rs), [collection](src/hw/collection.rs): all selected workers start before waiting, each with a 60-second deadline from its own start. Results return in app order. Timeout replaces that section with a timeout body; late results cannot replace it. Workers are detached, so abandoning a wait does not cancel an in-flight OS call.
 - **Shared snapshots, per collection.** `Ctx` lazily caches the parsed RSMB SMBIOS table, a present-device instance-ID → first SetupAPI hardware-ID map, and a separate present-instance-ID set. Successes and failures are cached. USB and Bluetooth also perform their own SetupAPI scans. WMI connections are cached per thread and namespace, not shared across workers.
 - **Values are source reports.** Firmware strings, driver replies and registry data do not prove uniqueness or authenticity. A Windows disk serial, controller serial, namespace ID, filesystem serial and partition GUID identify different layers. Preserve differing values with distinct labels.
-- **Identifier means marked, not necessarily unique.** The tables' **ID** column means the provider records the value in `Section.ids`. `Out::id`, `id_value`, or `combined` with `true` supplies that marking. Unmarked names, model/part codes and status text remain visible.
+- **Identifier means marked, not necessarily unique.** The tables' **ID** column means the provider records the value in `Section.ids`. `Out::id`, `id_value`, or `combined` with `true` supplies that marking. Unmarked names, model/part codes and status text remain visible. All values passed to these writers stay in `Section.ids`, including placeholders. The display-only `report::placeholder_value` rule recognizes explicit OEM placeholder strings and all-zero or all-F values after removing separators. Other repeated characters are not placeholders. `Out::id_value` appends ` (placeholder)` to nonempty placeholder values, including combined fields, disk trees and RAM serials. ARP values remain verbatim. Empty values stay blank. Masking remains independent of this rule and applies to placeholders too.
 - **Mask IDs.** [Report formatting](src/report.rs) masks marked values of at least four characters, replacing ASCII letters/digits with `X` and preserving punctuation and other characters. Matching is case-sensitive at whole-token boundaries, longest values first. The raw collection remains intact; views, Copy, Old View and GUI exports use prepared masked copies. This is not complete anonymization: short IDs, unmarked names and error text can remain.
-- **Exports.** GUI Export writes one UTF-8 without BOM, CRLF `.txt` next to the exe: `HWID-EXPORT-DD.MM.YYYY-HH;MM;SS.txt`, or `...-MASKED.txt` when masking is on. Same-second names overwrite. TXT uses `===== SECTION =====` headings. No JSON sidecar is written; Compare still reads older JSON exports, with TXT first and JSON second in the picker. Text comparison recognizes identifier labels directly and excludes generic values from matching; two generic values have a neutral `not unique` verdict, while a generic/real pair is changed. Export during loading can contain `Loading...` bodies. Compare rejects `.diag.txt` files (including masked names) with the existing no-hardware-values warning; renamed diagnostics are also ignored by format.
+- **Exports.** GUI Export writes one UTF-8 without BOM, CRLF `.txt` next to the exe: `HWID-EXPORT-DD.MM.YYYY-HH;MM;SS.txt`, or `...-MASKED.txt` when masking is on. Same-second names overwrite. TXT uses `===== SECTION =====` headings. No JSON sidecar is written; Compare still reads older JSON exports, with TXT first and JSON second in the picker. Text comparison recognizes identifier labels directly and excludes generic values from matching; two generic values have a neutral `not unique` verdict, while a generic/real pair is changed. Compare retains its wider repeated-character rule for that verdict and matching evidence, independently of display annotation and masking. Compare ignores the retired AUDIO DEVICES section, strips the placeholder suffix before matching, and aliases old Product ID and BIOS version labels. ProcessorId is context rather than a unique-ID verdict, including in legacy JSON. Export during loading can contain `Loading...` bodies. Compare rejects `.diag.txt` files (including masked names) with the existing no-hardware-values warning; renamed diagnostics are also ignored by format.
 - **Dump differs from GUI export.** `--dump <file>` writes the full unmasked report with the comprehensive header and centered section headings (93 `=` characters); it also writes `<file>.diag.txt`. Normal item separators are 40 dashes; disk separators are 50. Labels use `Label: value`, combined fields use ` | `, and table widths count UTF-16 units.
 
 ### Errors and diagnostics
@@ -53,7 +53,6 @@ These are order-of-magnitude observations, not guarantees or a new benchmark. Th
 | MONITOR INFORMATION | 25 ms (P1 final, 2026-10-04); 4 ms before WP-A4 | EDID extension blocks read through WMI with a 2 s section budget. |
 | NETWORK ADAPTERS (NIC's) | 113 ms (P1 final, 2026-10-04) | NDIS OID read waits at most 750 ms. |
 | BLUETOOTH ADAPTERS | 349 → 52 ms | ~50 ms empty-radio path, not a successful radio benchmark. |
-| AUDIO DEVICES | 9 ms (P1 final, 2026-10-04) | New Rust-only section; synchronous COM/topology and shared SetupAPI snapshot costs vary. |
 | BATTERY | 0 ms (P1 final, 2026-10-04, desktop without battery) | Elevated desktop no-battery five-run median 0 ms (integer-ms resolution, 2026-10-04); battery-equipped timing unverified. |
 | ARP INFO/CACHE | Native 2–3 ms; `arp.exe` 43 ms (2026-10-03 entry) | Milliseconds native, tens of ms process; cache varies. |
 
@@ -226,7 +225,7 @@ Asset Tag (SMBIOS): INV-PSU-2418
 Manufacturer: American Megatrends Inc.
 Vendor: ASUSTeK COMPUTER INC.
 Version: 2802
-SMBIOS Version: 2802
+BIOS Version: 2802
 Release Date: 09/27/2023
 UUID: C736B9A2-154D-4E80-9A62-D8714F0B35C9
 IdentifyingNumber: SYS24K731862
@@ -248,7 +247,7 @@ Component Release Date (SMBIOS): 2023-09-27T00:00:00Z
 |---|---|---|---|
 | Manufacturer / Version | BIOS vendor/version | No | Always, possibly empty. |
 | Vendor | System-product vendor | No | Always, possibly empty. |
-| SMBIOS Version | **WMI `SMBIOSBIOSVersion`, a BIOS version string**, not table major.minor | No | Always, possibly empty. |
+| BIOS Version | **WMI `SMBIOSBIOSVersion`, a BIOS version string**, not table major.minor | No | Always, possibly empty. |
 | Release Date | Type-0 release-date string | No | Nonempty direct value. |
 | UUID | System UUID | Yes | Always, possibly empty. |
 | IdentifyingNumber | WMI system-product identity | Yes | Always, possibly empty. |
@@ -260,7 +259,7 @@ Component Release Date (SMBIOS): 2023-09-27T00:00:00Z
 | Firmware Component #{n} (SMBIOS) | One-based rendered type-45 component number | No | At least two records have printable fields; precedes each rendered record. No header for one. |
 | Component Name / Version / ID / Release Date (SMBIOS) | Type-45 firmware inventory strings, not machine identity | No | Each meaningful string independently; component ID is not treated as a per-unit serial. Association arrays are bounds-checked with diagnostics and never joined to devices; malformed associations leave these fields intact. |
 
-**Sources/order.** Manufacturer/Version: type 0 → `Win32_BIOS.Manufacturer/Version` only when direct empty. Release Date: type 0 only. UUID: type 1 bytes → `Win32_ComputerSystemProduct.UUID` when direct empty. Vendor/IdentifyingNumber: `Win32_ComputerSystemProduct` only; SMBIOS Version/SerialNumber: `Win32_BIOS` only. Both WMI queries run independently with explicit selected properties in `root\cimv2`. Other System fields/version: type 1 only. OEM strings: type 11 only. Printable type-45 components then append after all existing lines, including WMI errors, in shared RSMB table order; each has Component Name, Version, ID and Release Date in that order, with ` (SMBIOS)` on each field label. Handles associate records internally and appear only in new diagnostics. At least two printable records get `Firmware Component #{n} (SMBIOS)` headers, numbered from 1; one gets only fields. Component strings are outer-trimmed and use the optional placeholder/control rules below; no extra OS query. A record with no printable field emits one diagnostic and no value text. Missing type 45 adds nothing. This retains WMI fields whose semantics have no proven direct equivalent.
+**Sources/order.** Manufacturer/Version: type 0 → `Win32_BIOS.Manufacturer/Version` only when direct empty. Release Date: type 0 only. UUID: type 1 bytes → `Win32_ComputerSystemProduct.UUID` when direct empty. Vendor/IdentifyingNumber: `Win32_ComputerSystemProduct` only; BIOS Version/SerialNumber: `Win32_BIOS` only. Both WMI queries run independently with explicit selected properties in `root\cimv2`. Other System fields/version: type 1 only. OEM strings: type 11 only. Printable type-45 components then append after all existing lines, including WMI errors, in shared RSMB table order; each has Component Name, Version, ID and Release Date in that order, with ` (SMBIOS)` on each field label. Handles associate records internally and appear only in new diagnostics. At least two printable records get `Firmware Component #{n} (SMBIOS)` headers, numbered from 1; one gets only fields. Component strings are outer-trimmed and use the optional placeholder/control rules below; no extra OS query. A record with no printable field emits one diagnostic and no value text. Missing type 45 adds nothing. This retains WMI fields whose semantics have no proven direct equivalent.
 
 **Admin/timing/limits.** Admin app; firmware plus WMI. Final five-run median 5 → 3 ms on the dev machine (2026-10-04). Its type-45 Name, Version and Release Date were present; Component ID had string index zero and was omitted. UUID swaps the first 4/2/2 bytes for every SMBIOS version, including zero/FF sentinels. Repeated direct records overwrite present fields; last WMI row wins. One failed WMI query blanks only its own fields, retaining direct/other-query fields, then adds `WMI query failed: {class}: {E}`. Type-45 fields survive either WMI query failure; a malformed/truncated inventory field adds `{label}: Unavailable ({E})` and a value-free diagnostic while sibling fields remain. OEM text must use an accepted explicit label, contain no controls and have a useful value not already in the legacy field sets; arbitrary OEM messages are omitted. Component ID, multi-component and cross-OEM hardware paths remain unverified; type-45 associations/state and BIOS characteristics are not decoded.
 
@@ -277,8 +276,9 @@ Accepted OEM labels (case-insensitive, trimmed): `serial`, `serial number`, `ser
 **WP-A6 verification (2026-10-04).** Elevated section body byte-identical to the supplied baseline; licensing WMI fallback exercised with MSDM absent. Five-run median 85 → 8 ms on this dev machine. Multiple-row licensing and access-denied/malformed fallback paths were not exercised.
 
 ```text
+OEM Key in Firmware: Yes
 Windows Product Key: 9QH4V-2WJ7R-K6D8M-P3X5Y-TNFBC
-Serial Number (Product ID): 00330-80000-00000-AB719
+Product ID: 00330-80000-00000-AB719
 Machine GUID: b27f41e8-902c-4e63-a185-7d36c04982ba
 Hardware Profile GUID: {71A25E94-D6B8-4C02-9F31-826C50A7B493}
 Install Date: 2024-03-19 14:27:36
@@ -287,8 +287,8 @@ Install Date: 2024-03-19 14:27:36
 | Label | Meaning | ID | Appears when |
 |---|---|---|---|
 | Windows Product Key | Firmware OA3 key | Yes | Nonempty key from chosen source. |
-| Activation Status | Literal `Not activated or using Volume License` | No | WMI returns an empty/null key; not a verified activation diagnosis. |
-| Serial Number (Product ID) | Windows ProductId / OS SerialNumber | Yes | Successful nonempty source. |
+| OEM Key in Firmware | `Yes` for a nonempty OA3 key, `No` for an empty/null key; not Windows activation status | No | Each successful firmware-key lookup result; unresolved lookup errors stay unavailable rather than claiming No. |
+| Product ID | Windows licence ProductId / OS SerialNumber, not a hardware serial | Yes | Successful nonempty source. |
 | Machine GUID | Windows installation GUID | Yes | Registry value nonempty; not firmware UUID. |
 | Hardware Profile GUID | Profile **0001** GUID | Yes | Registry value nonempty; not necessarily current profile. |
 | Install Date | Signed Unix seconds converted to local time | No | Successful type read and time conversion. |
@@ -296,7 +296,7 @@ Install Date: 2024-03-19 14:27:36
 
 **Sources/order.** Key: `GetSystemFirmwareTable(ACPI, MSDM)` with length/type/checksum validation → `root\cimv2:SoftwareLicensingService.OA3xOriginalProductKey`. Product ID: HKLM `SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProductId` → `Win32_OperatingSystem.SerialNumber`. Machine GUID: HKLM `SOFTWARE\Microsoft\Cryptography\MachineGuid`. Hardware Profile GUID: HKLM `SYSTEM\CurrentControlSet\Control\IDConfigDB\Hardware Profiles\0001\HwProfileGuid`. Install Date: CurrentVersion `InstallDate`, DWORD → QWORD → signed integer string. Registry reads use the 64-bit HKLM view. Firmware/registry first avoids slow WMI without confusing hardware and OS identities.
 
-**Admin/timing/limits.** Admin app; registry ACLs still apply. Historically tens of ms with licensing fallback; current timing unverified. No installed-key decoder or actual license-state query. Missing MSDM is normal on many PCs; WMI can supply multiple rows/keys. Empty GUIDs are omitted, not replaced. Per-item errors preserve other lines.
+**Admin/timing/limits.** Admin app; registry ACLs still apply. Historically tens of ms with licensing fallback; current timing unverified. No installed-key decoder or actual license-state query. `OEM Key in Firmware` reuses the existing MSDM/OA3 lookup, adding no activation query or latency. Missing MSDM is normal on many PCs; WMI can supply multiple rows/keys. Empty GUIDs are omitted, not replaced. Per-item errors preserve other lines.
 
 **AD:** 01–03, 46. **Not built:** specifically documented UEFI variables — boot/security or vendor context, no universal HWID; privilege, firmware availability and semantics research cost. No arbitrary variable scraping.
 
@@ -351,11 +351,11 @@ Socket Asset Tag (SMBIOS): CPU-INV-2418
 | Label | Meaning | ID | Appears when |
 |---|---|---|---|
 | Name | Processor name from registry/WMI | No | Direct processor or each WMI row. |
-| ProcessorId | Firmware/WMI 64-bit processor identity, not unique chip serial | Yes when nonempty | Each processor row. |
+| ProcessorId | CPUID signature and feature flags reported by firmware/WMI, shared by CPUs of the same model | No | Each processor row. |
 | SerialNumber | Firmware/WMI serial or OEM placeholder | Yes when nonempty | Direct path; WMI only when property is non-null (empty still shown). |
 | CPUID Vendor | Leaf-0 vendor bytes (EBX, EDX, ECX) | No | Always, after blank line. |
 | CPUID Signature (decoded) | Leaf-1 Family/Model/Stepping | No | Maximum leaf permits leaf 1. |
-| CPUID Serial Number | Leaf-3 EDX:ECX as 16 hex digits | Yes | Maximum leaf ≥3 and result nonzero. |
+| CPUID Serial Number | Leaf-3 EDX:ECX as 16 hex digits | Yes | Maximum leaf ≥3, CPUID.1:EDX bit 18 (PSN) set, and result nonzero; unsupported PSN is diagnostic-only. |
 | CPU Socket #{n} (SMBIOS) | One-based rendered type-4 socket number, not an OS processor index | No | At least two records have printable fields; precedes each rendered record. No header for one. |
 | Socket Designation / Manufacturer (SMBIOS) | Per-socket firmware context | No | Meaningful independently decoded string. |
 | Socket Part Number (SMBIOS) | CPU model/part context | No | Meaningful string and SMBIOS ≥2.3. |
@@ -363,7 +363,7 @@ Socket Asset Tag (SMBIOS): CPU-INV-2418
 
 **Sources/order.** Direct path requires exactly one populated, enabled type-4 CPU of processor type 3, nonzero/non-FF ID and nonempty serial. Name comes from HKLM `HARDWARE\DESCRIPTION\System\CentralProcessor\{n}\ProcessorNameString`; all numeric logical-processor subkeys must have the same nonempty name. Otherwise use `root\cimv2:Win32_Processor` preserving row order. ProcessorId is the little-endian type-4 qword as uppercase X16; live CPUID EDX:EAX must not replace it. CPUID leaves 0/1/3 are independent and still print if WMI fails. Per-socket metadata appends from the same RSMB snapshot after CPUID and any legacy WMI failure line, with Socket Designation, Manufacturer, Part Number and Asset Tag in that order; each field label ends in ` (SMBIOS)`. Handles associate records internally and appear only in new diagnostics. At least two printable records get `CPU Socket #{n} (SMBIOS)` headers in table order, numbered from 1; one gets only fields. Unpopulated/disabled sockets can supply firmware context without association to WMI rows or registry indices. Optional values are outer-trimmed and use the BIOS placeholder/control rules. A record with no printable field emits one diagnostic and no value text. No type 4 adds nothing; older SMBIOS versions omit unsupported asset/part offsets.
 
-**Admin/timing/limits.** Admin app; registry/firmware/CPUID user-mode sources. Five-run median 0 → 0 ms on the dev machine (2026-10-04), previously ~1 s WMI. Single-socket legacy lines stay byte-identical; its Designation/Manufacturer append, while placeholder Part Number/Asset Tag values are omitted. Multi-socket, disabled/unclear states and missing serial force WMI for legacy fields; successful multi-socket behavior and meaningful socket asset/part hardware fields are unverified. Metadata still survives WMI failure; each malformed/truncated field adds `{label}: Unavailable ({E})` and a value-free diagnostic without removing siblings. Asset tags use case-sensitive, whole-token masking with a four-character minimum. Leaf 3 has no PSN feature-bit check: any emitted value is unverified as a unique serial. Legacy OEM placeholders remain visible/marked.
+**Admin/timing/limits.** Admin app; registry/firmware/CPUID user-mode sources. Five-run median 0 → 0 ms on the dev machine (2026-10-04), previously ~1 s WMI. Single-socket legacy lines stay byte-identical; its Designation/Manufacturer append, while placeholder Part Number/Asset Tag values are omitted. Multi-socket, disabled/unclear states and missing serial force WMI for legacy fields; successful multi-socket behavior and meaningful socket asset/part hardware fields are unverified. Metadata still survives WMI failure; each malformed/truncated field adds `{label}: Unavailable ({E})` and a value-free diagnostic without removing siblings. Asset tags use case-sensitive, whole-token masking with a four-character minimum. Leaf 3 is only displayed with the PSN feature bit set. Legacy OEM placeholder serials remain visible with ` (placeholder)` and remain marked as IDs for masking.
 
 **AD:** 01–03, 45, 46 (partial-output conventions), 126. **Not built:** type-4-to-WMI multi-socket association — OS/socket matching needs platform evidence. PPIN — platform-specific inventory number; privileged MSR interface/firmware locks and driver cost, untested.
 
@@ -605,46 +605,11 @@ MAC Address: 3C:FD:FE:85:27:B1
 | Adapter | Native radio `szName`, WMI device name, or generic fallback | No | Each selected radio/adapter. |
 | MAC Address | Local radio address / legacy registry address | Yes for address | Each adapter; literal `MAC not available` is unmarked. |
 
-**Sources/order.** Runtime-loaded `BluetoothApis.dll`: `BluetoothFindFirstRadio/NextRadio` + per-handle `BluetoothGetRadioInfo`. Any successful radios print their own names/addresses and unresolved radio errors. With no usable radios: all-device SetupAPI precheck rules out impossible WMI scans → `root\cimv2:Win32_PnPEntity` where PNPDeviceID LIKE `USB%` and Name LIKE `%Bluetooth%`, with legacy registry address → registry alone → WMI Service=`BTHUSB` without address. Registry: HKLM `SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Bluetooth Host Controller\LocalRadioAddress`. Native six-byte address reversed to uppercase colon notation; fallback reverses the entire registry value when length ≥6. Native per-radio pairing avoids copying one global address to multiple radios; legacy fallback retains that old behavior.
+**Sources/order.** Runtime-loaded `BluetoothApis.dll`: `BluetoothFindFirstRadio/NextRadio` + per-handle `BluetoothGetRadioInfo`. Any successful radios print their own names/addresses and unresolved radio errors. With no usable radios: all-device SetupAPI precheck rules out impossible WMI scans → `root\cimv2:Win32_PnPEntity` where PNPDeviceID LIKE `USB%` and Name LIKE `%Bluetooth%`, with legacy registry address → registry alone → WMI Service=`BTHUSB` without address. Registry: HKLM `SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Bluetooth Host Controller\LocalRadioAddress`. Native six-byte address reversed to uppercase colon notation; fallback reverses the entire registry value when length ≥6. Native per-radio pairing retains each radio address. The USB-name WMI fallback uses the global registry address only when exactly one adapter is returned; with multiple adapters it prints `MAC not available` for each.
 
-**Admin/timing/limits.** Admin app; local radio APIs. Latest ~52 ms on no-radio hardware. **F-06a open:** native `szName` may be the PC/radio name, not adapter model; successful radio naming/address path unverified on a Bluetooth-equipped laptop. Fallback can include historical devices and reuse one global address. No adapters gives `No Bluetooth adapters detected.` Unresolved errors can appear as `Error: {E}`.
+**Admin/timing/limits.** Admin app; local radio APIs. Latest ~52 ms on no-radio hardware. **F-06a open:** native `szName` may be the PC/radio name, not adapter model; successful radio naming/address path unverified on a Bluetooth-equipped laptop. Fallback can include historical devices. A global address is never assigned to multiple returned adapters. No adapters gives `No Bluetooth adapters detected.` Unresolved errors can appear as `Error: {E}`.
 
 **AD:** 01–03, 08, 46. **Not built:** exact radio-interface SetupAPI friendly-name correlation — adapter model instead of possible host name; hardware association and laptop evidence cost. Extra controller metadata — vendor/revision context; API/presentation validation cost. Remote BLE devices are outside this local-adapter section.
-
-## AUDIO DEVICES
-
-[Provider](src/hw/audio.rs), [Core Audio helper](src/win/audio.rs).
-
-```text
-Adapter: USB Audio Device
-Instance ID: USB\VID_046D&PID_0A9F\A7C28E41
-Hardware IDs: USB\VID_046D&PID_0A9F&REV_0100
-Container ID: {52B18C39-7D64-4AF0-963E-826A19DB4507}
-Endpoint: Microphone (USB Audio Device)
-Direction: Capture
-Endpoint ID: {0.0.1.00000000}.{941d59a2-72ce-4536-a71a-66af60dd2788}
-Endpoint: Speakers (USB Audio Device)
-Direction: Render
-Endpoint ID: {0.0.0.00000000}.{6d73e082-684f-4130-a0cb-fb538d1c3279}
-```
-
-| Label | Meaning | ID | Appears when |
-|---|---|---|---|
-| Adapter | `PKEY_DeviceInterface_FriendlyName`; `Unknown Audio Adapter` if absent; final unresolved group is `Unresolved Audio Adapters` | No | Once per adapter group. |
-| Instance ID | Adapter devnode: endpoint `PKEY_Device_InstanceId` first, then topology adapter's `PKEY_Device_InstanceId` | Yes | Either route resolves a valid three-component adapter devnode; preserve returned case. Endpoint `SWD\MMDEVAPI\`, `HTREE\ROOT\` and `ROOT\ROOT\` IDs are not adapter grouping keys. Topology requires exactly one connector. |
-| Hardware IDs | Shared SetupAPI hardware-ID map joined by uppercase instance ID | Yes | Snapshot has a matching hardware ID. |
-| Container ID | A3 SetupAPI helper, exact present devnode's braced uppercase container GUID | Yes | Present devnode/property exists and GUID is neither all-zero nor all-FF. |
-| Endpoint Container ID | A3 helper on `SWD\MMDEVAPI\{opaque endpoint ID}`, labelled at that endpoint | Yes | Adapter Container ID is unavailable and the endpoint container exists. Never presented as an adapter container. |
-| Endpoint | `PKEY_Device_FriendlyName`; `Unknown Audio Endpoint` if absent | No | Each active endpoint. |
-| Direction | `Render` or `Capture` | No | Each active endpoint. |
-| Endpoint ID | Opaque `IMMDevice::GetId` string, unchanged | Yes | GetId succeeds with a nonempty string; includes device-specific GUID identity. |
-| Stable ID | `PKEY_AudioEndpoint_StableId`: opaque case-sensitive string unchanged, or braced GUID from `VT_CLSID` | Yes | Windows 11 24H2+ supplies a printable nonplaceholder string or nonzero/non-FFFF GUID, unique among returned endpoints; optional even on supported Windows. |
-
-**Sources/order.** Worker-local COM MTA (retain an existing STA as in WMI), `MMDeviceEnumerator` → active render/capture endpoints, read-only `STGM_READ` property stores. GetId and each property are independent: one failure preserves the other successful fields. Adapter instance ID prefers the endpoint property; absent/failed/software-endpoint values use `IMMDevice::Activate(IDeviceTopology)` → `GetConnector(0)` → [GetDeviceIdConnectedTo](https://learn.microsoft.com/en-us/windows/win32/api/devicetopology/nf-devicetopology-iconnector-getdeviceidconnectedto) → `IMMDeviceEnumerator::GetDevice` → the adapter's read-only property store and `PKEY_Device_InstanceId`. The topology token is an opaque MMDevice ID, which can have a `{2}.` prefix; do not pass it as a SetupAPI interface path or infer a devnode by parsing it or joining a name. The CfgMgr32 interface-property/direct SetupAPI-interface routes failed on this PC and are not used. Group by case-insensitive adapter instance ID, ordered by uppercase instance ID, then direction (`Capture` before `Render`), endpoint name, and opaque endpoint ID as a tie-breaker. All unresolved endpoints share one final group in the same endpoint order. Print adapter fields once, then each endpoint's fields; 40-dash separators divide groups. Shared SetupAPI hardware-ID snapshot and a present-all `DevInfoSet` supply independent hardware/container joins. Missing adapter container falls back independently to each endpoint's software devnode, with the distinct `Endpoint Container ID` label. No WMI fallback, audio-stream activation, or device changes. Read `VT_LPWSTR`/`VT_CLSID` directly and release PROPVARIANTs with OLE32 `PropVariantClear`; no propsys conversion helpers. All six identity labels use `Out::id`; complete tokens retain case and satisfy the existing minimum-four-character, whole-token masking rules.
-
-**Admin/timing/limits.** Admin app; the Core Audio scan waits at most five seconds, caps active enumeration at 4096 endpoints per direction, catches worker panics and permits only one outstanding scan. Synchronous COM calls cannot be forcibly stopped; the worker retains and releases its thread-local COM objects/apartment when they return. Completed endpoint fields are published before reading optional Stable ID, so a stalled Stable ID read preserves them. Endpoint/property strings are limited to 32767 UTF-16 units and reject malformed UTF-16 and control characters. `VT_EMPTY`, `VT_NULL`, empty strings and placeholder GUIDs omit optional fields with diagnostics; unsupported types, access-denied, timeout, and other failures retain separate diagnostics and do not remove successful endpoints. Stable IDs shared by multiple endpoints are omitted with an implausibility diagnostic. Inactive (disabled, not-present, unplugged) endpoint counts appear only in diagnostics, separately for render/capture. Empty successful active enumeration gives `No active audio endpoints detected.` Incomplete empty enumeration reports an error instead. Adapters without active endpoints produce no group; unresolved, Bluetooth and virtual endpoints remain visible without guessed adapter joins. Endpoint IDs and stable IDs are OS/driver identities, not guaranteed immutable physical serial numbers; virtual devices can appear. Hardware-ID/ContainerID joins can be absent independently. Elevated owner-PC round 2 capture on 2026-10-04: 25 active endpoints (15 render, 10 capture), grouped as BEACN Studio (22), NVIDIA Broadcast (2), and HyperX Cloud II Wireless (1); all three adapters supply instance, hardware and container IDs. Endpoint property InstanceId is absent, so every adapter uses the topology fallback. 24 inactive render and one inactive capture endpoint are excluded. Section-only dump 13 ms; five-run median 16 → 11 ms from round 1, not a general speed claim. The real `report::masked` function masked all 34 captured identity values; fabricated-fixture verification covers optional Stable ID. Earlier development captures exercised endpoint-container reads and one final unresolved group. **Untested:** `PKEY_AudioEndpoint_StableId` (absent on every endpoint on this Windows build), successful endpoint-property-first adapter join, naturally unavailable adapter/container, no-endpoint hardware, older Windows, access-denied, COM/enumeration/property failures, malformed UTF-16/property types, and provider timeout. Captures remain in session temp.
-
-**AD:** 01–03, 46, 116. Historically, the C# app had no audio section. Audio is one of the current Rust app's 16 sections and is covered by its Rust checks.
 
 ## BATTERY
 

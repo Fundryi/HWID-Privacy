@@ -810,7 +810,12 @@ mod tests {
             }],
             &[],
         );
-        assert_eq!(out.finish().body, "GPU 0\r\n└── Unknown\r\n    └── Unknown");
+        let section = out.finish();
+        assert_eq!(
+            section.body,
+            "GPU 0\r\n└── Unknown\r\n    └── Unknown (placeholder)"
+        );
+        assert_eq!(section.ids, ["Unknown"]);
         let mut out = Out::new();
         render(&mut out, &[], None, &[], &[]);
         assert_eq!(out.finish().body, "No GPU detected.");

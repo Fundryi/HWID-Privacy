@@ -222,13 +222,13 @@ fn write_table(modules: &[RamModule], out: &mut Out) {
         .text(&"-".repeat(widths.iter().sum::<usize>() + 4));
     // C# parity: Hardware/RamInfo.cs:49-57. Keep padding on the last column.
     for module in modules {
-        if !module.fields[4].is_empty() {
-            out.id_value(&module.fields[4]);
-        }
         out.text(&table_line(
             module.fields.each_ref().map(String::as_str),
             widths,
         ));
+        if !module.fields[4].is_empty() {
+            out.id_value(&module.fields[4]);
+        }
     }
 }
 

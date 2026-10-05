@@ -1,9 +1,30 @@
 //! C2 export parsing and comparison. No hardware collection and no file writes.
 
-use super::{eq_ignore_case, pad_right_utf16};
+use super::{PLACEHOLDER_SUFFIX, eq_ignore_case, pad_right_utf16};
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
+
+/// Comparison retains its wider not-unique rule, independent of display and masking.
+pub(crate) fn generic_value(value: &str) -> bool {
+    if super::placeholder_value(value) {
+        return true;
+    }
+    let value = value.trim().to_ascii_lowercase();
+    if let Some(payload) = value.strip_prefix("gpu-") {
+        return generic_value(payload);
+    }
+    let compact: String = value.chars().filter(|c| c.is_alphanumeric()).collect();
+    let digits = compact.strip_prefix("0x").unwrap_or(&compact);
+    !digits.is_empty()
+        && (digits.chars().all(|c| c == 'x')
+            || digits.len() >= 4 && digits.chars().all(|c| digits.starts_with(c)))
+}
+const RETIRED_SECTIONS: &[&str] = &["AUDIO DEVICES"];
+const LABEL_ALIASES: &[(&str, &str)] = &[
+    ("Serial Number (Product ID)", "Product ID"),
+    ("SMBIOS Version", "BIOS Version"),
+];
 
 #[derive(Debug, PartialEq)]
 pub enum ReadError {
@@ -171,6 +192,12 @@ impl Export {
     }
 
     fn push(&mut self, title: &str, body: &str, ids: &[String]) {
+        if RETIRED_SECTIONS
+            .iter()
+            .any(|retired| eq_ignore_case(title, retired))
+        {
+            return;
+        }
         self.ids.extend_from_slice(ids);
         let section = split_section(title, body, ids);
         if let Some(existing) = self
@@ -232,7 +259,6 @@ fn split_section(title: &str, body: &str, ids: &[String]) -> Section {
                 | "MONITOR INFORMATION"
                 | "NETWORK ADAPTERS (NIC'S)"
                 | "BLUETOOTH ADAPTERS"
-                | "AUDIO DEVICES"
                 | "BATTERY"
                 | "RAM MODULES"
         ),
@@ -300,30 +326,6 @@ fn split_section(title: &str, body: &str, ids: &[String]) -> Section {
             current.family = line.split_once(':').map_or("", |(label, _)| label).into();
             current.heading = line.replace(": #", " ");
             continue;
-        }
-        if title_upper == "AUDIO DEVICES" {
-            let family = if line.starts_with("Adapter: ") {
-                Some("Audio adapter")
-            } else if line.starts_with("Endpoint: ") {
-                Some("Audio endpoint")
-            } else {
-                None
-            };
-            if let Some(family) = family {
-                if !current.rows.is_empty() {
-                    section.entities.push(std::mem::take(&mut current));
-                }
-                current.family = family.into();
-                current.heading = format!(
-                    "{family} {}",
-                    section
-                        .entities
-                        .iter()
-                        .filter(|e| e.family == family)
-                        .count()
-                        + 1
-                );
-            }
         }
         let separator = line.len() >= 4 && line.bytes().all(|c| c == b'-');
         let disk_root = raw.starts_with("└── PHYSICALDRIVE");
@@ -418,6 +420,13 @@ fn split_section(title: &str, body: &str, ids: &[String]) -> Section {
     if !current.rows.is_empty() {
         section.entities.push(current);
     }
+    for entity in std::iter::once(&mut section.header).chain(&mut section.entities) {
+        for (_, value) in &mut entity.rows {
+            if let Some(raw) = value.strip_suffix(PLACEHOLDER_SUFFIX) {
+                *value = raw.to_owned();
+            }
+        }
+    }
     for (index, entity) in section.entities.iter_mut().enumerate() {
         if entity.heading.is_empty() && section.blocked {
             let prefix = match title.to_ascii_uppercase().as_str() {
@@ -453,6 +462,10 @@ fn add_fields(entity: &mut Entity, line: &str) {
             .filter(|(_, value)| value.is_empty() || value.starts_with(' '))
         {
             let label = label.trim();
+            let label = LABEL_ALIASES
+                .iter()
+                .find(|(old, _)| *old == label)
+                .map_or(label, |(_, new)| *new);
             if label.chars().any(char::is_alphabetic) {
                 entity
                     .rows
@@ -524,66 +537,6 @@ impl FieldChange {
     }
 }
 
-/// Shared placeholder rule for matching evidence and comparison verdicts.
-pub(crate) fn generic_value(value: &str) -> bool {
-    let value = value.trim().to_ascii_lowercase();
-    if value.is_empty()
-        || [
-            "null",
-            "unknown",
-            "unknown serial",
-            "not available",
-            "unavailable",
-            "none",
-            "n/a",
-            "na",
-            "empty serial",
-            "empty or placeholder serial",
-            "unknown audio adapter",
-            "unresolved audio adapters",
-            "unknown audio endpoint",
-            "<empty>",
-            "default string",
-            "to be filled by o.e.m.",
-            "not specified",
-            "not applicable",
-            "system serial number",
-            "system product name",
-            "chassis serial number",
-            "base board serial number",
-            "baseboard serial number",
-            "oem",
-            "0123456789",
-            "1234567890",
-            "mac not available",
-        ]
-        .contains(&value.as_str())
-        || value.starts_with("unavailable (")
-    {
-        return true;
-    }
-    let compact: String = value.chars().filter(|c| c.is_alphanumeric()).collect();
-    if matches!(compact.as_str(), "tobefilledbyoem" | "defaultstring") {
-        return true;
-    }
-    let digits = compact.strip_prefix("0x").unwrap_or(&compact);
-    // Vendor UUIDs carry a prefix, and MMDevice tokens a direction prefix;
-    // neither makes a zero/FF payload into usable device identity.
-    if let Some(payload) = value.strip_prefix("gpu-") {
-        return generic_value(payload);
-    }
-    if value.starts_with('{')
-        && let Some((_, payload)) = value.split_once("}.")
-    {
-        return generic_value(payload);
-    }
-    !digits.is_empty()
-        && (['0', 'f', 'x']
-            .iter()
-            .any(|c| digits.chars().all(|d| d == *c))
-            || digits.len() >= 4 && digits.chars().all(|c| digits.starts_with(c)))
-}
-
 fn usable(value: &str) -> bool {
     !generic_value(value)
 }
@@ -595,14 +548,12 @@ fn identifier_label(label: &str) -> bool {
             label.as_str(),
             "volume-sn"
                 | "disk signature"
-                | "processorid"
+                | "product id"
                 | "identifyingnumber"
                 | "thumbprint"
                 | "sha256 hash"
                 | "windows product key"
                 | "instance id"
-                | "endpoint id"
-                | "stable id"
                 | "battery unique id"
         )
         || label.contains("asset tag")
@@ -627,8 +578,6 @@ fn identity_weight(label: &str) -> u32 {
         || label.contains("guid")
         || label.contains("uniqueid")
         || label == "battery unique id"
-        || label == "endpoint id"
-        || label == "stable id"
         || label.contains("asset tag")
         || label.contains("container id")
         || label.contains("storage id")
@@ -649,7 +598,6 @@ fn identity_weight(label: &str) -> u32 {
                 | "battery name"
                 | "component name"
                 | "socket part number"
-                | "endpoint"
                 | "tpm description"
         )
     {
@@ -674,8 +622,10 @@ fn score(before: &Entity, after: &Entity) -> u32 {
             let weight = if weight == 0
                 && before.ids.contains(value)
                 && after.ids.contains(value)
-                && !matches!(label.as_str(), "Device ID" | "DeviceLocator" | "Drive")
-            {
+                && !matches!(
+                    label.as_str(),
+                    "Device ID" | "DeviceLocator" | "Drive" | "ProcessorId"
+                ) {
                 30
             } else {
                 weight
@@ -690,7 +640,7 @@ fn model_fields(entity: &Entity) -> Vec<&(String, String)> {
     let mut rows: Vec<_> = entity
         .rows
         .iter()
-        .filter(|(label, _)| matches!(identity_weight(label), 8 | 12) || label == "Direction")
+        .filter(|(label, _)| matches!(identity_weight(label), 8 | 12))
         .collect();
     // A manufacturer alone is not a model. Name/product aliases also cover
     // sections without an explicit Model label (GPU name lines parse as Model).
@@ -832,7 +782,10 @@ fn fields(before: Option<&Entity>, after: Option<&Entity>) -> Vec<FieldChange> {
         };
         result.push(FieldChange {
             identifier: other.as_ref().is_some_and(|other| {
-                identifier_label(label) || before_ids.contains(value) || after_ids.contains(other)
+                label != "ProcessorId"
+                    && (identifier_label(label)
+                        || before_ids.contains(value)
+                        || after_ids.contains(other))
             }),
             label: label.clone(),
             before: Some(value.clone()),

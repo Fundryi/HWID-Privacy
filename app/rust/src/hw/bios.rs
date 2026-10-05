@@ -198,7 +198,7 @@ fn write_information(
     out.info("Manufacturer", &prefer_direct(fields[0], &bios[0]))
         .info("Vendor", &product[0])
         .info("Version", &prefer_direct(fields[1], &bios[1]))
-        .info("SMBIOS Version", &bios[2]);
+        .info("BIOS Version", &bios[2]);
     if !fields[2].is_empty() {
         out.info("Release Date", fields[2]);
     }
@@ -490,7 +490,7 @@ mod tests {
             section.body,
             concat!(
                 "Manufacturer: American Megatrends International LLC.\r\n",
-                "Vendor: WMI Vendor\r\nVersion: 1.E2\r\nSMBIOS Version: 1.E1\r\n",
+                "Vendor: WMI Vendor\r\nVersion: 1.E2\r\nBIOS Version: 1.E1\r\n",
                 "Release Date: 08/14/2025\r\nUUID: 78563A12-9ABC-DEF0-8245-6789ABCDEF10\r\n",
                 "IdentifyingNumber: PRD2410A7216\r\nSerialNumber: BIOS2410G0936\r\n",
                 "System Manufacturer: Micro-Star International Co., Ltd.\r\n",
@@ -529,7 +529,18 @@ mod tests {
             smbios.structures.push(repeated.clone());
             let mut out = Out::new();
             write_information(Some(&smbios), &bios, &product, &mut out);
-            assert!(out.finish().body.contains(&format!("UUID: {expected}\r\n")));
+            let section = out.finish();
+            assert!(
+                section
+                    .body
+                    .contains(&format!("UUID: {expected} (placeholder)\r\n"))
+            );
+            assert!(section.ids.iter().any(|id| id == expected));
+            assert!(
+                crate::report::masked(&section)
+                    .body
+                    .contains("UUID: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX (placeholder)\r\n")
+            );
         }
         repeated.formatted.truncate(8);
         repeated.formatted[7] = 0;
@@ -537,7 +548,7 @@ mod tests {
         let mut out = Out::new();
         write_information(Some(&smbios), &bios, &product, &mut out);
         let body = out.finish().body;
-        assert!(body.contains("UUID: FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF\r\n"));
+        assert!(body.contains("UUID: FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF (placeholder)\r\n"));
         assert!(!body.contains("System Serial:"));
         assert!(body.contains("System SKU: SKU-B650-042\r\n"));
         let mut out = Out::new();
@@ -546,7 +557,7 @@ mod tests {
             out.finish().body,
             concat!(
                 "Manufacturer: WMI Manufacturer\r\nVendor: WMI Vendor\r\nVersion: WMI Version\r\n",
-                "SMBIOS Version: 1.E1\r\nUUID: 78563A12-9ABC-DEF0-8245-6789ABCDEF11\r\n",
+                "BIOS Version: 1.E1\r\nUUID: 78563A12-9ABC-DEF0-8245-6789ABCDEF11\r\n",
                 "IdentifyingNumber: PRD2410A7216\r\nSerialNumber: BIOS2410G0936\r\n",
             )
         );
@@ -641,11 +652,7 @@ mod tests {
             });
             assert_eq!(calls, ["Win32_BIOS", "Win32_ComputerSystemProduct"]);
             let section = out.finish();
-            assert!(
-                section
-                    .body
-                    .contains("Version: 1.E2\r\nSMBIOS Version: \r\n")
-            );
+            assert!(section.body.contains("Version: 1.E2\r\nBIOS Version: \r\n"));
             assert!(
                 section
                     .body
@@ -688,7 +695,7 @@ mod tests {
         assert_eq!(
             out.finish().body,
             concat!(
-                "Manufacturer: \r\nVendor: \r\nVersion: \r\nSMBIOS Version: \r\n",
+                "Manufacturer: \r\nVendor: \r\nVersion: \r\nBIOS Version: \r\n",
                 "UUID: \r\nIdentifyingNumber: \r\nSerialNumber: \r\n",
             )
         );
@@ -765,7 +772,7 @@ mod tests {
                 for name in names {
                     let value = row.str(name).unwrap_or_default();
                     let label = if *name == "SMBIOSBIOSVersion" {
-                        "SMBIOS Version"
+                        "BIOS Version"
                     } else {
                         name
                     };

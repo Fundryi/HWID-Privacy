@@ -1,6 +1,87 @@
 use super::*;
 
 #[test]
+#[ignore = "read-only owner exports; set HWID_TRIM_BEFORE and HWID_TRIM_DUMP"]
+fn owner_id_trim_export_comparison() {
+    let before_path = std::env::var_os("HWID_TRIM_BEFORE").expect("old export path");
+    let dump_path = std::env::var_os("HWID_TRIM_DUMP").expect("new dump path");
+    let before_path = Path::new(&before_path);
+    let dump_path = Path::new(&dump_path);
+    let old_text = std::fs::read_to_string(before_path).expect("old export");
+    assert!(old_text.contains("===== AUDIO DEVICES ====="));
+    let before = read(before_path).expect("parse old owner export");
+    let dump = std::fs::read_to_string(dump_path).expect("new dump");
+    assert!(!dump.contains("AUDIO DEVICES"));
+    // --dump uses centered headings. Feed those exact captured bodies through
+    // the same live-section parser used by Compare now, without recollecting.
+    let chunks: Vec<_> = dump.split(&"=".repeat(93)).collect();
+    let sections: Vec<_> = crate::hw::PROVIDERS
+        .iter()
+        .map(|provider| {
+            let body = chunks
+                .windows(2)
+                .find(|pair| pair[0].trim() == provider.title)
+                .expect("every current provider is in the dump")[1];
+            super::super::Section {
+                title: provider.title,
+                body: body.to_owned(),
+                ..Default::default()
+            }
+        })
+        .collect();
+    assert_eq!(sections.len(), 15);
+    let after = from_sections(&sections, false);
+    let diff = compare(&before, &after, before_path, dump_path);
+    assert!(diff.warning.is_none());
+    assert!(!diff.entities.iter().any(|e| e.section == "AUDIO DEVICES"));
+    for (section, label) in [
+        ("SYSTEM INFORMATION", "Product ID"),
+        ("(SM)BIOS", "BIOS Version"),
+    ] {
+        let fields: Vec<_> = diff
+            .entities
+            .iter()
+            .filter(|e| e.section == section)
+            .flat_map(|e| &e.fields)
+            .filter(|f| f.label == label)
+            .collect();
+        assert_eq!(fields.len(), 1, "{section}: {label}");
+        assert_eq!(fields[0].kind, Kind::Same, "{section}: {label}");
+    }
+    let mut placeholders = 0;
+    for entity in &diff.entities {
+        for field in &entity.fields {
+            if field.kind != Kind::Same {
+                println!(
+                    "{}: {:?}: {} [values omitted]",
+                    entity.section, field.kind, field.label
+                );
+            }
+            if field
+                .before
+                .as_deref()
+                .is_some_and(|v| !v.is_empty() && generic_value(v))
+                && field.after.as_deref().is_some_and(generic_value)
+            {
+                assert_eq!(
+                    field.kind,
+                    Kind::Same,
+                    "{}: {}",
+                    entity.section,
+                    field.label
+                );
+                placeholders += 1;
+            }
+        }
+    }
+    assert!(placeholders > 0, "owner capture exercises placeholders");
+    println!(
+        "{}; paired placeholder fields: {placeholders}; label aliases: same; retired audio: absent",
+        diff.summary
+    );
+}
+
+#[test]
 fn new_identity_labels_and_placeholders_have_text_export_verdicts() {
     for label in [
         "NVMe Namespace UUID",
@@ -10,9 +91,6 @@ fn new_identity_labels_and_placeholders_have_text_export_verdicts() {
         "PDI",
         "Board Part Number",
         "Instance ID",
-        "Endpoint ID",
-        "Endpoint Container ID",
-        "Stable ID",
         "Battery Serial",
         "Battery Unique ID",
         "Battery Serial (SMBIOS)",
@@ -33,7 +111,6 @@ fn new_identity_labels_and_placeholders_have_text_export_verdicts() {
             "Unavailable (probe failed)",
             "11111111",
             "GPU-00000000-0000-0000-0000-000000000000",
-            "{0.0.1.00000000}.{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}",
         ] {
             let body = format!("{label}: {placeholder}");
             let diff = difference("IDENTITY", &body, &body);
@@ -56,41 +133,6 @@ fn new_identity_labels_and_placeholders_have_text_export_verdicts() {
         );
     }
     assert!(!generic_value("0000_0000_0000_0001."));
-}
-
-#[test]
-fn audio_adapters_and_endpoints_pair_independently_when_reordered() {
-    let adapter = "Adapter: USB Audio Device\nInstance ID: USB\\VID_046D&PID_0A9F\\A7C28E41\nContainer ID: {52B18C39-7D64-4AF0-963E-826A19DB4507}\n";
-    let mic = "Endpoint: Microphone\nDirection: Capture\nEndpoint ID: {0.0.1.00000000}.{941d59a2-72ce-4536-a71a-66af60dd2788}\nStable ID: microphone-A7C28E41\n";
-    let speaker = "Endpoint: Speakers\nDirection: Render\nEndpoint ID: {0.0.0.00000000}.{6d73e082-684f-4130-a0cb-fb538d1c3279}\n";
-    let before = format!("{adapter}{mic}{speaker}");
-    let after = format!("{adapter}{speaker}{mic}");
-    let diff = difference("AUDIO DEVICES", &before, &after);
-    assert_eq!(diff.entities.len(), 3);
-    assert_eq!(diff.entities[0].kind, Kind::Same);
-    assert!(
-        diff.entities[1..]
-            .iter()
-            .all(|e| e.kind == Kind::Moved && e.fields.iter().all(|f| f.kind == Kind::Same))
-    );
-    let changed = after
-        .replace("microphone-A7C28E41", "microphone-B8D39F52")
-        .replace(
-            "941d59a2-72ce-4536-a71a-66af60dd2788",
-            "a52e6ab3-83df-4647-b82b-77bf71ee3899",
-        );
-    let diff = difference("AUDIO DEVICES", &before, &changed);
-    assert_eq!(
-        diff.entities
-            .iter()
-            .flat_map(|e| &e.fields)
-            .filter(|f| f.identifier && f.kind == Kind::Changed)
-            .count(),
-        2
-    );
-    let twins = format!("{adapter}{speaker}{speaker}");
-    let diff = difference("AUDIO DEVICES", &twins, &twins);
-    assert!(diff.entities.iter().all(|e| e.kind == Kind::Same));
 }
 
 #[test]
@@ -409,6 +451,11 @@ fn identifier_verdicts_distinguish_generic_pairs_and_real_changes() {
         "FF:FF:FF:FF:FF:FF",
         "XXXXXXXX",
         "xx-xx",
+        "7777",
+        "1111",
+        "22:22:22:22:22:22",
+        "AAAA",
+        "GPU-7777",
         "0xFFFFFFFF",
         "Default string",
         "To Be Filled By O.E.M.",
@@ -512,7 +559,7 @@ fn identifier_verdicts_distinguish_generic_pairs_and_real_changes() {
         "NVMe Namespace NGUID",
         "NVMe Namespace UUID",
         "UUID",
-        "ProcessorId",
+        "Product ID",
         "Serial",
         "SerialNumber",
         "IdentifyingNumber",
@@ -536,9 +583,6 @@ fn identifier_verdicts_distinguish_generic_pairs_and_real_changes() {
         "PDI",
         "Storage ID (device / logical unit, EUI-64, binary)",
         "Instance ID",
-        "Endpoint ID",
-        "Endpoint Container ID",
-        "Stable ID",
         "Battery Serial",
         "Battery Unique ID",
         "Battery Serial (SMBIOS)",
@@ -875,9 +919,9 @@ fn unique_models_pair_changed_ids_but_ambiguous_models_stay_unmatched() {
     assert_eq!(uuid.kind, Kind::Changed);
     // Name is the model-level field when there is no explicit Model label.
     let diff = difference(
-        "AUDIO DEVICES",
-        "Name: USB Audio DAC\nManufacturer: N/A\nEndpoint ID: endpoint-a",
-        "Name: USB Audio DAC\nManufacturer: N/A\nEndpoint ID: endpoint-b",
+        "USB DEVICES",
+        "Name: USB DAC\nManufacturer: N/A\nSerial: DAC-4A37",
+        "Name: USB DAC\nManufacturer: N/A\nSerial: DAC-4A38",
     );
     assert_eq!(diff.entities.len(), 1);
     assert_eq!(diff.entities[0].kind, Kind::Changed);
@@ -1043,4 +1087,72 @@ fn rejects_raw_report_and_malformed_json_and_preserves_exact_labels() {
         compare(&left, &right, Path::new("a"), Path::new("b")).summary,
         "Changed 1 · Added 0 · Removed 0 · Same 1"
     );
+}
+
+#[test]
+fn retired_sections_and_legacy_labels_compare_without_false_changes() {
+    let old = parse(
+        "===== AUDIO DEVICES =====\nEndpoint ID: endpoint-a\n===== SYSTEM INFORMATION =====\nSerial Number (Product ID): 00330-80000-00000-AB719\n===== (SM)BIOS =====\nSMBIOS Version: 2802\n",
+        false,
+    ).unwrap();
+    let new = parse(
+        "===== SYSTEM INFORMATION =====\nProduct ID: 00330-80000-00000-AB719\n===== (SM)BIOS =====\nBIOS Version: 2802\n",
+        false,
+    ).unwrap();
+    for (before, after) in [(&old, &new), (&new, &old)] {
+        let diff = compare(before, after, Path::new("old"), Path::new("new"));
+        assert!(!diff.text.contains("AUDIO"));
+        let fields: Vec<_> = diff.entities.iter().flat_map(|e| &e.fields).collect();
+        assert_eq!(fields.len(), 2);
+        assert!(fields.iter().all(|f| f.kind == Kind::Same));
+        assert_eq!(fields[0].label, "Product ID");
+        assert_eq!(fields[1].label, "BIOS Version");
+    }
+    let old_json = parse(r#"{"sections":[{"title":"audio devices","lines":["Endpoint ID: endpoint-a"],"ids":["endpoint-a"]},{"title":"CPU","lines":["ProcessorId: BFEBFBFF00090672"],"ids":["BFEBFBFF00090672"]}]}"#, true).unwrap();
+    let new_cpu = parse("===== CPU =====\nProcessorId: BFEBFBFF00090672\n", false).unwrap();
+    let diff = compare(&old_json, &new_cpu, Path::new("old"), Path::new("new"));
+    assert_eq!(diff.entities.len(), 1);
+    assert_eq!(diff.entities[0].fields[0].kind, Kind::Same);
+    assert!(!diff.entities[0].fields[0].identifier);
+    assert!(!old_json.ids().iter().any(|id| id == "endpoint-a"));
+}
+
+#[test]
+fn placeholder_suffix_pairs_legacy_fields_trees_and_ram_tables() {
+    for (title, body) in [
+        (
+            "CPU",
+            "Name: Example CPU\nProcessorId: BFEBFBFF00090672\nSerialNumber: To be filled by O.E.M.\n",
+        ),
+        ("(SM)BIOS", "UUID: 00000000-0000-0000-0000-000000000000\n"),
+        (
+            "DISK DRIVES",
+            "└── PHYSICALDRIVE0\n    └── Serial: Default string\n",
+        ),
+        (
+            "RAM MODULES",
+            "DeviceLocator Manufacturer PartNumber Capacity SerialNumber\nDIMM0         Kingston     KVR32      16GB     00000000   \n",
+        ),
+    ] {
+        let mut new = body.to_owned();
+        for value in [
+            "To be filled by O.E.M.",
+            "00000000-0000-0000-0000-000000000000",
+            "Default string",
+            "00000000   ",
+        ] {
+            new = new.replace(
+                value,
+                &format!(
+                    "{} (placeholder){}",
+                    value.trim_end(),
+                    if value.ends_with("   ") { "   " } else { "" }
+                ),
+            );
+        }
+        let diff = difference(title, body, &new);
+        let fields: Vec<_> = diff.entities.iter().flat_map(|e| &e.fields).collect();
+        assert!(fields.iter().all(|f| f.kind == Kind::Same), "{title}");
+        assert!(fields.iter().any(|f| f.not_unique()), "{title}");
+    }
 }

@@ -157,9 +157,6 @@ fn firmware_processor(smbios: &firmware::Smbios) -> win::Result<(String, String)
 
 fn write_processor(out: &mut Out, name: &str, processor_id: &str, serial: Option<&str>) {
     out.info("Name", name).info("ProcessorId", processor_id);
-    if !processor_id.is_empty() {
-        out.id_value(processor_id);
-    }
     if let Some(serial) = serial {
         out.info("SerialNumber", serial);
         if !serial.is_empty() {
@@ -211,9 +208,13 @@ fn write_cpuid(
             &format!("Family {family}, Model {model}, Stepping {stepping}"),
         );
     }
-    if let Some(leaf) = leaf3 {
-        // C# parity: Hardware/CpuInfo.cs:62-67. There is deliberately no PSN
-        // feature-bit check; X16 keeps the same bits even for a signed long.
+    if !leaf1.is_some_and(|leaf| leaf.edx & (1 << 18) != 0) {
+        out.fallback_failed(
+            "CPUID Serial Number",
+            &win::Error::msg("CPUID", "PSN feature not supported"),
+        );
+    } else if let Some(leaf) = leaf3 {
+        // Leaf 3 is a processor serial only when leaf 1 advertises PSN.
         let serial = (u64::from(leaf.edx) << 32) | u64::from(leaf.ecx);
         if serial != 0 {
             out.id("CPUID Serial Number", &format!("{serial:016X}"));
@@ -384,7 +385,7 @@ mod tests {
                 eax: 0x008F_1F42,
                 ebx: 0,
                 ecx: 0,
-                edx: 0,
+                edx: 1 << 18,
             }),
             Some(CpuidResult {
                 eax: 0,
@@ -398,16 +399,14 @@ mod tests {
             serde_json::from_str(include_str!("../../tests/fixtures/wp-04/cpu-text.json"))
                 .expect("legacy CPU text with escaped CRLF");
         assert_eq!(section.body.as_bytes(), expected.as_bytes());
-        assert_eq!(
-            section.ids,
-            [
-                "00AF0764C1EBFA29",
-                "00AF0764C1EBFA2A",
-                "00AF0764C1EBFA2B",
-                "To Be Filled By O.E.M.",
-                "D48E7F156B3C2A91",
-            ]
+        assert_eq!(section.ids, ["To Be Filled By O.E.M.", "D48E7F156B3C2A91"]);
+        let masked = crate::report::masked(&section);
+        assert!(
+            masked
+                .body
+                .contains("SerialNumber: XX XX XXXXXX XX X.X.X. (placeholder)")
         );
+        assert!(masked.body.contains("ProcessorId: 00AF0764C1EBFA2B"));
         let mut out = Out::new();
         write_processor(&mut out, "", "", Some(""));
         let empty = out.finish();
@@ -514,6 +513,28 @@ mod tests {
                 )
             );
             assert!(section.ids.is_empty());
+        }
+        for edx in [0, 1 << 18] {
+            let mut out = Out::new();
+            write_cpuid(
+                &mut out,
+                leaf0,
+                Some(CpuidResult {
+                    eax: 0,
+                    ebx: 0,
+                    ecx: 0,
+                    edx,
+                }),
+                Some(CpuidResult {
+                    eax: 0,
+                    ebx: 0,
+                    ecx: 0x6B3C_2A91,
+                    edx: 0xD48E_7F15,
+                }),
+            );
+            let section = out.finish();
+            assert_eq!(section.body.contains("CPUID Serial Number:"), edx != 0);
+            assert_eq!(section.failures.iter().any(|f| f.contains("PSN")), edx == 0);
         }
         let mut out = Out::new();
         write_cpuid(&mut out, leaf0, None, None);
