@@ -59,7 +59,7 @@ HWIDChecker reads MachineGuid from `HKLM\SOFTWARE\Microsoft\Cryptography`. **[A]
 
 ## Identifier groups
 
-The repository-root `HWIDChecker.exe` is an inspector. It does not spoof identifiers. Its current source runs 16 providers in parallel and keeps this display order. **[A]** [Rust provider table](../../app/rust/src/hw/mod.rs)
+The repository-root `HWIDChecker.exe` is an inspector. It does not spoof identifiers. Its current source runs 15 providers in parallel and keeps this display order. **[A]** [Rust provider table](../../app/rust/src/hw/mod.rs)
 
 | HWIDChecker section | What it displays | Main layer |
 |---|---|---|
@@ -76,14 +76,13 @@ The repository-root `HWIDChecker.exe` is an inspector. It does not spoof identif
 | **MONITOR INFORMATION** | EDID manufacturer, model, product code, text and numeric serials, and manufacture week/year | Monitor EDID |
 | **NETWORK ADAPTERS (NIC's)** | Product/device/hardware IDs, current MAC, permanent MAC through the native interface table when available, and NDIS OID corroboration. Registry override detection is a fallback when the native permanent address is unavailable | NIC firmware, driver, registry |
 | **BLUETOOTH ADAPTERS** | Adapter name and local radio address when Windows exposes it | Radio and registry state |
-| **AUDIO DEVICES** | Audio adapters and MMDevice endpoints, including supported endpoint and container identifiers | PnP and Windows audio |
 | **BATTERY** | Battery interface identity, model, serial, unique ID, and SMBIOS battery records when exposed | Battery firmware and SMBIOS |
 | **ARP INFO/CACHE** | IPv4 and IPv6 neighbor entries grouped by interface. The `arp.exe` fallback is IPv4-only | Local network runtime |
 
 Microsoft documents the underlying Windows views for [baseboards](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-baseboard), [physical memory](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-physicalmemory), [monitor IDs](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorid), and [TPM state](https://learn.microsoft.com/en-us/windows/win32/secprov/win32-tpm). **[A]**
 
 > [!NOTE]
-> The 16 sections are not a complete inventory of every interface. The NIC provider filters on WMI's `Ethernet 802.3` adapter type and can omit other adapters. USB identity includes device-instance parsing and native descriptor queries where supported. Monitor EDID enrichment matches the exact device instance; unsupported or ambiguous data is recorded in diagnostics rather than borrowed from another monitor. See the [collection contracts and limits](../../app/rust/COLLECTION.md). **[A]**
+> The 15 sections are not a complete inventory of every interface. The NIC provider filters on WMI's `Ethernet 802.3` adapter type and can omit other adapters. USB identity includes device-instance parsing and native descriptor queries where supported. Monitor EDID enrichment matches the exact device instance; unsupported or ambiguous data is recorded in diagnostics rather than borrowed from another monitor. See the [collection contracts and limits](../../app/rust/COLLECTION.md). **[A]**
 
 Keyboards, mice, headsets, docks, webcams, and adapters can contribute USB identity data. Baseline them like any other peripheral. A device missing from **USB DEVICES** is not proof that it has no serial because the current parser intentionally skips several device-instance patterns. **[A]**
 
@@ -111,7 +110,7 @@ Use this order so each measurement has one clear cause:
 > This sequence is a project workflow, not a universal vendor procedure. It has not been validated on every platform and is **[S]**. Any firmware or device write keeps the evidence grade and warning from its dedicated guide. Do not use this summary as a write procedure.
 
 1. **Write down the privacy goal.** Define which observer and which identifier groups are in scope. Do not change fields merely because a tool displays them.
-2. **Take a complete baseline.** Export all 16 HWIDChecker sections. Store the exports privately.
+2. **Take a complete baseline.** Export all 15 HWIDChecker sections. Store the exports privately.
 3. **Prepare recovery.** Back up data, confirm the backup opens, save BitLocker recovery keys, record firmware versions, and read the exact board or device recovery procedure.
 4. **Resolve devices that cannot be changed.** Disconnect, disable, or replace them before changing identifiers or installing Windows.
 5. **Handle platform firmware first.** Make only supported SMBIOS or TPM changes from an exact hardware guide. Keep NVRAM work read-only unless a platform vendor publishes a model-specific procedure.
@@ -165,7 +164,7 @@ Apply this list before any firmware, SPD, EDID, TPM, storage, or network write.
 ### HWIDChecker.exe
 
 1. Run [HWIDChecker.exe](/HWIDChecker.exe). The current application manifest requests administrator rights at launch. **[A]**
-2. Wait for all 16 sections to finish. A provider error appears inside that section rather than cancelling the whole scan.
+2. Wait for all 15 sections to finish. A provider error appears inside that section rather than cancelling the whole scan.
 3. Select **Export**. The app writes a timestamped `HWID-EXPORT-*.txt` file beside the executable and shows the full path. Label a private copy `before` with the date, hardware configuration, and firmware versions.
 4. Make one approved change, then perform the reboot or full power cycle required by the dedicated guide.
 5. Run the same version of HWIDChecker again and export an `after` copy.
