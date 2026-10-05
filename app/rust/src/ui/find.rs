@@ -4,7 +4,7 @@ use super::controls::{Align, ButtonSpec, Ctl, EditSpec, LabelSpec};
 use super::layout::{Node, Pad, Size, Track};
 use super::theme::{self, glyph};
 use super::window::{Event, FindKey, Form};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::Controls::{EM_GETSEL, EM_SCROLLCARET, EM_SETSEL};
@@ -17,9 +17,18 @@ const COUNT: u16 = 202;
 const PREVIOUS: u16 = 203;
 const NEXT: u16 = 204;
 const CLOSE: u16 = 205;
+const ALL_SECTIONS: u16 = 206;
 
 /// The same hidden row in the main content table and the Old View panel.
 pub(super) fn bar() -> Node {
+    make_bar(false)
+}
+
+pub(super) fn all_sections_bar() -> Node {
+    make_bar(true)
+}
+
+fn make_bar(all_sections: bool) -> Node {
     let input = Node::leaf(
         QUERY,
         Ctl::Edit(
@@ -69,7 +78,7 @@ pub(super) fn bar() -> Node {
         })
         .cell(column, 0)
     };
-    Node::table(
+    let mut bar = Node::table(
         vec![
             Track::Percent(100.0),
             Track::AutoSize,
@@ -99,13 +108,54 @@ pub(super) fn bar() -> Node {
     // room and overhang the row by the same, so the input stays flush with the well.
     .padding(theme::FIND_BAR_PADDING)
     .margin(theme::FIND_BAR_MARGIN)
-    .visible(false)
+    .visible(false);
+    if all_sections {
+        // Keep the count beside its navigation buttons, in visual/tab order.
+        if let super::layout::Kind::Table { cols, cells, .. } = &mut bar.kind {
+            cols.insert(1, Track::AutoSize);
+            for child in cells.iter_mut().skip(1) {
+                child.col += 1;
+            }
+            cells.insert(
+                1,
+                Node::leaf(
+                    ALL_SECTIONS,
+                    Ctl::Button(
+                        ButtonSpec::outline("All sections")
+                            .icon(glyph::LIST)
+                            .toggle(),
+                    ),
+                )
+                .auto_size()
+                .min(Size {
+                    w: 0,
+                    h: theme::FIND_BAR_HEIGHT,
+                })
+                .max(Size {
+                    w: 0,
+                    h: theme::FIND_BAR_HEIGHT,
+                })
+                .margin(Pad {
+                    r: theme::FIND_GAP,
+                    ..theme::NO_PAD
+                })
+                .cell(1, 0),
+            );
+        }
+    }
+    bar
 }
+
+type SectionSource = Box<dyn Fn() -> (usize, Vec<String>)>;
+type ShowSection = Box<dyn Fn(&Form, usize)>;
 
 /// One component per form; the snapshot detects section/reload/mask changes after host events.
 pub(super) struct Find {
     well: u16,
     text: RefCell<String>,
+    sections: Option<(SectionSource, ShowSection)>,
+    snapshot: RefCell<(usize, Vec<String>)>,
+    searching: Cell<bool>,
 }
 
 impl Find {
@@ -114,6 +164,30 @@ impl Find {
         Self {
             well,
             text: RefCell::new(String::new()),
+            sections: None,
+            snapshot: RefCell::new((0, Vec::new())),
+            searching: Cell::new(false),
+        }
+    }
+
+    pub(super) fn with_sections(
+        well: u16,
+        source: impl Fn() -> (usize, Vec<String>) + 'static,
+        show: impl Fn(&Form, usize) + 'static,
+    ) -> Self {
+        Self {
+            sections: Some((Box::new(source), Box::new(show))),
+            ..Self::new(well)
+        }
+    }
+
+    fn all_sections(&self, form: &Form) -> bool {
+        self.sections.is_some() && form.is_checked(ALL_SECTIONS)
+    }
+
+    pub(super) fn section_changed(&self, form: &Form) {
+        if self.shown(form) && self.available(form) && self.all_sections(form) {
+            self.search(form, Direction::Current);
         }
     }
 
@@ -155,6 +229,7 @@ impl Find {
             Event::Click(PREVIOUS) => self.search(form, Direction::Previous),
             Event::Click(NEXT) => self.search(form, Direction::Next),
             Event::Click(CLOSE) => self.close(form),
+            Event::Toggled(ALL_SECTIONS, _) => self.search(form, Direction::Current),
             _ => return false,
         }
         true
@@ -196,7 +271,7 @@ impl Find {
                 backwards,
             } if self.shown(form) => self.step(form, backwards),
             FindKey::Escape {
-                id: Some(QUERY | PREVIOUS | NEXT | CLOSE),
+                id: Some(QUERY | PREVIOUS | NEXT | CLOSE | ALL_SECTIONS),
             } if self.shown(form) => self.close(form),
             _ => return false,
         }
@@ -205,7 +280,28 @@ impl Find {
 
     /// Re-searches replaced content from the top, after the host finishes updating its well.
     pub(super) fn refresh(&self, form: &Form) {
-        if self.shown(form) {
+        if self.searching.get() {
+            return;
+        }
+        if !self.available(form) {
+            *self.snapshot.borrow_mut() = (0, Vec::new());
+            return;
+        }
+        if self.shown(form)
+            && self.all_sections(form)
+            && let Some((source, _)) = &self.sections
+        {
+            let current = source();
+            if *self.snapshot.borrow() != current {
+                // Manual section changes start there; mask/reload changes restart globally.
+                let direction = if self.snapshot.borrow().1 == current.1 {
+                    Direction::Current
+                } else {
+                    Direction::Top
+                };
+                self.search(form, direction);
+            }
+        } else if self.shown(form) {
             let text = form.text(self.well);
             if *self.text.borrow() != text {
                 *self.text.borrow_mut() = text;
@@ -231,28 +327,57 @@ impl Find {
     }
 
     fn search(&self, form: &Form, direction: Direction) {
+        if self.searching.replace(true) {
+            return;
+        }
         let query = form.text(QUERY);
-        let matches = matches(&form.text(self.well), &query);
+        let scope = self.sections.as_ref().filter(|_| self.all_sections(form));
+        let all = scope.is_some();
+        let (active, texts) = if let Some((source, _)) = scope {
+            source()
+        } else {
+            (0, vec![form.text(self.well)])
+        };
+        let matches: Vec<_> = texts
+            .iter()
+            .enumerate()
+            .flat_map(|(section, text)| {
+                matches(text, &query)
+                    .into_iter()
+                    .map(move |range| (section, range))
+            })
+            .collect();
         let selected = selection(form, self.well);
         let index = match direction {
             Direction::Top => 0,
             Direction::Current => matches
                 .iter()
-                .position(|m| m.start >= selected.start)
+                .position(|(section, m)| (*section, m.start) >= (active, selected.start))
                 .unwrap_or(0),
             Direction::Next => matches
                 .iter()
-                .position(|m| m.start >= selected.end)
+                .position(|(section, m)| (*section, m.start) >= (active, selected.end))
                 .unwrap_or(0),
             Direction::Previous => matches
                 .iter()
-                .rposition(|m| m.start < selected.start)
+                .rposition(|(section, m)| (*section, m.start) < (active, selected.start))
                 .unwrap_or(matches.len().saturating_sub(1)),
         };
-        let count = if let Some(found) = matches.get(index) {
+        let count = if let Some((section, found)) = matches.get(index) {
+            if all {
+                *self.snapshot.borrow_mut() = (*section, texts);
+                if *section != active
+                    && let Some((_, show)) = scope
+                {
+                    show(form, *section);
+                }
+            }
             select(form, self.well, found.clone(), true);
             format!("{} of {}", index + 1, matches.len())
         } else {
+            if all {
+                *self.snapshot.borrow_mut() = (active, texts);
+            }
             select(form, self.well, selected.start..selected.start, false);
             if query.is_empty() {
                 String::new()
@@ -260,11 +385,13 @@ impl Find {
                 "No matches".to_owned()
             }
         };
+        *self.text.borrow_mut() = form.text(self.well);
         form.set_enabled(PREVIOUS, !matches.is_empty());
         form.set_enabled(NEXT, !matches.is_empty());
         if form.text(COUNT) != count {
             form.set_text(COUNT, &count);
         }
+        self.searching.set(false);
     }
 }
 

@@ -124,16 +124,48 @@ fn parts() -> (FormSpec, Vec<Node>, Handler) {
     spec.start = StartPosition::CenterScreen;
     spec.maximize_if_too_big = true; // AD-38
     let state = Rc::new(State::default());
-    let find = super::find::Find::new(CONTENT);
+    let source = Rc::clone(&state);
+    let target = Rc::clone(&state);
+    let find = super::find::Find::with_sections(
+        CONTENT,
+        move || {
+            (
+                source.active.get(),
+                source
+                    .sections
+                    .borrow()
+                    .iter()
+                    .map(|section| displayed_content(section, source.mask.get()))
+                    .collect(),
+            )
+        },
+        move |form, index| {
+            highlight(form, &target, index);
+            show_section(form, &target, index);
+        },
+    );
+    let handling = Cell::new(false);
     let handler = move |form: &Form, event: Event| {
-        if let Event::Key(key) = event {
-            return on_find_key(form, &find, key);
+        let outer = !handling.replace(true);
+        let handled = if let Event::Key(key) = event {
+            on_find_key(form, &find, key)
+        } else {
+            if !find.event(form, &event) {
+                let section_click = matches!(event, Event::Click(id)
+                    if id >= FIRST_SECTION && usize::from(id - FIRST_SECTION) < hw::PROVIDERS.len());
+                handle(form, &state, event);
+                if section_click {
+                    find.section_changed(form);
+                }
+            }
+            true
+        };
+        // Text/layout changes send nested notifications before the host finishes its well.
+        if outer {
+            handling.set(false);
+            find.refresh(form);
         }
-        if !find.event(form, &event) {
-            handle(form, &state, event);
-        }
-        find.refresh(form);
-        true
+        handled
     };
     (spec, tree(), Box::new(handler))
 }
@@ -499,16 +531,9 @@ fn show_section(form: &Form, state: &State, index: usize) {
         let Some(section) = sections.get(index) else {
             return;
         };
-        let masked;
-        let section = if state.mask.get() {
-            masked = report::masked(section);
-            &masked
-        } else {
-            section
-        };
         (
             section.title,
-            report::section_content(&section.body),
+            displayed_content(section, state.mask.get()),
             sections.len(),
         )
     };
@@ -517,6 +542,14 @@ fn show_section(form: &Form, state: &State, index: usize) {
     form.set_text(SECTION_META, &format!("Section {} of {count}", index + 1));
     form.edit_set_text(CONTENT, &content);
     form.edit_scroll_to_top(CONTENT);
+}
+
+fn displayed_content(section: &Section, mask: bool) -> String {
+    if mask {
+        report::section_content(&report::masked(section).body)
+    } else {
+        report::section_content(&section.body)
+    }
 }
 
 fn set_mask(form: &Form, state: &State, checked: bool) {
@@ -988,7 +1021,7 @@ fn content() -> Node {
         vec![Track::AutoSize, Track::AutoSize, Track::Percent(100.0)],
         vec![
             header,
-            super::find::bar().cell(0, 1),
+            super::find::all_sections_bar().cell(0, 1),
             Node::leaf(CONTENT, Ctl::Edit(edit))
                 .fill()
                 .margin(theme::NO_PAD)
@@ -1158,7 +1191,11 @@ mod live {
 
     /// The test exe has no manifest; activate Common Controls 6 like the app manifest does.
     fn activate_comctl6() -> bool {
-        let path = Path::new(GOLDEN).join("comctl6.manifest");
+        activate_comctl6_in(GOLDEN)
+    }
+
+    fn activate_comctl6_in(dir: &str) -> bool {
+        let path = Path::new(dir).join("comctl6.manifest");
         std::fs::write(
             &path,
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -2223,6 +2260,224 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
         bmps_to_png();
         println!(
             "RESULT primitives: toggle, icon name, input limit/change, keep-selection style, find key routing, native picker cancel passed"
+        );
+    }
+
+    #[test]
+    #[ignore = "opens the main window; read-only hardware collection and private find screenshots"]
+    fn find_all() {
+        use windows::Win32::UI::Controls::EM_SETSEL;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SetKeyboardState, VK_CONTROL, VK_F3, VK_SHIFT,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::MSG;
+        const OUT: &str = r"D:\GIT\HWID-Privacy\app\rust\golden\find-all";
+        const QUERY: u16 = 201;
+        const COUNT: u16 = 202;
+        const PREVIOUS: u16 = 203;
+        const NEXT: u16 = 204;
+        const CLOSE: u16 = 205;
+        const ALL: u16 = 206;
+        std::fs::create_dir_all(OUT).unwrap();
+        assert!(dpi::set_per_monitor_v2_for_tests());
+        assert!(activate_comctl6_in(OUT));
+        let (spec, nodes, handler) = parts();
+        let form = Form::create(HWND::default(), spec, nodes, handler).unwrap();
+        form.show();
+        form.set_timer(TICK, 20);
+        pump_while(Duration::from_secs(150), || loading(&form));
+        assert!(!loading(&form));
+        let key = |vk: u16, ctrl: bool, shift: bool| {
+            let mut keys = [0; 256];
+            keys[VK_CONTROL.0 as usize] = if ctrl { 0x80 } else { 0 };
+            keys[VK_SHIFT.0 as usize] = if shift { 0x80 } else { 0 };
+            // SAFETY: Only this test thread's keyboard state and its own window are used.
+            unsafe {
+                SetKeyboardState(&keys).unwrap();
+            }
+            let handled = window::pre_translate(&MSG {
+                hwnd: form.control(CONTENT).unwrap(),
+                message: WM_KEYDOWN,
+                wParam: WPARAM(vk as usize),
+                ..Default::default()
+            });
+            // SAFETY: Restore neutral modifiers on the test thread.
+            unsafe {
+                SetKeyboardState(&[0; 256]).unwrap();
+            }
+            assert!(handled);
+        };
+        let selected = || {
+            let (mut start, mut end) = (0u32, 0u32);
+            // SAFETY: Synchronous writes to live stack DWORDs from this form's EDIT.
+            unsafe {
+                SendMessageW(
+                    form.control(CONTENT).unwrap(),
+                    EM_GETSEL,
+                    Some(WPARAM(&mut start as *mut u32 as usize)),
+                    Some(LPARAM(&mut end as *mut u32 as isize)),
+                );
+            }
+            start as usize..end as usize
+        };
+        let mut expected = Vec::new();
+        for section in 0..hw::PROVIDERS.len() {
+            form.click(section_id(section));
+            let text = form.text(CONTENT);
+            for (byte, _) in text.match_indices("Serial") {
+                let start = text[..byte].encode_utf16().count();
+                expected.push((section, start..start + 6));
+            }
+        }
+        assert!(
+            expected.iter().any(|m| m.0 != expected[0].0),
+            "query hits several real sections"
+        );
+        form.click(FIRST_SECTION);
+        key(b'F' as u16, true, false);
+        assert!(!form.is_checked(ALL));
+        form.set_text(QUERY, "Serial");
+        let local_count = expected.iter().filter(|m| m.0 == 0).count();
+        assert_eq!(form.text(COUNT), format!("1 of {local_count}"));
+        for _ in 0..local_count {
+            form.click(NEXT);
+            assert!(form.is_active(FIRST_SECTION));
+        }
+        assert_eq!(selected(), expected[0].1);
+        form.click(ALL);
+        assert_eq!(text_of(form.control(ALL).unwrap()), "All sections, on");
+        for (index, (section, range)) in expected.iter().enumerate() {
+            assert!(form.is_active(section_id(*section)));
+            assert_eq!(&selected(), range);
+            assert_eq!(
+                form.text(COUNT),
+                format!("{} of {}", index + 1, expected.len())
+            );
+            key(VK_F3.0, false, false);
+        }
+        assert_eq!(selected(), expected[0].1);
+        assert!(form.is_active(section_id(expected[0].0)));
+        key(VK_F3.0, false, true);
+        assert!(form.is_active(section_id(expected.last().unwrap().0)));
+        assert_eq!(selected(), expected.last().unwrap().1);
+        form.click(NEXT);
+        form.click(NEXT);
+        form.click(FIRST_SECTION);
+        assert_eq!(
+            selected(),
+            expected[0].1,
+            "manual section restarts at its top"
+        );
+        assert_eq!(form.text(COUNT), format!("1 of {}", expected.len()));
+        pump_for(100);
+        shot_dir(form.hwnd(), OUT, "all-sections");
+        form.click(CLOSE);
+        assert_eq!(selected(), expected[0].1, "close retains selection");
+        key(b'F' as u16, true, false);
+        assert!(form.is_checked(ALL));
+        form.click(ALL);
+        assert_eq!(form.text(COUNT), format!("1 of {local_count}"));
+        form.set_text(QUERY, "find-all-no-such-hardware-value");
+        assert_eq!(form.text(COUNT), "No matches");
+        assert!(!form.is_enabled(NEXT) && !form.is_enabled(PREVIOUS));
+        assert!(selected().is_empty());
+        form.set_text(QUERY, "");
+        assert_eq!(form.text(COUNT), "");
+        form.click(CLOSE);
+
+        // Search must follow masked displayed text, including changes outside the active section.
+        form.click(MASK_IDS);
+        let mut masked_count = 0;
+        for section in 0..hw::PROVIDERS.len() {
+            form.click(section_id(section));
+            masked_count += form.text(CONTENT).matches("XXXX").count();
+        }
+        assert!(masked_count > 0);
+        form.click(FIRST_SECTION);
+        // SAFETY: Value-only selection reset on this form's EDIT, before opening find.
+        unsafe {
+            SendMessageW(
+                form.control(CONTENT).unwrap(),
+                EM_SETSEL,
+                Some(WPARAM(0)),
+                Some(LPARAM(0)),
+            );
+        }
+        key(b'F' as u16, true, false);
+        form.set_text(QUERY, "XXXX");
+        form.click(ALL);
+        assert_eq!(form.text(COUNT), format!("1 of {masked_count}"));
+        form.click(MASK_IDS);
+        assert_ne!(form.text(COUNT), format!("1 of {masked_count}"));
+        form.click(MASK_IDS);
+        assert_eq!(form.text(COUNT), format!("1 of {masked_count}"));
+        assert_eq!(selected().len(), 4);
+        form.set_text(QUERY, "Serial");
+        pump_for(100);
+        shot_dir(form.hwnd(), OUT, "all-sections-masked");
+        println!("RESULT find navigation and masking passed");
+        // Fit the scope row in the existing minimum window, including high DPI.
+        for dpi in [96, 144, 192] {
+            let size = dpi::scale_size(theme::MAIN_MIN_SIZE, dpi);
+            let suggested = RECT {
+                left: 0,
+                top: 0,
+                right: size.w,
+                bottom: size.h,
+            };
+            // SAFETY: Synchronous DPI message with a live rectangle to our own window.
+            unsafe {
+                SendMessageW(
+                    form.hwnd(),
+                    WM_DPICHANGED,
+                    Some(WPARAM((dpi | (dpi << 16)) as usize)),
+                    Some(LPARAM(&suggested as *const RECT as isize)),
+                );
+            }
+            form.with_tree(|tree| {
+                let bar = tree.find(200).unwrap();
+                let mut right = 0;
+                for id in [QUERY, ALL, COUNT, PREVIOUS, NEXT, CLOSE] {
+                    let b = tree.find(id).unwrap().bounds;
+                    assert!(
+                        b.x >= right && b.right() <= bar.bounds.w,
+                        "find controls fit at {dpi} DPI"
+                    );
+                    right = b.right();
+                }
+                assert_eq!(
+                    tree.find(ALL).unwrap().bounds.h,
+                    dpi::scale(theme::FIND_BAR_HEIGHT, dpi)
+                );
+            });
+        }
+        println!("RESULT find minimum layout passed");
+        // Refresh through the real button and dismiss its existing success box.
+        let stop = Arc::new(AtomicBool::new(false));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let button = form.control(OLD_VIEW).unwrap().0 as isize;
+        let closer_thread = {
+            let (stop, log) = (Arc::clone(&stop), Arc::clone(&log));
+            std::thread::spawn(move || closer(stop, log, button))
+        };
+        form.click(REFRESH);
+        assert!(loading(&form));
+        pump_while(Duration::from_secs(150), || loading(&form));
+        assert!(!loading(&form));
+        assert!(form.is_checked(ALL));
+        assert_eq!(form.text(QUERY), "Serial");
+        assert!(form.text(COUNT).starts_with("1 of "));
+        assert_eq!(selected().len(), 6);
+        println!("RESULT find reload passed");
+        stop.store(true, Ordering::Relaxed);
+        // The helper can still be inside a synchronous HWND query. Pump until it exits.
+        pump_while(Duration::from_secs(5), || !closer_thread.is_finished());
+        assert!(closer_thread.is_finished(), "message-box helper stopped");
+        form.close();
+        closer_thread.join().unwrap();
+        bmps_to_png_in(OUT);
+        println!(
+            "RESULT find: scope off, global count, cross-section Next/Previous, F3/Shift+F3, wrap, manual section, close/reopen, empty/no matches, mask, reload and minimum layout at 96/144/192 DPI passed"
         );
     }
 
