@@ -1,7 +1,6 @@
 //! Provider order and shared per-collection context.
 
 pub mod arp;
-pub mod audio;
 pub mod battery;
 pub mod bios;
 pub mod bluetooth;
@@ -38,7 +37,7 @@ pub struct Provider {
 }
 
 // C# parity: HardwareInfoManager.cs:23-38.
-pub static PROVIDERS: [Provider; 16] = [
+pub static PROVIDERS: [Provider; 15] = [
     Provider {
         title: "DISK DRIVES",
         collect: disk::collect,
@@ -90,10 +89,6 @@ pub static PROVIDERS: [Provider; 16] = [
     Provider {
         title: "BLUETOOTH ADAPTERS",
         collect: bluetooth::collect,
-    },
-    Provider {
-        title: "AUDIO DEVICES",
-        collect: audio::collect,
     },
     Provider {
         title: "BATTERY",

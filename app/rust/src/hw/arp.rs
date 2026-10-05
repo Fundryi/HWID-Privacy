@@ -86,6 +86,7 @@ fn arp_exe() -> win::Result<process::Output> {
 }
 
 fn format_neighbors(entries: &[Neighbor], names: &HashMap<u32, String>, out: &mut Out) {
+    out.omit_placeholder_suffix();
     let mut groups = BTreeMap::<u32, Vec<(bool, String, String)>>::new();
     for entry in entries {
         // C# parity: IpHlpApi.cs:121-132. Only state 1 is dropped, despite the incorrect
@@ -190,6 +191,7 @@ fn is_virtual_interface(name: &str) -> bool {
 }
 
 fn format_arp_exe(output: &str, out: &mut Out) {
+    out.omit_placeholder_suffix();
     let mut has_entries = false;
     // C# parity: ArpInfo.cs:140-167. English, case-sensitive substrings and space-only
     // splitting are intentional; the fallback does not normalize case or sort entries.
@@ -265,6 +267,23 @@ mod tests {
         assert_eq!(section.body, fixture.expected.trim_end());
         assert_eq!(section.ids.len(), 14);
         assert!(section.failures.is_empty());
+        let mut out = Out::new();
+        format_neighbors(
+            &[Neighbor {
+                interface_index: 7,
+                ip: "0.0.0.0".parse().expect("fixture IP"),
+                physical_address: vec![0x22; 6],
+                state: NL_NEIGHBOR_STATE(6),
+            }],
+            &HashMap::new(),
+            &mut out,
+        );
+        let section = out.finish();
+        assert_eq!(
+            section.body.as_bytes(),
+            b"[Interface #7]\r\nMAC: 22:22:22:22:22:22 | IP: 0.0.0.0\r\n"
+        );
+        assert_eq!(section.ids, ["22:22:22:22:22:22", "0.0.0.0"]);
         // The native wrapper owns the MAC cap; keep only provider-format checks here.
         let mut out = Out::new();
         format_neighbors(&[], &HashMap::new(), &mut out);
@@ -304,6 +323,39 @@ mod tests {
             out.trim_end();
             assert_eq!(out.finish().body, case.expected.trim_end());
         }
+        let mut out = Out::new();
+        format_arp_exe(
+            concat!(
+                "  192.0.2.1 ff-ff-ff-ff-ff-ff dynamic\r\n",
+                "  192.0.2.2 FF-FF-FF-FF-FF-FF dynamic\r\n",
+                "  192.0.2.3 00-00-00-00-00-00 dynamic\r\n",
+                "  192.0.2.4 22-22-22-22-22-22 dynamic\r\n"
+            ),
+            &mut out,
+        );
+        out.trim_end();
+        let section = out.finish();
+        // Legacy filters are case-sensitive: lower-case broadcast is skipped.
+        assert_eq!(
+            section.body.as_bytes(),
+            concat!(
+                "Dynamic ARP Entries:\r\n",
+                "MAC: FF:FF:FF:FF:FF:FF | IP: 192.0.2.2\r\n",
+                "MAC: 00:00:00:00:00:00 | IP: 192.0.2.3\r\n",
+                "MAC: 22:22:22:22:22:22 | IP: 192.0.2.4"
+            )
+            .as_bytes()
+        );
+        assert_eq!(section.ids.len(), 6);
+        assert_eq!(
+            crate::report::masked(&section).body,
+            concat!(
+                "Dynamic ARP Entries:\r\n",
+                "MAC: XX:XX:XX:XX:XX:XX | IP: XXX.X.X.X\r\n",
+                "MAC: XX:XX:XX:XX:XX:XX | IP: XXX.X.X.X\r\n",
+                "MAC: XX:XX:XX:XX:XX:XX | IP: XXX.X.X.X"
+            )
+        );
     }
 
     #[test]

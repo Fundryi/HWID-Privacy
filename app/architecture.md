@@ -23,7 +23,7 @@ Rust comments marked `C# parity` record historical formatting and behavior decis
 | Path under `app/rust/src/` | Responsibility |
 |---|---|
 | `main.rs` | GUI entrypoint and read-only CLI modes |
-| `hw/` | Sixteen providers, shared collection context, parallel collection and deadlines |
+| `hw/` | Fifteen providers, shared collection context, parallel collection and deadlines |
 | `win/` | Windows API wrappers, RAII handles, WMI, SMBIOS/EDID/storage parsers, bounded child processes, HTTP and hashing |
 | `clean/` | Ghost-device removal, whitelist JSON, event-log cleaning, destructive-operation guard |
 | `ui/` | Main window, raw view, cleaner/whitelist/confirmation/update windows, layout and drawing |
@@ -32,7 +32,7 @@ Rust comments marked `C# parity` record historical formatting and behavior decis
 
 `hw/mod.rs` defines the provider table and context. Providers return `report::Section`; `report::Out` builds report text and diagnostics. A collection shares cached SetupAPI and SMBIOS data. WMI connections belong to the calling thread. Providers run in parallel and report progress; a provider exceeding 60 seconds becomes a timeout section.
 
-The sixteen sections are disk, motherboard, BIOS, chassis, system, RAM, CPU, TPM, USB, GPU, Bluetooth, monitors, network, audio, battery, and ARP. Sources include WMI, SetupAPI, SMBIOS, storage IOCTLs, registry data, IP Helper, TPM and TBS APIs, MMDevice audio endpoints, battery and NDIS IOCTLs, and optional GPU/Bluetooth DLLs. Optional DLLs are loaded dynamically; missing APIs use fallback paths.
+The fifteen sections are disk, motherboard, BIOS, chassis, system, RAM, CPU, TPM, USB, GPU, Bluetooth, monitors, network, battery, and ARP. Sources include WMI, SetupAPI, SMBIOS, storage IOCTLs, registry data, IP Helper, TPM and TBS APIs, battery and NDIS IOCTLs, and optional GPU/Bluetooth DLLs. Optional DLLs are loaded dynamically; missing APIs use fallback paths.
 
 `ui` may call `hw`, `clean`, `update`, and `report`. Hardware, cleaning, and update logic may call `win` and `report`; `win` calls the OS. Worker failures are returned or recorded. Provider/worker panics are caught. Windows API safety and handle ownership live in the native wrappers and UI kit. The binding UI design is [Rust DESIGN.md](rust/DESIGN.md).
 

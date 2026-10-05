@@ -1,6 +1,6 @@
 # HWID Checker Project
 
-> Native Rust Windows desktop tool for inspecting hardware identifiers in 16 sections and exporting results to text files. [Download HWIDChecker.exe](../HWIDChecker.exe) and run it as administrator.
+> Native Rust Windows desktop tool for inspecting hardware identifiers in 15 sections and exporting results to text files. [Download HWIDChecker.exe](../HWIDChecker.exe) and run it as administrator.
 
 ## Table of Contents
 
@@ -58,7 +58,7 @@ The [csharp-last GitHub release](https://github.com/Fundryi/HWID-Privacy/release
 
 ### Hardware Providers
 
-Current sections (16):
+Current sections (15):
 
 - Disk drives
 - Motherboard
@@ -73,7 +73,6 @@ Current sections (16):
 - Bluetooth devices
 - Monitor information
 - Network adapters
-- Audio devices
 - Battery
 - ARP info/cache
 
@@ -149,7 +148,7 @@ app/
 │   ├── tests/fixtures/                       # Fabricated Rust regression data
 │   └── src/
 │       ├── main.rs                           # GUI and read-only CLI entrypoint
-│       ├── hw/                               # 16 providers and collection
+│       ├── hw/                               # 15 providers and collection
 │       ├── win/                              # Native OS wrappers and parsers
 │       ├── clean/                            # Devices, whitelist, event logs
 │       ├── ui/                               # Native Win32 windows and controls

@@ -42,16 +42,16 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     let wmi_id = || wmi_product_ids().map(|values| (values, WMI_ID));
     match first_ok(
         out,
-        "Serial Number (Product ID)",
+        "Product ID",
         &[(REGISTRY_ID, &registry_id), (WMI_ID, &wmi_id)],
     ) {
         Ok((values, source)) => {
             sources.push(source);
             for value in values {
-                out.id("Serial Number (Product ID)", &value);
+                out.id("Product ID", &value);
             }
         }
-        Err(error) => unavailable(out, "Serial Number (Product ID)", &error),
+        Err(error) => unavailable(out, "Product ID", &error),
     }
 
     // C# parity: Hardware/SystemInfo.cs:49-70. Empty GUIDs are omitted; never trim them.
@@ -184,11 +184,12 @@ fn wmi_product_ids() -> win::Result<Vec<String>> {
 }
 
 fn write_product_key(out: &mut Out, key: Option<&str>) {
-    // C# parity: Hardware/SystemInfo.cs:28-35. This is a legacy statement, not LicenseStatus.
+    // OA3 reports firmware key presence, not the installed Windows activation state.
     if let Some(key) = key.filter(|key| !key.is_empty()) {
+        out.info("OEM Key in Firmware", "Yes");
         out.id("Windows Product Key", key);
     } else {
-        out.info("Activation Status", "Not activated or using Volume License");
+        out.info("OEM Key in Firmware", "No");
     }
 }
 
@@ -256,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn product_key_text_keeps_the_legacy_activation_statement_and_untrimmed_ids() {
+    fn product_key_text_reports_firmware_presence_and_untrimmed_ids() {
         let mut out = Out::new();
         for key in [None, Some(""), Some(" 7KQ2D-9MX4W-V6R8T-P3Y5H-BNFCJ ")] {
             write_product_key(&mut out, key);
@@ -264,8 +265,9 @@ mod tests {
         let section = out.finish();
         assert_eq!(
             section.body,
-            "Activation Status: Not activated or using Volume License\r\n\
-             Activation Status: Not activated or using Volume License\r\n\
+            "OEM Key in Firmware: No\r\n\
+             OEM Key in Firmware: No\r\n\
+             OEM Key in Firmware: Yes\r\n\
              Windows Product Key:  7KQ2D-9MX4W-V6R8T-P3Y5H-BNFCJ \r\n"
         );
         assert_eq!(section.ids, [" 7KQ2D-9MX4W-V6R8T-P3Y5H-BNFCJ "]);

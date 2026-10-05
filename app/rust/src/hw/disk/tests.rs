@@ -319,6 +319,7 @@ fn disk_tree_text_and_identifier_records() {
         );
     }
     assert!(!section.ids.iter().any(|id| id == "<empty>"));
+    assert!(section.ids.iter().any(|id| id == "Unknown Serial"));
 }
 
 #[test]

@@ -256,7 +256,7 @@ The TPM carries its own endorsement identity (EK, EK certificate). Clearing the 
 
 ## HWID Checker References
 
-HWIDChecker is a standalone native Rust Windows 10/11 x64 app with 16 hardware sections. Download the executable below and run it as administrator. Screenshots: see [HWIDChecker](#hwidchecker) at the top. See [the app readme](app/readme.md) for usage, build, and release commands.
+HWIDChecker is a standalone native Rust Windows 10/11 x64 app with 15 hardware sections. Download the executable below and run it as administrator. Screenshots: see [HWIDChecker](#hwidchecker) at the top. See [the app readme](app/readme.md) for usage, build, and release commands.
 
 - **Download for Windows 10/11 x64**: [HWIDChecker.exe](/HWIDChecker.exe)
 - **How to run, export, and compare before/after**: [Take before and after snapshots](guides/getting-started/getting-started.md#take-before-and-after-snapshots)
