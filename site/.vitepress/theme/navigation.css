@@ -1,0 +1,69 @@
+/* The sidebar is its own reading surface; long books do not move its menu. */
+.Layout .VPSidebar {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 144px;
+}
+
+.wiki-guide-context > .wiki-guide-chooser-dock {
+  display: none;
+}
+
+@media (min-width: 960px) {
+  /* A compact return stays in the sidebar footprint at deep guide anchors.
+     Derive its placement from the same layout variables as VitePress. */
+  .wiki-guide-context > .wiki-guide-chooser-dock {
+    position: fixed;
+    z-index: 26;
+    left: max(32px, calc((100% - var(--vp-layout-max-width)) / 2 + 32px));
+    bottom: 16px;
+    display: grid;
+    gap: 0;
+    width: calc(var(--vp-sidebar-width) - 64px);
+    margin: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--vp-c-divider);
+    border-radius: 6px;
+    background: var(--vp-c-bg);
+    box-shadow: 0 2px 8px rgb(0 0 0 / 10%);
+  }
+
+  .wiki-guide-context > .wiki-guide-chooser-dock a {
+    min-height: 32px;
+    gap: 8px;
+    padding: 2px 0;
+    line-height: 20px;
+    font-size: 13px;
+  }
+}
+
+.VPSidebar .wiki-sidebar-context {
+  font-weight: 400;
+}
+
+/* VitePress marks a hash-free chapter link active at every hash. A selected
+   canonical section is the location; Full guide remains document context. */
+.VPSidebar .VPSidebarItem.wiki-sidebar-neutral-context.is-active > .item > .link > .text {
+  color: var(--vp-c-text-2);
+  font-weight: 400;
+  transition: none;
+}
+
+.VPSidebar .VPSidebarItem.wiki-sidebar-neutral-context.is-active > .item > .indicator {
+  background-color: transparent;
+  transition: none;
+}
+
+.VPSidebar .VPSidebarItem.wiki-sidebar-neutral-context.is-active > .item > .link:hover > .text {
+  color: var(--vp-c-brand-1);
+}
+
+.VPSidebar .VPSidebarItem.level-2 > .item > .text {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.VPSidebar .VPSidebarItem.level-3 > .item > .link > .text {
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}

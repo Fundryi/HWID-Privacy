@@ -1,0 +1,49 @@
+/* Reading cues share the same original icon source as the navigation. */
+.wiki-sidebar-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.wiki-sidebar-label > .wiki-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  align-self: flex-start;
+  margin-top: 3px;
+  color: inherit;
+}
+.VPDocFooter .wiki-sidebar-label { align-items: center; }
+.VPDocFooter .wiki-sidebar-label > .wiki-icon { margin-top: 0; }
+.vp-doc .wiki-heading-icon {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  margin-right: 10px;
+  vertical-align: -3px;
+  color: var(--vp-c-brand-1);
+}
+.vp-doc h1 > .wiki-heading-icon { width: 30px; height: 30px; vertical-align: -4px; }
+.vp-doc h3 > .wiki-heading-icon { width: 17px; height: 17px; margin-right: 8px; color: var(--vp-c-text-2); }
+.vp-doc .wiki-figure {
+  margin: 20px 0 28px;
+  max-width: 100%;
+}
+.wiki-image-frame { display: block; margin: 16px 0 24px; max-width: 100%; }
+.wiki-figure > img,
+.wiki-image-frame > img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  background: var(--vp-c-bg-soft);
+}
+.wiki-figure > figcaption,
+.wiki-image-caption {
+  display: block;
+  max-width: 75ch;
+  margin-top: 8px;
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+  line-height: 1.6;
+}

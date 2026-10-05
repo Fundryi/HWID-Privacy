@@ -1,0 +1,58 @@
+/* Documentation front door and roomy decision-chart pages. */
+:root { --vp-sidebar-width: 296px; --vp-layout-max-width: min(1680px, 100vw); }
+:root .wiki-front .VPDoc .content,
+:root .VPDoc:has(.decision-tree) .content { max-width: 1280px; width: 100%; }
+:root .wiki-front .VPDoc .content-container,
+:root .VPDoc:has(.decision-tree) .content-container { max-width: 1200px; }
+.VPDoc:has(.decision-tree) .vp-doc > div > ul:first-of-type {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 24px;
+  padding: 0;
+  margin: 24px 0;
+  list-style: none;
+}
+.VPDoc:has(.decision-tree) .vp-doc > div > ul:first-of-type > li {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+}
+.VPDoc:has(.decision-tree) .vp-doc > div > ul:first-of-type strong { display: block; }
+.VPDoc:has(.decision-tree) .vp-doc > div > h2:first-of-type { margin-top: 32px; }
+.wiki-start .VPDoc:has(.decision-tree) .vp-doc > div > ul:first-of-type { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.wiki-front .vp-doc > div > h1 { margin-bottom: 20px; }
+.wiki-front-content { margin: 28px 0 44px; }
+.wiki-front-start { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 36px; }
+.wiki-front-start > section { padding: 16px; background: var(--vp-c-bg-soft); border: 1px solid var(--vp-c-divider); border-radius: 8px; }
+.wiki-front-start > section > .wiki-icon { width: 20px; height: 20px; color: var(--vp-c-brand-1); margin-bottom: 8px; }
+.wiki-front-start a { display: block; font-size: 15px; line-height: 24px; font-weight: 600; }
+.wiki-front-start p { margin: 6px 0 0; font-size: 14px; line-height: 22px; color: var(--vp-c-text-2); }
+.wiki-front-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.vp-doc .wiki-front-heading h2 { margin: 0; padding: 0; border: 0; }
+.wiki-front-heading > a { font-size: 14px; }
+.wiki-front-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.wiki-front-component { display: flex; flex-direction: column; min-width: 0; padding: 18px; border: 1px solid var(--vp-c-divider); border-radius: 8px; }
+.wiki-front-component > header { display: flex; align-items: center; gap: 10px; }
+.wiki-front-component .wiki-icon-tile { width: 34px; height: 34px; }
+.wiki-front-component .wiki-icon-tile .wiki-icon { width: 21px; height: 21px; }
+.vp-doc .wiki-front-component h3 { margin: 0; font-size: 17px; line-height: 26px; }
+.wiki-front-component h3 a { color: var(--vp-c-text-1); font-weight: inherit; text-decoration: none; }
+.wiki-front-component h3 a:hover { color: var(--vp-c-brand-1); text-decoration: underline; }
+.wiki-front-group { font-size: 12px; color: var(--vp-c-text-2); }
+.wiki-front-count { margin-left: auto; white-space: nowrap; color: var(--vp-c-text-2); font-size: 12px; }
+.wiki-front-component > p { margin: 14px 0 12px; font-size: 14px; line-height: 22px; color: var(--vp-c-text-2); }
+.vp-doc .wiki-front-examples { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 0 0 18px; padding: 0; list-style: none; }
+.vp-doc .wiki-front-examples > li { margin: 0; font-size: 13px; line-height: 22px; }
+.wiki-front-component > footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 12px; border-top: 1px solid var(--vp-c-divider); padding-top: 12px; margin-top: auto; font-size: 13px; }
+.wiki-open-chart { font-weight: 600; }
+.wiki-front-screenshots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.wiki-front-screenshots .wiki-figure { margin-top: 0; min-width: 0; }
+.wiki-front-content a:focus-visible { outline: 2px solid var(--vp-c-brand-1); outline-offset: 3px; }
+@media (max-width: 1199px) {
+  .wiki-front-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 767px) {
+  .VPDoc:has(.decision-tree) .vp-doc > div > ul:first-of-type { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wiki-front-start, .wiki-front-grid, .wiki-front-screenshots { grid-template-columns: 1fr; }
+  .wiki-front-heading { flex-wrap: wrap; }
+}

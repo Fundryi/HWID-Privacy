@@ -1,0 +1,110 @@
+/* Shared original SVGs stay decorative. Text remains the navigation label. */
+.wiki-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex: none;
+  vertical-align: middle;
+}
+
+.wiki-icon-tile {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  color: var(--hw-node-text);
+  background: var(--vp-c-brand-soft);
+}
+
+.wiki-icon-tile > .wiki-icon { width: 24px; height: 24px; }
+.wiki-component-icon { width: 36px; height: 36px; }
+.wiki-component-icon > .wiki-icon { width: 22px; height: 22px; }
+.wiki-component-row > .wiki-component-copy { flex: 1; }
+.wiki-device-header > .wiki-icon-tile { align-self: center; }
+.wiki-guide-identity { display: inline-flex; align-items: center; gap: 12px; }
+.wiki-guide-context { align-items: center; gap: 8px 20px; padding: 12px; }
+.wiki-guide-context > nav { gap: 4px 16px; }
+
+:is(.wiki-device-jumps, .wiki-device-links, .wiki-guide-context, .wiki-guide-end, .wiki-workflow-links) a {
+  gap: 6px;
+}
+
+:is(.wiki-device-jumps, .wiki-workflow-links) a > .wiki-icon { width: 16px; height: 16px; }
+:is(.wiki-device-links, .wiki-guide-context, .wiki-guide-end) a > .wiki-icon { width: 14px; height: 14px; }
+.wiki-workflow-links a { display: inline-flex; align-items: center; }
+.wiki-verification-component { display: inline-flex; align-items: center; gap: 6px; }
+.wiki-verification-component > .wiki-icon { width: 16px; height: 16px; }
+
+/* Figures explain source-backed distinctions; their color is never a result. */
+.vp-doc .wiki-guide-visual {
+  margin: 28px 0;
+  padding: 24px;
+  border: 1px solid var(--hw-panel-edge);
+  border-radius: 10px;
+  background: var(--hw-panel);
+}
+
+.wiki-guide-visual figcaption {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-bottom: 20px;
+  line-height: 26px;
+}
+
+.wiki-visual-kind { flex-basis: 100%; color: var(--vp-c-text-2); font-size: 12px; line-height: 18px; }
+.wiki-guide-visual figcaption > strong { font-size: 18px; font-weight: 600; }
+.vp-doc .wiki-visual-items {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wiki-visual-columns-3 .wiki-visual-items { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.wiki-visual-columns-4 .wiki-visual-items { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.vp-doc .wiki-visual-item { position: relative; min-width: 0; max-width: none; margin: 0; padding: 16px; border: 1px solid var(--hw-panel-edge); border-radius: 8px; background: var(--vp-c-bg); }
+.wiki-visual-item > .wiki-icon-tile { margin-bottom: 12px; }
+.wiki-visual-item > strong { display: block; font-size: 14px; font-weight: 600; line-height: 22px; }
+.vp-doc .wiki-visual-item > p { max-width: none; margin: 6px 0 0; color: var(--vp-c-text-2); font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
+.vp-doc .wiki-visual-note { max-width: none; margin: 20px 0 12px; color: var(--vp-c-text-2); font-size: 14px; line-height: 22px; }
+.wiki-visual-sources { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; line-height: 22px; }
+.wiki-visual-sources > span { display: inline-flex; align-items: center; gap: 6px; color: var(--vp-c-text-2); }
+.wiki-visual-sources > span > .wiki-icon { width: 14px; height: 14px; }
+.wiki-visual-sources a { display: inline-flex; align-items: center; min-height: 28px; }
+.wiki-visual-sources a:focus-visible { outline: 2px solid var(--hw-focus); outline-offset: 3px; border-radius: 4px; }
+
+/* Only the documented RAM data path has directional connectors. */
+.wiki-guide-visual-flow .wiki-visual-item:not(:last-child)::after {
+  position: absolute;
+  z-index: 1;
+  top: 30px;
+  right: -15px;
+  width: 9px;
+  height: 9px;
+  border-top: 1.5px solid var(--vp-c-text-2);
+  border-right: 1.5px solid var(--vp-c-text-2);
+  transform: rotate(45deg);
+  content: '';
+}
+
+@media (max-width: 1100px) {
+  .wiki-visual-columns-4 .wiki-visual-items { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wiki-guide-visual-flow .wiki-visual-items { grid-template-columns: 1fr; }
+  .wiki-guide-visual-flow .wiki-visual-item:not(:last-child)::after { top: auto; bottom: -15px; right: auto; left: 30px; transform: rotate(135deg); }
+}
+
+@media (max-width: 640px) {
+  .wiki-home .wiki-component-row { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px 16px; }
+  .wiki-component-row > .wiki-chips { grid-column: 2; }
+  .wiki-device-header > h3 { flex: 1 1 calc(100% - 56px); }
+  .wiki-guide-identity { flex-basis: 100%; }
+  .vp-doc .wiki-guide-visual { padding: 16px; }
+  .vp-doc .wiki-visual-items { grid-template-columns: 1fr; }
+  .wiki-visual-sources a { min-height: 44px; }
+}

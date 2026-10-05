@@ -111,7 +111,7 @@ Use this order so each measurement has one clear cause:
 > This sequence is a project workflow, not a universal vendor procedure. It has not been validated on every platform and is **[S]**. Any firmware or device write keeps the evidence grade and warning from its dedicated guide. Do not use this summary as a write procedure.
 
 1. **Write down the privacy goal.** Define which observer and which identifier groups are in scope. Do not change fields merely because a tool displays them.
-2. **Take a complete baseline.** Export all 14 HWIDChecker sections and, if useful, a batch-script snapshot. Store the exports privately.
+2. **Take a complete baseline.** Export all 16 HWIDChecker sections. Store the exports privately.
 3. **Prepare recovery.** Back up data, confirm the backup opens, save BitLocker recovery keys, record firmware versions, and read the exact board or device recovery procedure.
 4. **Resolve devices that cannot be changed.** Disconnect, disable, or replace them before changing identifiers or installing Windows.
 5. **Handle platform firmware first.** Make only supported SMBIOS or TPM changes from an exact hardware guide. Keep NVRAM work read-only unless a platform vendor publishes a model-specific procedure.
@@ -145,7 +145,7 @@ Use these rules:
 
 ## Safety checklist
 
-Every part guide links back here. Apply this list before any firmware, SPD, EDID, TPM, storage, or network write.
+Apply this list before any firmware, SPD, EDID, TPM, storage, or network write.
 
 - Back up important files and verify the backup from another device.
 - Save every BitLocker recovery key before TPM, Secure Boot, boot-order, storage, or firmware work. Firmware and TPM changes can trigger recovery. **[A]** [Microsoft BitLocker recovery overview](https://learn.microsoft.com/en-us/windows/security/operating-system-security/data-protection/bitlocker/recovery-overview)

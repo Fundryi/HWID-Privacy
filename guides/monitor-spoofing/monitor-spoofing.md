@@ -117,7 +117,7 @@ Before changing anything, have all of the following:
 ## Tools
 
 - **HWIDChecker.exe** from the repository root. Use it for the before-and-after identity comparison. The source of its monitor checks is [`monitor.rs`](../../app/rust/src/hw/monitor.rs). **[A]**
-- **[MonitorInfoView](https://www.nirsoft.net/utils/monitor_info_view.html)**. It reads EDID records stored by Windows and can export an EDID to a binary file. **[A]**
+- **[MonitorInfoView (ZIP)](./tools/monitorinfoview/monitorinfoview.zip)**. It reads EDID records stored by Windows and can export an EDID to a binary file. **[A]**
 - **[AW EDID Editor](https://www.analogway.com/products/aw-edid-editor)**. It creates and edits standard binary or text EDID files and supports EDID 1.3/1.4, CTA-861-G, and DisplayID 1.3 according to its vendor. **[A]**
 - **[Custom Resolution Utility (CRU)](https://www.monitortests.com/forum/Thread-Custom-Resolution-Utility-CRU)**. It creates Windows software overrides. It does not rewrite display hardware. **[A]**
 - A vendor-supported utility for the exact programmable emulator you own. Download it from the vendor page, not a repackaged archive.
