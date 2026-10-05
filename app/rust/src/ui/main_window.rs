@@ -2339,7 +2339,7 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
         // On by default; the section-only checks run with the scope switched off.
         assert!(form.is_checked(ALL));
         form.click(ALL);
-        assert_eq!(text_of(form.control(ALL).unwrap()), "All sections, off");
+        assert_eq!(text_of(form.control(ALL).unwrap()), "This section, off");
         form.set_text(QUERY, "Serial");
         let local_count = expected.iter().filter(|m| m.0 == 0).count();
         assert_eq!(form.text(COUNT), format!("1 of {local_count}"));

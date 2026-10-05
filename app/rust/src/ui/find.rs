@@ -229,7 +229,13 @@ impl Find {
             Event::Click(PREVIOUS) => self.search(form, Direction::Previous),
             Event::Click(NEXT) => self.search(form, Direction::Next),
             Event::Click(CLOSE) => self.close(form),
-            Event::Toggled(ALL_SECTIONS, _) => self.search(form, Direction::Current),
+            Event::Toggled(ALL_SECTIONS, on) => {
+                form.set_text(
+                    ALL_SECTIONS,
+                    if on { "All sections" } else { "This section" },
+                );
+                self.search(form, Direction::Current);
+            }
             _ => return false,
         }
         true
