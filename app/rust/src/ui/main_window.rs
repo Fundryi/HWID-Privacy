@@ -82,8 +82,6 @@ struct State {
     /// The sections (`hw::PROVIDERS`) in provider order; bodies are raw provider text (`Loading...` while a
     /// load runs).
     sections: RefCell<Vec<Section>>,
-    /// Helper diagnostics drained at the end of the load that supplied these sections.
-    helpers: RefCell<Vec<win::Error>>,
     /// Index of the highlighted sidebar item (C# finds it by its `BackColor`).
     active: Cell<usize>,
     /// Id of the newest load; older results are dropped (F26).
@@ -109,7 +107,6 @@ enum Msg {
         load: u64,
         refresh: bool,
         result: Result<Vec<Section>, String>,
-        helpers: Vec<win::Error>,
     },
 }
 
@@ -191,11 +188,10 @@ fn on_msg(form: &Form, state: &State, msg: Msg) {
             load,
             refresh,
             result,
-            helpers,
         } => {
             // AD-41: a superseded load is dropped whole, including its Refresh message box.
             if load == state.load.get() {
-                finish_load(form, state, refresh, result, helpers);
+                finish_load(form, state, refresh, result);
             }
         }
     }
@@ -342,7 +338,6 @@ fn begin_load(form: &Form, state: &State) -> u64 {
     state.collected.set(0);
     state.loading.set(true);
     compare_buttons(form, state);
-    state.helpers.borrow_mut().clear();
     // C# parity: SectionedViewForm.cs:506-527 (placeholders from GetAvailableSections, sidebar
     // rebuilt, first section shown and highlighted).
     *state.sections.borrow_mut() = hw::PROVIDERS
@@ -379,29 +374,22 @@ fn spawn_load(form: &Form, state: &State, load: u64, refresh: bool) {
                     let _ = progress.post(Msg::Progress { load, index });
                 })
             });
-            let helpers = win::take_recorded();
+            // Helper records only feed `--dump` diagnostics; drain them so they do not pile up.
+            win::take_recorded();
             // `false` only when the window is already gone; nobody waits for the result then.
             let _ = poster.post(Msg::Loaded {
                 load,
                 refresh,
                 result,
-                helpers,
             });
         });
     if let Err(error) = spawned {
         let error = win::Error::msg("thread::spawn", error.to_string()).to_string();
-        finish_load(form, state, refresh, Err(error), Vec::new());
+        finish_load(form, state, refresh, Err(error));
     }
 }
 
-fn finish_load(
-    form: &Form,
-    state: &State,
-    refresh: bool,
-    result: Result<Vec<Section>, String>,
-    helpers: Vec<win::Error>,
-) {
-    *state.helpers.borrow_mut() = helpers;
+fn finish_load(form: &Form, state: &State, refresh: bool, result: Result<Vec<Section>, String>) {
     state.loading.set(false);
     compare_buttons(form, state);
     match result {
@@ -564,7 +552,7 @@ fn export(form: &Form, state: &State) {
     // sections, which the main window never has.
     let result = {
         let sections = state.sections.borrow();
-        write_export(&sections, &state.helpers.borrow(), state.mask.get())
+        write_export(&sections, state.mask.get())
     };
     match result {
         Ok(path) => msgbox::show(
@@ -588,11 +576,7 @@ fn export(form: &Form, state: &State) {
 }
 
 /// Writes the export next to the exe (UTF-8 without BOM, same-second files overwritten).
-fn write_export(
-    sections: &[Section],
-    helpers: &[win::Error],
-    masked: bool,
-) -> win::Result<PathBuf> {
+fn write_export(sections: &[Section], masked: bool) -> win::Result<PathBuf> {
     // C# parity: FileExportService.cs:18-31 with AppDomain.BaseDirectory.
     let exe = std::env::current_exe().map_err(|e| io_error("Locate executable folder", e))?;
     let folder = exe
@@ -606,8 +590,6 @@ fn write_export(
     let suffix = if masked { "-MASKED" } else { "" };
     let stem = format!("HWID-EXPORT-{date}-{time}{suffix}");
     let path = folder.join(format!("{stem}.txt"));
-    let diag = folder.join(format!("{stem}.diag.txt"));
-    let diagnostics = report::diagnostics(sections, helpers, masked);
     let masked_sections;
     let sections = if masked {
         masked_sections = sections.iter().map(report::masked).collect::<Vec<_>>();
@@ -617,9 +599,6 @@ fn write_export(
     };
     std::fs::write(&path, report::export_text(sections))
         .map_err(|e| io_error("Write export file", e))?;
-    if let Err(error) = std::fs::write(&diag, diagnostics) {
-        win::record(io_error("Write export diagnostics", error));
-    }
     Ok(path)
 }
 
@@ -1878,15 +1857,7 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
             );
             assert!(!body.contains("JSON: "));
             assert!(!txt.with_extension("json").exists());
-            let diag = txt.with_extension("diag.txt");
-            let diagnostics = std::fs::read_to_string(&diag).expect("adjacent diagnostics");
-            assert!(!diagnostics.starts_with('\u{feff}'));
-            assert!(!diagnostics.replace("\r\n", "").contains('\n'));
-            assert!(diagnostics.contains("\r\n[helpers]\r\n"));
-            assert!(matches!(
-                report::compare::read(&diag),
-                Err(report::compare::ReadError::Empty(_))
-            ));
+            assert!(!txt.with_extension("diag.txt").exists());
             let bytes = std::fs::read(&txt).unwrap();
             assert_eq!(bytes, expected.as_bytes());
             assert!(!bytes.starts_with(&[0xef, 0xbb, 0xbf]));
@@ -1900,8 +1871,6 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
             );
             std::fs::copy(&txt, Path::new(GOLDEN).join(txt.file_name().unwrap())).unwrap();
             std::fs::remove_file(txt).unwrap();
-            std::fs::copy(&diag, Path::new(GOLDEN).join(diag.file_name().unwrap())).unwrap();
-            std::fs::remove_file(diag).unwrap();
             expected
         };
         let original = export(false);

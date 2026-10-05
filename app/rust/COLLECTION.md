@@ -28,7 +28,7 @@ Read this file first when changing collection or planning a new identifier. Ever
 | AD-45 | The collector retains lines written before a provider error, rather than losing the section's partial data. |
 | `.diag.txt` | Each section: title, `Time: {n} ms`, `Source: {source}`, then `Failed fallback: {source}: {E}` lines. A final `[helpers]` block contains recorded helper errors, including per-device failures. Source is a section-level string, not structured per-field provenance. |
 
-Export writes the same diagnostics as `--dump` to a `.diag.txt` beside the TXT file (including `-MASKED.txt`); no JSON file is produced. In a masked export, the entire diagnostics text is masked using all sections' recorded identifiers and the same whole-token, four-character minimum rule as section bodies.
+Only `--dump` writes `.diag.txt`; it is a developer tool. GUI Export writes the TXT file only, with no diagnostics and no JSON file.
 
 Diagnostics and dumps can contain identifiers in values, paths or errors. Keep real captures private; never paste their identifiers into this public file. A blank provider body displays as `No data available` in the section view/TXT export; it is not proof of hardware absence.
 
