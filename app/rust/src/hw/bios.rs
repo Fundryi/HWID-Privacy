@@ -530,16 +530,12 @@ mod tests {
             let mut out = Out::new();
             write_information(Some(&smbios), &bios, &product, &mut out);
             let section = out.finish();
-            assert!(
-                section
-                    .body
-                    .contains(&format!("UUID: {expected} (placeholder)\r\n"))
-            );
+            assert!(section.body.contains(&format!("UUID: {expected}\r\n")));
             assert!(section.ids.iter().any(|id| id == expected));
             assert!(
                 crate::report::masked(&section)
                     .body
-                    .contains("UUID: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX (placeholder)\r\n")
+                    .contains("UUID: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX\r\n")
             );
         }
         repeated.formatted.truncate(8);
@@ -548,7 +544,7 @@ mod tests {
         let mut out = Out::new();
         write_information(Some(&smbios), &bios, &product, &mut out);
         let body = out.finish().body;
-        assert!(body.contains("UUID: FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF (placeholder)\r\n"));
+        assert!(body.contains("UUID: FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF\r\n"));
         assert!(!body.contains("System Serial:"));
         assert!(body.contains("System SKU: SKU-B650-042\r\n"));
         let mut out = Out::new();
@@ -608,7 +604,7 @@ mod tests {
         let mut out = Out::new();
         write_information(Some(&smbios), &bios, &product, &mut out);
         assert_eq!(out.finish().body, section.body);
-        for placeholder in [
+        for value in [
             "Default string",
             "To Be Filled By O.E.M.",
             "Unknown",
@@ -616,7 +612,7 @@ mod tests {
             "FFFF-FFFF",
             "\r\n",
         ] {
-            assert!(!useful_new_value(placeholder));
+            assert!(!useful_new_value(value));
         }
     }
 

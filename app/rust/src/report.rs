@@ -15,9 +15,8 @@ pub struct Section {
 }
 
 const MASK_MIN_LEN: usize = 4;
-const PLACEHOLDER_SUFFIX: &str = " (placeholder)";
 
-/// Display-only placeholder rule. Identifier masking never depends on this.
+/// Comparison placeholder rule. Identifier masking never depends on this.
 pub(crate) fn placeholder_value(value: &str) -> bool {
     let value = value.trim().to_ascii_lowercase();
     if value.is_empty()
@@ -151,17 +150,12 @@ pub fn diagnostics(sections: &[Section], helpers: &[Error], masked: bool) -> Str
 #[derive(Default)]
 pub struct Out {
     section: Section,
-    omit_placeholder_suffix: bool,
 }
 
 impl Out {
     /// Creates an empty output builder with identifier and source records.
     pub fn new() -> Self {
         Self::default()
-    }
-    /// Keeps cache values verbatim while retaining their identifier masking.
-    pub fn omit_placeholder_suffix(&mut self) {
-        self.omit_placeholder_suffix = true;
     }
     /// Appends a normal labeled value.
     pub fn info(&mut self, label: &str, value: &str) -> &mut Self {
@@ -203,16 +197,9 @@ impl Out {
         self.section.body.push_str("\r\n");
         self
     }
-    /// Records an identifier after its value has been appended, annotating placeholders.
+    /// Records an identifier after its value has been appended.
     pub fn id_value(&mut self, value: &str) -> &mut Self {
         self.section.ids.push(value.to_owned());
-        if !self.omit_placeholder_suffix && placeholder_value(value) {
-            let value = value.trim();
-            let body = self.section.body.trim_end();
-            if !value.is_empty() && body.ends_with(value) {
-                self.section.body.insert_str(body.len(), PLACEHOLDER_SUFFIX);
-            }
-        }
         self
     }
     /// Records the source that produced the current section's data.
@@ -700,10 +687,10 @@ mod tests {
         assert_eq!(
             section.body,
             concat!(
-                "Count: 0\r\nSerial: 0 (placeholder)\r\n",
-                "Count: 0 | Serial: N/A (placeholder)\r\n",
-                "    └── Serial: Default string (placeholder)\r\n",
-                "DIMM0     00000000 (placeholder)   \r\n",
+                "Count: 0\r\nSerial: 0\r\n",
+                "Count: 0 | Serial: N/A\r\n",
+                "    └── Serial: Default string\r\n",
+                "DIMM0     00000000   \r\n",
                 "Serial: SN8D4C2A9\r\n"
             )
         );
@@ -711,11 +698,7 @@ mod tests {
             section.ids,
             ["0", "N/A", "Default string", "00000000", "SN8D4C2A9"]
         );
-        assert!(
-            masked(&section)
-                .body
-                .contains("XXXXXXX XXXXXX (placeholder)")
-        );
+        assert!(masked(&section).body.contains("XXXXXXX XXXXXX"));
 
         for (value, expected) in [
             ("7777", "XXXX"),
@@ -723,12 +706,9 @@ mod tests {
             ("22:22:22:22:22:22", "XX:XX:XX:XX:XX:XX"),
             ("AAAA", "XXXX"),
             ("xxxx", "XXXX"),
-            ("000000000000", "XXXXXXXXXXXX (placeholder)"),
-            (
-                "To be filled by O.E.M.",
-                "XX XX XXXXXX XX X.X.X. (placeholder)",
-            ),
-            ("ff:FF:ff:FF:ff:FF", "XX:XX:XX:XX:XX:XX (placeholder)"),
+            ("000000000000", "XXXXXXXXXXXX"),
+            ("To be filled by O.E.M.", "XX XX XXXXXX XX X.X.X."),
+            ("ff:FF:ff:FF:ff:FF", "XX:XX:XX:XX:XX:XX"),
         ] {
             let mut out = Out::new();
             out.id("Serial", value)
@@ -738,9 +718,8 @@ mod tests {
             let section = out.finish();
             assert_eq!(section.ids, [value, value, value]);
             assert_eq!(
-                section.body.contains(PLACEHOLDER_SUFFIX),
-                expected.contains(PLACEHOLDER_SUFFIX),
-                "{value}"
+                section.body,
+                format!("Serial: {value}\r\nID: {value}\r\nTree: {value}\r\n")
             );
             assert_eq!(
                 masked(&section).body,

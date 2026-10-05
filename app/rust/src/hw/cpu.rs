@@ -401,11 +401,7 @@ mod tests {
         assert_eq!(section.body.as_bytes(), expected.as_bytes());
         assert_eq!(section.ids, ["To Be Filled By O.E.M.", "D48E7F156B3C2A91"]);
         let masked = crate::report::masked(&section);
-        assert!(
-            masked
-                .body
-                .contains("SerialNumber: XX XX XXXXXX XX X.X.X. (placeholder)")
-        );
+        assert!(masked.body.contains("SerialNumber: XX XX XXXXXX XX X.X.X."));
         assert!(masked.body.contains("ProcessorId: 00AF0764C1EBFA2B"));
         let mut out = Out::new();
         write_processor(&mut out, "", "", Some(""));

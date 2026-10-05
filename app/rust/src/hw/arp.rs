@@ -86,7 +86,6 @@ fn arp_exe() -> win::Result<process::Output> {
 }
 
 fn format_neighbors(entries: &[Neighbor], names: &HashMap<u32, String>, out: &mut Out) {
-    out.omit_placeholder_suffix();
     let mut groups = BTreeMap::<u32, Vec<(bool, String, String)>>::new();
     for entry in entries {
         // C# parity: IpHlpApi.cs:121-132. Only state 1 is dropped, despite the incorrect
@@ -191,7 +190,6 @@ fn is_virtual_interface(name: &str) -> bool {
 }
 
 fn format_arp_exe(output: &str, out: &mut Out) {
-    out.omit_placeholder_suffix();
     let mut has_entries = false;
     // C# parity: ArpInfo.cs:140-167. English, case-sensitive substrings and space-only
     // splitting are intentional; the fallback does not normalize case or sort entries.

@@ -1,6 +1,6 @@
 //! C2 export parsing and comparison. No hardware collection and no file writes.
 
-use super::{PLACEHOLDER_SUFFIX, eq_ignore_case, pad_right_utf16};
+use super::{eq_ignore_case, pad_right_utf16};
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -419,13 +419,6 @@ fn split_section(title: &str, body: &str, ids: &[String]) -> Section {
     }
     if !current.rows.is_empty() {
         section.entities.push(current);
-    }
-    for entity in std::iter::once(&mut section.header).chain(&mut section.entities) {
-        for (_, value) in &mut entity.rows {
-            if let Some(raw) = value.strip_suffix(PLACEHOLDER_SUFFIX) {
-                *value = raw.to_owned();
-            }
-        }
     }
     for (index, entity) in section.entities.iter_mut().enumerate() {
         if entity.heading.is_empty() && section.blocked {
