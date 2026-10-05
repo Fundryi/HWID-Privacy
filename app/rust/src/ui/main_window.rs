@@ -175,6 +175,7 @@ fn handle(form: &Form, state: &State, event: Event) {
         Event::Resize { client, .. } => responsive(form, state, client),
         Event::Created => {
             load_settings(form, state);
+            form.set_checked(super::find::ALL_SECTIONS, true);
             // C# parity: SectionedViewForm.cs:53-55 starts the load in the constructor, so the
             // first paint already shows the loading state and the `Loading...` bodies.
             let load = begin_load(form, state);
@@ -2335,7 +2336,10 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
         );
         form.click(FIRST_SECTION);
         key(b'F' as u16, true, false);
-        assert!(!form.is_checked(ALL));
+        // On by default; the section-only checks run with the scope switched off.
+        assert!(form.is_checked(ALL));
+        form.click(ALL);
+        assert_eq!(text_of(form.control(ALL).unwrap()), "All sections, off");
         form.set_text(QUERY, "Serial");
         let local_count = expected.iter().filter(|m| m.0 == 0).count();
         assert_eq!(form.text(COUNT), format!("1 of {local_count}"));

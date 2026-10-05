@@ -17,7 +17,7 @@ const COUNT: u16 = 202;
 const PREVIOUS: u16 = 203;
 const NEXT: u16 = 204;
 const CLOSE: u16 = 205;
-const ALL_SECTIONS: u16 = 206;
+pub(super) const ALL_SECTIONS: u16 = 206;
 
 /// The same hidden row in the main content table and the Old View panel.
 pub(super) fn bar() -> Node {
