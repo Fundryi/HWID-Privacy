@@ -2,11 +2,14 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "docs:check-routes": "node scripts/journey-pages.mjs --check",
+    "predocs:build": "npm run docs:check-routes",
     "docs:dev": "vitepress dev",
     "docs:build": "vitepress build",
     "docs:preview": "vitepress preview"
   },
   "devDependencies": {
+    "mermaid": "12.1.0",
     "vitepress": "^1.6.4"
   }
 }

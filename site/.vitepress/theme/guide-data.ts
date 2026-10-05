@@ -1,0 +1,743 @@
+export interface GuideLink {
+  label: string
+  href: string
+}
+
+export interface GuideMethod extends GuideLink {
+  id: string
+  description: string
+  note?: string
+}
+
+export interface GuideRoute {
+  id: string
+  title: string
+  shortTitle: string
+  description: string
+  href: string
+  group: string
+  risk: string
+  difficulty: string
+  identify: GuideLink
+  prepare: GuideLink
+  verify: GuideLink
+  troubleshoot?: GuideLink
+  methods: GuideMethod[]
+}
+
+export interface WorkflowStep {
+  id: string
+  number: number
+  title: string
+  description: string
+  links: GuideLink[]
+}
+
+const fundamentals = '/guides/getting-started/getting-started.html'
+const paths = {
+  motherboard: '/guides/motherboard-spoofing/motherboard-spoofing.html',
+  nvram: '/guides/nvram-spoofing/nvram-spoofing.html',
+  tpm: '/guides/tpm-spoofing/tpm-spoofing.html',
+  ftpm: '/guides/resets/ftpm-reset-tutorial.html',
+  storage: '/guides/ssd-spoofing/ssd-spoofing.html',
+  network: '/guides/mac-spoofing/mac-spoofing.html',
+  router: '/guides/arp-spoofing/arp-spoofing.html',
+  memory: '/guides/ram-spoofing/ram-spoofing.html',
+  display: '/guides/monitor-spoofing/monitor-spoofing.html',
+}
+
+// Navigation summaries only. The linked guides own procedures, warnings and evidence.
+export const guides: GuideRoute[] = [
+  {
+    id: 'motherboard',
+    title: 'Motherboard and SMBIOS',
+    shortTitle: 'Motherboard',
+    description: 'Find system, baseboard and chassis identity fields, then check the exact firmware and OEM provisioning boundary.',
+    href: paths.motherboard,
+    group: 'Firmware',
+    risk: 'high',
+    difficulty: 'medium',
+    identify: { label: 'Identify the SMBIOS fields', href: `${paths.motherboard}#what-this-changes` },
+    prepare: { label: 'Requirements and recovery', href: `${paths.motherboard}#requirements-and-recovery-preparation` },
+    verify: { label: 'Verify SMBIOS after cold boot', href: `${paths.motherboard}#verify-with-hwidchecker` },
+    troubleshoot: { label: 'Motherboard troubleshooting', href: `${paths.motherboard}#troubleshooting` },
+    methods: [
+      {
+        id: 'motherboard-ami-dmiedit',
+        label: 'AMI board: owner-tested DMIEdit workflow',
+        href: `${paths.motherboard}#instructions`,
+        description: 'The project owner’s AMI workflow for the system UUID and baseboard serial, with a read-only serial collection first.',
+        note: 'Owner report [C]; utility provenance and compatibility with other boards or firmware remain [S]. Read recovery preparation first.',
+      },
+      {
+        id: 'motherboard-amidewin',
+        label: 'AMIDEWIN / DMIEdit scope and limits',
+        href: `${paths.motherboard}#amidewin-and-dmiedit-workflow-notes`,
+        description: 'Check command review, the narrow field scope and the boundary between a successful write and persistent firmware data.',
+        note: 'Exact bundled switches and compatibility remain [S]. Rejected writes are a stop condition.',
+      },
+      {
+        id: 'motherboard-insyde',
+        label: 'Insyde H2OSDE and OEM provisioning',
+        href: `${paths.motherboard}#insyde-h2osde-and-oem-provisioning-tools`,
+        description: 'Research the firmware vendor’s model-specific provisioning route when AMI tooling does not apply.',
+        note: 'Tool existence [A]; end-user availability [S]. No general Phoenix SecureCore workflow is confirmed.',
+      },
+      {
+        id: 'motherboard-asus',
+        label: 'ASUS: FlashBack and modified-ROM boundary',
+        href: `${paths.motherboard}#asus-specific-procedure-boundary`,
+        description: 'Separate official board-specific recovery from the proposed UUID-in-ROM modification.',
+        note: 'Official FlashBack requirements [A]; modified-ROM procedure untested [S]. A readable dump does not validate a flash.',
+      },
+      {
+        id: 'motherboard-unknown',
+        label: 'Unknown, protected or unsupported board',
+        href: `${paths.motherboard}#requirements-and-recovery-preparation`,
+        description: 'Start with the exact model, revision, BIOS version and recovery documentation before choosing a tool.',
+        note: 'Vendor-wide compatibility reports do not establish support for your board.',
+      },
+    ],
+  },
+  {
+    id: 'nvram',
+    title: 'NVRAM and EFI variables',
+    shortTitle: 'EFI variables',
+    description: 'Inspect firmware variables read-only, distinguish boot configuration from reported identity data, and keep recovery evidence private.',
+    href: paths.nvram,
+    group: 'Firmware',
+    risk: 'low',
+    difficulty: 'easy',
+    identify: { label: 'Understand variable names and roles', href: `${paths.nvram}#what-the-variables-mean` },
+    prepare: { label: 'Backup and recovery preparation', href: `${paths.nvram}#backup-and-recovery-preparation` },
+    verify: { label: 'Compare EFI and SMBIOS evidence', href: `${paths.nvram}#verify-with-hwidchecker` },
+    troubleshoot: { label: 'EFI-variable troubleshooting', href: `${paths.nvram}#troubleshooting` },
+    methods: [
+      {
+        id: 'nvram-read-only',
+        label: 'UEFI system: read-only efivarfs inventory',
+        href: `${paths.nvram}#read-only-inspection-steps`,
+        description: 'Follow the Linux UEFI inspection route for names, selected sizes and private local hashes.',
+        note: 'Inspection [A]. HWIDChecker does not enumerate arbitrary EFI variables.',
+      },
+      {
+        id: 'nvram-boot-variables',
+        label: 'BootOrder, Boot#### and other boot variables',
+        href: `${paths.nvram}#standard-boot-variables`,
+        description: 'Identify standard boot configuration and expected boot-time changes before interpreting them as identity.',
+        note: 'Boot-option numbers are allocated entries, not a universal deletion list [A].',
+      },
+      {
+        id: 'nvram-research-variables',
+        label: 'OfflineUniqueID, UnlockID, DmiVar and MacAddrVar',
+        href: `${paths.nvram}#identifier-like-variables-reported-in-third-party-research`,
+        description: 'Look up the reported vendor-specific names and the limits of their proposed identity meanings.',
+        note: 'Third-party research [S]; a variable name alone does not establish its contents or purpose.',
+      },
+      {
+        id: 'nvram-unsupported-write',
+        label: 'Unknown write or deletion: unsupported boundary',
+        href: `${paths.nvram}#why-this-guide-does-not-delete-variables`,
+        description: 'Read why this guide excludes generic deletion and requires an exact vendor procedure for any change.',
+        note: 'No verified wildcard deletion or generic restore procedure is provided.',
+      },
+    ],
+  },
+  {
+    id: 'tpm',
+    title: 'TPM identity and implementation',
+    shortTitle: 'TPM',
+    description: 'Identify the active TPM and distinguish its endorsement key, certificates and protected state before choosing a platform-specific route.',
+    href: paths.tpm,
+    group: 'Firmware',
+    risk: 'medium',
+    difficulty: 'medium',
+    identify: { label: 'Identify the TPM implementation', href: `${paths.tpm}#tpm-implementation-types` },
+    prepare: { label: 'TPM key and sign-in precautions', href: `${paths.tpm}#what-clearing-the-tpm-changes` },
+    verify: { label: 'Verify the EK and certificate collections', href: `${paths.tpm}#verify-with-hwidcheckerexe` },
+    methods: [
+      {
+        id: 'tpm-amd',
+        label: 'AMD ASP fTPM',
+        href: `${paths.ftpm}#how-the-amd-ftpm-identity-actually-works`,
+        description: 'Read the AMD identity observations and the distinction between a state reset and an endorsement-identity change.',
+        note: 'Derivation inputs remain undocumented [S]; the linked guide separates observations from primary-source facts.',
+      },
+      {
+        id: 'tpm-intel',
+        label: 'Intel Platform Trust Technology (PTT)',
+        href: `${paths.ftpm}#intel-z790-vs-z790-era-method-vs-z890`,
+        description: 'Choose the generation-specific Intel evidence rather than assuming one BIOS-button result applies to every board.',
+        note: 'MSI Z790 has a reported test; Z890 has no verified user-accessible rotation in the cited research.',
+      },
+      {
+        id: 'tpm-discrete',
+        label: 'Discrete TPM chip or plug-in module',
+        href: `${paths.tpm}#tpm-implementation-types`,
+        description: 'Identify a separate TPM component with its own endorsement identity and check board-specific module compatibility.',
+        note: 'Hardware replacement is a different chip, not a software spoof. Modules are not universally interchangeable.',
+      },
+      {
+        id: 'tpm-pluton',
+        label: 'Microsoft Pluton configured as TPM',
+        href: `${paths.tpm}#tpm-implementation-types`,
+        description: 'Check whether the processor and firmware actually expose Pluton as the system TPM.',
+        note: 'Newly introduced 2026 AMD and Qualcomm silicon no longer uses Pluton as TPM; earlier supported devices are separate [A].',
+      },
+      {
+        id: 'tpm-clear',
+        label: 'Ordinary TPM clear: state, not EK rotation',
+        href: `${paths.tpm}#what-clearing-the-tpm-changes`,
+        description: 'Understand the storage-key and sign-in effects of a normal clear before mistaking it for an endorsement reset.',
+        note: 'A standard clear does not replace the EPS or default EK [A].',
+      },
+      {
+        id: 'tpm-update-continuity',
+        label: 'Firmware update and EK continuity',
+        href: `${paths.tpm}#firmware-updates-and-ek-continuity`,
+        description: 'Read the specification boundary and the measurements needed when a firmware update appears to change the EK.',
+        note: 'A firmware version change alone does not prove a new standard EK [A].',
+      },
+    ],
+  },
+  {
+    id: 'ftpm',
+    title: 'fTPM reset evidence by platform',
+    shortTitle: 'fTPM evidence',
+    description: 'Compare AMD TPM-B reports, the Pluton research route and generation-specific Intel results, with paired key and certificate verification.',
+    href: paths.ftpm,
+    group: 'Firmware',
+    risk: 'medium',
+    difficulty: 'medium',
+    identify: { label: 'Identify the active TPM first', href: `${paths.tpm}#tpm-implementation-types` },
+    prepare: { label: 'Before any reset or TPM switch', href: `${paths.ftpm}#before-you-reset` },
+    verify: { label: 'Check the active EK and certificate trust', href: `${paths.ftpm}#check-your-certificate-after-any-rotation` },
+    troubleshoot: { label: 'TPM-B failure modes', href: `${paths.ftpm}#failure-modes-and-how-to-avoid-them` },
+    methods: [
+      {
+        id: 'ftpm-amd-tpmb',
+        label: 'AMD: TPM-B firmware flash-cycle reports',
+        href: `${paths.ftpm}#method-a-tpm-b-firmware-flash-cycle`,
+        description: 'Read the exact BIOS-pair requirements, board results and deterministic two-state observation.',
+        note: 'Certificate validity after rotation remains untested in public; board rows without individual sources remain [S].',
+      },
+      {
+        id: 'ftpm-pluton-toggle',
+        label: 'Pluton toggle: unverified research',
+        href: `${paths.ftpm}#method-b-pluton-toggle-unverified`,
+        description: 'Inspect the one-board displayed-key evidence and the unresolved certificate and repeatability questions.',
+        note: 'Procedure [S] overall; a changed displayed hash does not establish a fresh trusted identity.',
+      },
+      {
+        id: 'ftpm-discrete-replacement',
+        label: 'dTPM module: hardware substitution',
+        href: `${paths.ftpm}#method-c-dtpm-module`,
+        description: 'Read the discrete-module alternative and its compatibility and attestation limits.',
+        note: 'The guide does not recommend this route. Confirm compatibility in the motherboard manual.',
+      },
+      {
+        id: 'ftpm-intel-z790',
+        label: 'Intel: MSI Z790 Flash BIOS Button report',
+        href: `${paths.tpm}#-ftpm-spoofing`,
+        description: 'Open the dedicated Intel flash-button report tested on one MSI Z790 board.',
+        note: 'That board’s result [C]; other-board compatibility and the seed-regeneration explanation remain [S].',
+      },
+      {
+        id: 'ftpm-intel-z890',
+        label: 'Intel Z890 / Arrow Lake: no verified rotation',
+        href: `${paths.ftpm}#intel-z790-vs-z790-era-method-vs-z890`,
+        description: 'Read the measured unchanged-EK results and the documented CSME-region and recovery limits.',
+        note: 'No verified user-accessible rotation in the cited 2026-08-21 research; broad lowest-to-highest flash claims remain [S].',
+      },
+      {
+        id: 'ftpm-non-rotation',
+        label: 'Clear, CMOS reset or reinstall: rotation limits',
+        href: `${paths.ftpm}#what-does-not-change-the-ek`,
+        description: 'Check the documented dead ends and confounded reports before planning a reset or reinstall as EK rotation.',
+        note: 'The source keeps clear semantics, firmware observations and reinstall claims at their separate evidence grades.',
+      },
+    ],
+  },
+  {
+    id: 'storage',
+    title: 'SSD, storage controllers and USB bridges',
+    shortTitle: 'Storage',
+    description: 'Match the exact controller, NAND and connection path, then distinguish native drive identity from bridge, RAID, partition and volume values.',
+    href: paths.storage,
+    group: 'Storage',
+    risk: 'high',
+    difficulty: 'hard',
+    identify: { label: 'Identify the exact controller', href: `${paths.storage}#which-controller-do-i-have` },
+    prepare: { label: 'Backups and recovery checklist', href: `${fundamentals}#safety-checklist` },
+    verify: { label: 'Verify every storage layer', href: `${paths.storage}#verify-the-result` },
+    methods: [
+      {
+        id: 'storage-map1202',
+        label: 'Maxio MAP1202: M.2 NVMe owner-tested workflow',
+        href: `${paths.storage}#m2-ssd-spoofing`,
+        description: 'The MXMPTool route for the owner-tested MAP1202 drive and matched USB-to-M.2 setup.',
+        note: 'Owner test [C], not independently repeated. Read this method’s Prerequisites and destructive-operation warning.',
+      },
+      {
+        id: 'storage-yansen-kingspec',
+        label: 'YANSEN / KingSpec: 2.5-inch SATA workflow',
+        href: `${paths.storage}#normal-25-ssd-spoofing`,
+        description: 'The SSDToolKits route using the owner-tested SATA hardware and ASMT 2115 bridge.',
+        note: 'Owner test [C]; replacement stock and other batches unverified [S]. Read the separate SATA Prerequisites.',
+      },
+      {
+        id: 'storage-sm2263xt',
+        label: 'Silicon Motion SM2263XT: untested MP workflow',
+        href: `${paths.storage}#silicon-motion-sm2263xt-notes`,
+        description: 'Controller- and NAND-matched research for subsystem fields and firmware-dependent namespace EUI-related settings.',
+        note: 'Programming procedure [S]. Matching the controller alone does not establish a supported NAND profile or PCB.',
+      },
+      {
+        id: 'storage-rtl9210b',
+        label: 'RTL9210B enclosure: USB / SCSI bridge identity',
+        href: `${paths.storage}#usb-nvme-enclosures-and-bridge-serials`,
+        description: 'Research the exact enclosure revision and bridge strings separately from the SSD’s native NVMe identifiers.',
+        note: 'Bridge-flashing workflow [S]. A bridge change does not rewrite the SSD; compare USB and native M.2 captures.',
+      },
+      {
+        id: 'storage-tusb926x',
+        label: 'TI TUSB926x: documented bridge-descriptor example',
+        href: `${paths.storage}#usb-nvme-enclosures-and-bridge-serials`,
+        description: 'Find the vendor-documented example of editable USB descriptors and bridge serial data.',
+        note: 'Bridge identity only [A], not an SSD-firmware programming route.',
+      },
+      {
+        id: 'storage-raid-volume',
+        label: 'RAID, virtual disks, partitions and volumes',
+        href: `${paths.storage}#raid-disk-identity-and-volume-identity`,
+        description: 'Identify logical-layer values and controller pass-through limits without assuming member-drive serials changed.',
+        note: 'Formatting, partition changes and a virtual disk do not establish a native SSD identity change.',
+      },
+      {
+        id: 'storage-map1602',
+        label: 'Maxio MAP1602: bring-up research only',
+        href: `${paths.storage}#research-candidates`,
+        description: 'Inspect MAP1602 with YMTC X3-9070 bring-up evidence and the missing persistent SN/MN comparison.',
+        note: 'Not guide-supported for identity change. Bring-up [C]; identity persistence unverified [S].',
+      },
+      {
+        id: 'storage-sm2269xt',
+        label: 'Silicon Motion SM2269XT: bring-up research only',
+        href: `${paths.storage}#research-candidates`,
+        description: 'Inspect the Micron B47R bring-up evidence and listed NAND packages without treating them as identity-write support.',
+        note: 'Not guide-supported for identity change. Bring-up [C]; identity persistence unverified [S].',
+      },
+      {
+        id: 'storage-ig5236',
+        label: 'InnoGrit IG5236: recovery evidence only',
+        href: `${paths.storage}#research-candidates`,
+        description: 'Read the YMTC X2-9060 recovery report and its boundary: restored capacity without demonstrated serial or model editing.',
+        note: 'Recovery [C]; no guide-supported identity-change route.',
+      },
+      {
+        id: 'storage-unsupported',
+        label: 'Realtek NVMe / Phison: unsupported identity change',
+        href: `${paths.storage}#research-candidates`,
+        description: 'Read the unsupported RTS5765/RTS5766DL and Phison E13/E18/E19/E21/E26 boundary.',
+        note: 'No inspectable identity-change and cold-boot readback was found [S].',
+      },
+      {
+        id: 'storage-unknown',
+        label: 'Unknown controller, NAND or bridge',
+        href: `${paths.storage}#which-controller-do-i-have`,
+        description: 'Start with exact markings, revision, firmware, capacity and transport rather than a retail SSD model name.',
+        note: 'Stop if the package is hidden or the controller and NAND cannot be confirmed.',
+      },
+    ],
+  },
+  {
+    id: 'network',
+    title: 'NIC and MAC addresses',
+    shortTitle: 'NIC / MAC',
+    description: 'Choose between a Windows current-address override and controller-specific permanent-storage work, with exact family and revision checks.',
+    href: paths.network,
+    group: 'Network',
+    risk: 'low to high',
+    difficulty: 'easy to hard',
+    identify: { label: 'Current, permanent and stored MAC', href: `${paths.network}#current-mac-permanent-mac-and-burned-in-storage` },
+    prepare: { label: 'Backups and recovery checklist', href: `${fundamentals}#safety-checklist` },
+    verify: { label: 'Verify current and device readbacks', href: `${paths.network}#verification-checklist` },
+    troubleshoot: { label: 'ConnectX-3 troubleshooting', href: `${paths.network}#troubleshooting` },
+    methods: [
+      {
+        id: 'network-windows',
+        label: 'Windows NetworkAddress: software-only override',
+        href: `${paths.network}#windows-networkaddress-override-software-only`,
+        description: 'Change the current driver-visible address on a supporting adapter without rewriting its nonvolatile storage.',
+        note: 'Documented mechanism [A]; driver support varies and applying it briefly restarts the adapter.',
+      },
+      {
+        id: 'network-intel',
+        label: 'Intel Ethernet: EEUPDATE / DOS route',
+        href: `${paths.network}#intel-nics`,
+        description: 'Check the exact Intel controller, tool version, locks and backup caveats before the DOS workflow.',
+        note: 'General procedure [S]. Read the Intel Prerequisites and Intel Tool Caveats and Backup sections.',
+      },
+      {
+        id: 'network-realtek-pcie',
+        label: 'Realtek onboard / PCIe: matched PG configuration',
+        href: `${paths.network}#realtek-nics`,
+        description: 'Match silicon, board configuration and selected EEPROM, OTP or eFuse mode before considering programming.',
+        note: 'General procedure [S]. The supplied RTL8125-family recipe does not establish RTL8126 support.',
+      },
+      {
+        id: 'network-realtek-usb',
+        label: 'Realtek RTL8153 / RTL8156 USB adapters',
+        href: `${paths.network}#realtek-usb-nics-update`,
+        description: 'Read the named Belkin RTL8153 report, PG Tool version differences and USB adapter storage limits.',
+        note: 'Named contributor report [C], not repeated here; bundled and reported tool versions differ. OTP/eFuse writes are irreversible.',
+      },
+      {
+        id: 'network-tplink-ue300',
+        label: 'TP-Link UE300 / RTL8153: revision-sensitive report',
+        href: `${paths.network}#tp-link-ue300--rtl8153`,
+        description: 'Identify the printed UE300 hardware revision and active storage mode before applying a Realtek workflow.',
+        note: 'One successful report [S]; hardware revision and storage mode are unconfirmed.',
+      },
+      {
+        id: 'network-asix-original',
+        label: 'ASIX AX88179: original-controller route',
+        href: `${paths.network}#asix-ax88179ab-now-too`,
+        description: 'Find the ASIXFlash and Captain routes, then distinguish external EEPROM from embedded eFuse.',
+        note: 'Tool and storage support must match the exact finished adapter. The detailed Captain report is third-party [C].',
+      },
+      {
+        id: 'network-asix-ab',
+        label: 'ASIX AX88179A / AX88179B: revision and storage',
+        href: `${paths.network}#ax88179-storage-and-captain-tool-detail`,
+        description: 'Read the A/B storage distinctions and the controller-matched ASIX or bundled Captain tooling boundary.',
+        note: 'Vendor storage model [A]; eFuse cannot be erased. The bundled Captain limitation is not a vendor-wide rule.',
+      },
+      {
+        id: 'network-connectx3',
+        label: 'Mellanox ConnectX-3 CX311A / MCX311A-XCAT',
+        href: `${paths.network}#mellanox-connectx-3-cx311a--mcx311a-xcat`,
+        description: 'The tested single-port 10 GbE firmware-base-MAC route, including backup, image-file check and device readback.',
+        note: 'Named hardware test [C]. Read its separate WinOF / WinMFT Prerequisites before using the procedure.',
+      },
+      {
+        id: 'network-rtl8126',
+        label: 'Realtek RTL8126: factory provisioning boundary',
+        href: `${paths.network}#controller-storage-efuse-eeprom-or-flash`,
+        description: 'Find the RTL8126 eFuse factory-tool evidence and the limit on retail end-user rewriting.',
+        note: 'Factory provisioning [C]; retail rewriting unconfirmed. Do not reuse the RTL8125 recipe.',
+      },
+      {
+        id: 'network-aquantia',
+        label: 'Marvell / Aquantia AQC113: recovery, not MAC editing',
+        href: `${paths.network}#controller-storage-efuse-eeprom-or-flash`,
+        description: 'Read the signed firmware recovery evidence and why older AQC107 DIAG reports do not establish AQC113 MAC-edit support.',
+        note: 'Firmware recovery [C]; no public MAC-edit operation shown [S].',
+      },
+      {
+        id: 'network-unknown',
+        label: 'Unknown NIC or unknown storage mode',
+        href: `${paths.network}#controller-storage-efuse-eeprom-or-flash`,
+        description: 'Identify EEPROM, flash, OTP or eFuse and the exact controller-matched utility before choosing hardware work.',
+        note: 'A controller family, readable dump or successful Windows override does not prove a reversible hardware write.',
+      },
+    ],
+  },
+  {
+    id: 'router',
+    title: 'Router and first-hop network isolation',
+    shortTitle: 'Router / gateway',
+    description: 'Choose a routed device under your control and verify its downstream gateway, Wi-Fi and IPv6 boundary separately.',
+    href: paths.router,
+    group: 'Network',
+    risk: 'low',
+    difficulty: 'medium',
+    identify: { label: 'Compare the routed device options', href: `${paths.router}#options` },
+    prepare: { label: 'Requirements and reset access', href: `${paths.router}#requirements` },
+    verify: { label: 'Verify gateway and neighbor tables', href: `${paths.router}#verify-with-hwidchecker` },
+    troubleshoot: { label: 'Router isolation troubleshooting', href: `${paths.router}#troubleshooting` },
+    methods: [
+      {
+        id: 'router-glinet',
+        label: 'GL.iNet travel router: Router / WISP mode',
+        href: `${paths.router}#3a-configure-a-glinet-travel-router-a`,
+        description: 'Choose Ethernet WAN or Wi-Fi repeater uplink with a separate routed downstream LAN.',
+        note: 'Vendor-documented route [A]. The normal WAN MAC control does not by itself change the PC-visible LAN gateway MAC.',
+      },
+      {
+        id: 'router-openwrt',
+        label: 'Supported OpenWrt router',
+        href: `${paths.router}#3b-configure-another-openwrt-router-a`,
+        description: 'Use the exact LAN device or bridge configuration rather than an assumed anonymous interface index.',
+        note: 'Documented configuration [A]; device names and port layouts vary.',
+      },
+      {
+        id: 'router-pi4',
+        label: 'Raspberry Pi 4: NetworkManager shared IPv4',
+        href: `${paths.router}#3c-configure-a-raspberry-pi-4-model-b-a`,
+        description: 'The documented Wi-Fi-uplink and Ethernet-downstream route on Raspberry Pi OS Bookworm or newer.',
+        note: 'IPv4 example [A]; an all-wired topology needs a second supported interface. This is a routed setup, not a bridge.',
+      },
+      {
+        id: 'router-ipv6',
+        label: 'IPv6: verify the separate routed boundary',
+        href: `${paths.router}#4-decide-how-to-handle-ipv6-a`,
+        description: 'Check IPv6 default routes and neighbors separately from IPv4 ARP before accepting isolation.',
+        note: 'There is no universal IPv6 setting for every GL.iNet / OpenWrt firmware and ISP.',
+      },
+      {
+        id: 'router-unknown',
+        label: 'Unknown router or bridge / access-point setup',
+        href: `${paths.router}#overview`,
+        description: 'Read the routing boundary and confirm that the chosen device supports Router or WISP mode.',
+        note: 'Access Point, WDS, extender and bridge modes can leave the PC on the primary Layer 2 network.',
+      },
+    ],
+  },
+  {
+    id: 'memory',
+    title: 'RAM modules and SPD identity',
+    shortTitle: 'RAM / SPD',
+    description: 'Measure the Windows SMBIOS view, identify DDR4 or DDR5 protection, and check exact external-programmer support before any SPD work.',
+    href: paths.memory,
+    group: 'Peripherals',
+    risk: 'high',
+    difficulty: 'hard',
+    identify: { label: 'Identify modules in the read-only baseline', href: `${paths.memory}#read-only-baseline` },
+    prepare: { label: 'Programmer and recovery requirements', href: `${paths.memory}#requirements` },
+    verify: { label: 'Verify SMBIOS and raw SPD readback', href: `${paths.memory}#verify-the-result` },
+    troubleshoot: { label: 'RAM and SPD troubleshooting', href: `${paths.memory}#troubleshooting` },
+    methods: [
+      {
+        id: 'memory-no-write',
+        label: 'Existing null serial or module replacement',
+        href: `${paths.memory}#lowest-risk-options`,
+        description: 'Check the lowest-risk options before choosing a write: measure the actual observation layer and exact module.',
+        note: 'Candidate retail families are not a guarantee. A null SMBIOS value does not prove the raw SPD lacks a serial.',
+      },
+      {
+        id: 'memory-ddr4',
+        label: 'DDR4: EE1004 / AT34C04 protection',
+        href: `${paths.memory}#ddr4-ee1004-protection`,
+        description: 'Read the DDR4 protection model and the generation-specific requirements for accessing the serial-containing region.',
+        note: 'Layout and protection [A]; the hardware write and recovery workflow remains untested [S].',
+      },
+      {
+        id: 'memory-ddr5',
+        label: 'DDR5: SPD5118 hub and offline-tester support',
+        href: `${paths.memory}#ddr5-spd5118-protection`,
+        description: 'Check the DDR5 hub’s protection map and documented offline-tester requirement for clearing write protection on the serial-containing block.',
+        note: 'Device model [A]; exact programmer support is required. Do not improvise wiring or change PMIC state.',
+      },
+      {
+        id: 'memory-programmer',
+        label: 'External SPD programmer: untested write workflow',
+        href: `${paths.memory}#external-programmer-procedure`,
+        description: 'Read the full-dump, protection, serial-only edit and external recovery requirements for a matched programmer.',
+        note: 'Procedure [S]. The external raw readback is separate from the Windows / SMBIOS view.',
+      },
+      {
+        id: 'memory-tools',
+        label: 'Tools: read-only views and DDR4 programmer example',
+        href: `${paths.memory}#tools`,
+        description: 'Compare PowerShell / HWIDChecker with exact-module programmer requirements and the Century Micro SPD PROGRAMMER 2 example.',
+        note: 'The documented programmer example is DDR4 only and does not guarantee third-party-module compatibility.',
+      },
+      {
+        id: 'memory-unknown',
+        label: 'Unknown generation, SPD device or protection',
+        href: `${paths.memory}#requirements`,
+        description: 'Use the stop conditions for incomplete reads, unsupported devices or an unavailable external recovery path.',
+        note: 'A successful read does not establish that the platform or SPD device permits a write.',
+      },
+    ],
+  },
+  {
+    id: 'display',
+    title: 'Monitor and EDID identity',
+    shortTitle: 'Monitor / EDID',
+    description: 'Choose a Windows override, programmable inline device or exact-monitor research route while preserving the full descriptor and signal features.',
+    href: paths.display,
+    group: 'Peripherals',
+    risk: 'medium',
+    difficulty: 'medium',
+    identify: { label: 'Identify EDID and the connection path', href: `${paths.display}#how-monitor-identity-is-stored` },
+    prepare: { label: 'Backup and recovery requirements', href: `${paths.display}#requirements` },
+    verify: { label: 'Verify identity and display features', href: `${paths.display}#verify-with-hwidchecker` },
+    troubleshoot: { label: 'Monitor and EDID troubleshooting', href: `${paths.display}#troubleshooting` },
+    methods: [
+      {
+        id: 'display-windows',
+        label: 'Windows EDID override: CRU / monitor INF',
+        href: `${paths.display}#option-1-windows-software-override`,
+        description: 'Test identity changes in one Windows display stack without rewriting the monitor.',
+        note: 'Documented mechanism [A]; graphics-driver and connection-path support varies.',
+      },
+      {
+        id: 'display-drhdmi4k',
+        label: 'Dr HDMI 4K: programmable inline EDID',
+        href: `${paths.display}#dr-hdmi-4k`,
+        description: 'Check the documented 256-byte capacity and HDMI 2.0b / 18 Gbps path before choosing this emulator.',
+        note: 'Vendor specifications [A]. Do not truncate a larger display EDID to fit.',
+      },
+      {
+        id: 'display-drhdmi8k',
+        label: 'Dr HDMI 8K: firmware-dependent extended EDID',
+        href: `${paths.display}#dr-hdmi-8k`,
+        description: 'Check the HDMI 2.1 / 48 Gbps path and firmware 1.4 support for DisplayID 2.0 and 384 / 512-byte EDIDs.',
+        note: 'Vendor specifications [A]; confirm the installed firmware and complete signal-feature support.',
+      },
+      {
+        id: 'display-generic',
+        label: 'Generic HDMI adapter: programming support unknown',
+        href: `${paths.display}#generic-hdmi-edid-adapters`,
+        description: 'Distinguish user-programmable EDID from fixed presets or sink cloning before using an unknown adapter.',
+        note: 'No generic model or programming software is verified [S].',
+      },
+      {
+        id: 'display-dichen',
+        label: 'Dichen 5 / DC240HZ5D-2: untested research',
+        href: `${paths.display}#dichen-5-programmable-fuser`,
+        description: 'Read the reported programming route and missing authoritative capacity, utility and recovery evidence.',
+        note: 'All Dichen-specific actions remain [S] until physically tested and documented.',
+      },
+      {
+        id: 'display-eeprom',
+        label: 'Direct EEPROM: exact monitor / input only',
+        href: `${paths.display}#option-4-direct-monitor-eeprom-modification`,
+        description: 'Read the ASUS VG248QE first-hand report and the evidence required for a specific monitor board and input.',
+        note: '2013 third-party report [C]; untested here. It does not establish another model’s layout or DisplayPort path.',
+      },
+      {
+        id: 'display-displayport',
+        label: 'DisplayPort / DDC path: hardware boundary',
+        href: `${paths.display}#ddc-ddcci-hdmi-and-displayport`,
+        description: 'Check AUX and DDC access before assuming an HDMI emulator or working DDC/CI controls apply to this path.',
+        note: 'HDMI-only emulation does not intercept native DisplayPort EDID; DDC/CI does not establish EEPROM write access [A].',
+      },
+    ],
+  },
+]
+
+// Keep the full canonical workflow warning beside any view of these ten stages.
+export const workflowSteps: WorkflowStep[] = [
+  {
+    id: 'stage-1',
+    number: 1,
+    title: 'Write down the privacy goal',
+    description: 'Define the observer and identifier groups in scope. Do not change fields merely because a tool displays them.',
+    links: [
+      { label: 'What an HWID is', href: `${fundamentals}#what-an-hwid-is` },
+      { label: 'Identifier groups', href: `${fundamentals}#identifier-groups` },
+    ],
+  },
+  {
+    id: 'stage-2',
+    number: 2,
+    title: 'Take a complete baseline',
+    description: 'Save the complete HWIDChecker export privately, with the hardware configuration and firmware versions.',
+    links: [{ label: 'Take before and after snapshots', href: `${fundamentals}#take-before-and-after-snapshots` }],
+  },
+  {
+    id: 'stage-3',
+    number: 3,
+    title: 'Prepare recovery',
+    description: 'Back up and check data, save recovery keys, record firmware versions, and read the exact board or device recovery procedure.',
+    links: [{ label: 'Safety and recovery checklist', href: `${fundamentals}#safety-checklist` }],
+  },
+  {
+    id: 'stage-4',
+    number: 4,
+    title: 'Resolve devices that cannot be changed',
+    description: 'Decide which fixed devices to disconnect, disable or replace before changing identifiers or installing Windows.',
+    links: [{ label: 'Device restrictions', href: `${fundamentals}#device-restrictions` }],
+  },
+  {
+    id: 'stage-5',
+    number: 5,
+    title: 'Handle platform firmware first',
+    description: 'Choose only supported SMBIOS or TPM work for exact hardware. Keep EFI-variable work read-only unless a vendor publishes a model-specific procedure.',
+    links: [
+      { label: 'Motherboard / SMBIOS', href: paths.motherboard },
+      { label: 'EFI-variable inspection', href: paths.nvram },
+      { label: 'TPM implementation and identity', href: paths.tpm },
+      { label: 'fTPM platform evidence', href: paths.ftpm },
+    ],
+  },
+  {
+    id: 'stage-6',
+    number: 6,
+    title: 'Make component-firmware changes next',
+    description: 'Handle storage, NIC, RAM SPD, monitor EDID and other device-specific work one component at a time.',
+    links: [
+      { label: 'Storage controllers and bridges', href: paths.storage },
+      { label: 'NIC / MAC methods', href: paths.network },
+      { label: 'RAM / SPD methods', href: paths.memory },
+      { label: 'Monitor / EDID methods', href: paths.display },
+    ],
+  },
+  {
+    id: 'stage-7',
+    number: 7,
+    title: 'Set the intended network boundary',
+    description: 'Configure only equipment you own or administer. Use routed isolation, not ARP poisoning on a shared network.',
+    links: [{ label: 'Router and gateway isolation', href: paths.router }],
+  },
+  {
+    id: 'stage-8',
+    number: 8,
+    title: 'Power-cycle and verify every persistent change',
+    description: 'Compare each intended persistent change after reboot and cold power. A value that returns is not proven persistent.',
+    links: [
+      { label: 'Motherboard verification', href: `${paths.motherboard}#verify-with-hwidchecker` },
+      { label: 'EFI-variable evidence', href: `${paths.nvram}#verify-with-hwidchecker` },
+      { label: 'TPM verification', href: `${paths.tpm}#verify-with-hwidcheckerexe` },
+      { label: 'fTPM certificate verification', href: `${paths.ftpm}#check-your-certificate-after-any-rotation` },
+      { label: 'Storage verification', href: `${paths.storage}#verify-the-result` },
+      { label: 'NIC / MAC verification', href: `${paths.network}#verification-checklist` },
+      { label: 'Router verification', href: `${paths.router}#verify-with-hwidchecker` },
+      { label: 'RAM verification', href: `${paths.memory}#verify-the-result` },
+      { label: 'Monitor verification', href: `${paths.display}#verify-with-hwidchecker` },
+    ],
+  },
+  {
+    id: 'stage-9',
+    number: 9,
+    title: 'Perform the clean Windows installation last',
+    description: 'Finish and verify the final hardware state before Windows setup, so the clean installation enumerates that state.',
+    links: [{ label: 'Clean Windows reinstall checklist', href: `${fundamentals}#clean-windows-reinstall-checklist` }],
+  },
+  {
+    id: 'stage-10',
+    number: 10,
+    title: 'Take the clean after snapshot',
+    description: 'Capture the baseline before restoring accounts or peripherals. Reconnect one device at a time and rescan to attribute its identifiers.',
+    links: [
+      { label: 'After the first desktop', href: `${fundamentals}#after-the-first-desktop` },
+      { label: 'Export and compare snapshots', href: `${fundamentals}#take-before-and-after-snapshots` },
+    ],
+  },
+]
+
+export const evidenceGrades: { code: string; label: string; description: string }[] = [
+  {
+    code: 'C',
+    label: 'Confirmed first hand',
+    description: 'confirmed first hand by a named user with hardware and procedure details.',
+  },
+  {
+    code: 'A',
+    label: 'Verified against a cited source',
+    description: 'verified against a cited specification, vendor document, Microsoft document, or repository source.',
+  },
+  {
+    code: 'CC',
+    label: 'Multiple community reports',
+    description: 'supported by multiple independent community reports.',
+  },
+  {
+    code: 'S',
+    label: 'Single claim or unverified procedure',
+    description: 'a single claim or a procedure that has not been independently verified.',
+  },
+]
