@@ -52,6 +52,7 @@ fn main() -> ExitCode {
             return Err("HWIDChecker requires administrator privileges.".to_owned());
         }
         hwidchecker::update::cleanup_old_executables();
+        win::pawnio::recover();
         parse_options(args.iter().cloned()).and_then(run)
     };
     let result = if switch_mode {

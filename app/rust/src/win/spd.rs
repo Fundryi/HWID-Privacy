@@ -89,20 +89,19 @@ pub fn decode(bytes: &[u8]) -> Result<Manufacturing> {
         };
         result.manufacturer = Some(format!("{name} (bank {}, code 0x{code:02X})", bank + 1));
     }
-    let serial_bytes = &bytes[serial..serial + 4];
-    if serial_bytes.iter().all(|byte| *byte == 0) || serial_bytes.iter().all(|byte| *byte == 0xff) {
-        result
-            .failures
-            .push(malformed("manufacturing serial absent (sentinel)"));
-    } else {
-        result.serial = Some(
-            serial_bytes
-                .iter()
-                .map(|byte| format!("{byte:02X}"))
-                .collect(),
-        );
-    }
+    // An all-00/FF serial is what the module vendor programmed (SMBIOS shows it too); report it as read.
+    result.serial = Some(
+        bytes[serial..serial + 4]
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect(),
+    );
+    // JEDEC pads with spaces, but some vendors pad with NUL bytes.
     let text = &bytes[part..part + part_len];
+    let text = &text[..text
+        .iter()
+        .rposition(|byte| *byte != 0)
+        .map_or(0, |end| end + 1)];
     if text.iter().all(|byte| (0x20..=0x7e).contains(byte)) {
         let text = String::from_utf8_lossy(text).trim().to_owned();
         if !text.is_empty() {
@@ -216,13 +215,24 @@ mod tests {
             (Generation::Ddr4, 325, 329, 320),
             (Generation::Ddr5, 517, 521, 512),
         ] {
-            for sentinel in [0, 0xff] {
+            for (sentinel, shown) in [(0, "00000000"), (0xff, "FFFFFFFF")] {
                 let mut bytes = fixture(generation);
                 bytes[serial..serial + 4].fill(sentinel);
+                // NUL padding instead of spaces, as some vendors program it.
+                let part_len = if generation == Generation::Ddr4 {
+                    20
+                } else {
+                    30
+                };
+                for byte in &mut bytes[part..part + part_len] {
+                    if *byte == b' ' {
+                        *byte = 0;
+                    }
+                }
                 let result = decode(&bytes).unwrap();
-                assert!(result.serial.is_none());
-                assert!(result.part_number.is_some());
-                assert_eq!(result.failures.len(), 1);
+                assert_eq!(result.serial.as_deref(), Some(shown));
+                assert!(result.part_number.unwrap().starts_with("KF"));
+                assert!(result.failures.is_empty());
             }
             let mut bytes = fixture(generation);
             bytes[part] = b'\n';

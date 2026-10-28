@@ -40,7 +40,7 @@ function Assert-Imports([string]$Dumpbin, [string]$Binary) {
     $allowed = @('KERNEL32', 'USER32', 'GDI32', 'ADVAPI32', 'OLE32', 'OLEAUT32',
         'SHELL32', 'COMCTL32', 'UXTHEME', 'SETUPAPI', 'CFGMGR32', 'IPHLPAPI',
         'WS2_32', 'WINHTTP', 'BCRYPT', 'NCRYPT', 'CRYPT32', 'WEVTAPI', 'NTDLL', 'COMBASE',
-        'DWMAPI', 'bcryptprimitives')
+        'DWMAPI', 'WINTRUST', 'bcryptprimitives')
     $rejected = @($imports | Where-Object {
         $name = $_ -replace '\.dll$', ''
         $name -notin $allowed -and $name -notmatch '^api-ms-win-core-[a-z0-9-]+$'

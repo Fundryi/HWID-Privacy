@@ -44,21 +44,28 @@ pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     result
 }
 
+/// A missing dependency keeps the generic unavailable message; anything else is named.
+fn specific(failure: &win::pawnio::Error) -> bool {
+    !matches!(
+        failure,
+        win::pawnio::Error::NotInstalled | win::pawnio::Error::ModuleUnavailable
+    )
+}
+
+/// True when RAM already shows a specific `SPD ... Unavailable (reason)` line.
+pub(super) fn shows_spd_reason(snapshot: &win::pawnio::Snapshot) -> bool {
+    snapshot.modules.is_empty() && snapshot.failures.iter().any(specific)
+}
+
 fn append_spd(snapshot: &win::pawnio::Snapshot, out: &mut Out) {
     for failure in &snapshot.failures {
         out.fallback_failed("PawnIO SPD", &failure.diagnostic());
     }
     if snapshot.modules.is_empty() {
-        // A missing prepared dependency keeps the existing unavailable message.
-        for failure in &snapshot.failures {
-            if !matches!(
-                failure,
-                win::pawnio::Error::NotInstalled | win::pawnio::Error::ModuleUnavailable
-            ) {
-                out.text(&format!(
-                    "SPD (driver-read, PawnIO): Unavailable ({failure})"
-                ));
-            }
+        for failure in snapshot.failures.iter().filter(|f| specific(f)) {
+            out.text(&format!(
+                "SPD (driver-read, PawnIO): Unavailable ({failure})"
+            ));
         }
         return;
     }

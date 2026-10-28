@@ -214,7 +214,10 @@ fn append_deep_information(ctx: &Ctx, out: &mut Out, ram: bool) {
             });
         }
         DeepInformationStatus::Unavailable => {
-            out.text("Deep data unavailable on this system.");
+            // RAM already names the specific PawnIO reason; the generic line would repeat it.
+            if !(ram && ctx.deep_spd.get().is_some_and(super::ram::shows_spd_reason)) {
+                out.text("Deep data unavailable on this system.");
+            }
         }
         DeepInformationStatus::Unknown => {
             out.text("Cannot read deep hardware data right now: anti-cheat status could not be verified.");

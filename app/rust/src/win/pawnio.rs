@@ -1,6 +1,6 @@
-//! Opt-in, client-only PawnIO 2.2.0 / official SmbusI801 0.2.11 transport.
-//! No SCM, installer, download, driver start/stop or EEPROM-programming operations.
-//! Live bring-up and the wider service lifecycle remain unverified/deferred.
+//! Opt-in PawnIO 2.2.0 / official SmbusI801 0.2.11 transport, both embedded in the exe.
+//! Uses an existing PawnIO install, or installs the embedded signed setup for one
+//! session and uninstalls it afterwards. No download or EEPROM-programming operations.
 
 use super::{Error as WinError, anticheat, spd};
 use std::{fmt, time::Instant};
@@ -11,8 +11,13 @@ const VERSION: u32 = 0x0002_0200;
 const LOAD: u32 = (41394 << 16) | (0x821 << 2);
 const EXECUTE: u32 = (41394 << 16) | (0x841 << 2);
 const QUERY_VERSION: u32 = (41394 << 16) | (0x861 << 2);
+/// Official signed module, PawnIO.Modules release 0.2.11.
+const MODULE: &[u8] = include_bytes!("../../assets/pawnio/SmbusI801.bin");
 const MODULE_HASH: &str = "a0f7d066e7efda28c0e754c1f52dbd8dc280d388ba8575b514a80cb67490530c";
 const MODULE_SIZE: usize = 55_540;
+/// Official signed installer, PawnIO.Setup release 2.2.0.
+const SETUP: &[u8] = include_bytes!("../../assets/pawnio/PawnIO_setup.exe");
+const SETUP_HASH: &str = "1f519a22e47187f70a1379a48ca604981c4fcf694f4e65b734aaa74a9fba3032";
 const BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Clone, Debug)]
@@ -26,6 +31,9 @@ pub enum Error {
     Malformed(&'static str),
     Timeout,
     CleanupIncomplete,
+    InstallFailed(WinError),
+    /// MR11 did not read back the selected SPD5118 page; no data is read then.
+    PageSelectIgnored,
 }
 
 impl fmt::Display for Error {
@@ -40,6 +48,8 @@ impl fmt::Display for Error {
             Self::Malformed(detail) => write!(f, "malformed PawnIO/SPD data: {detail}"),
             Self::Timeout => f.write_str("PawnIO session or transaction timed out"),
             Self::CleanupIncomplete => f.write_str("Kernel reader cleanup incomplete. Restart Windows before using anti-cheat or another driver scan."),
+            Self::InstallFailed(error) => write!(f, "PawnIO setup failed ({}: {})", error.op, error.detail),
+            Self::PageSelectIgnored => f.write_str("DDR5 SPD page select was not honored (for example, the SMBus controller is in I2C mode)"),
         }
     }
 }
@@ -48,7 +58,8 @@ impl std::error::Error for Error {}
 impl Error {
     pub fn diagnostic(&self) -> WinError {
         let mut error = WinError::msg("PawnIO SPD", self.to_string());
-        if let Self::OpenFailed(inner) | Self::ReadFailed(inner) = self {
+        if let Self::OpenFailed(inner) | Self::ReadFailed(inner) | Self::InstallFailed(inner) = self
+        {
             error.code = inner.code;
         }
         error
@@ -59,7 +70,11 @@ impl Error {
     fn aborts_controller(&self) -> bool {
         matches!(
             self,
-            Self::ReadFailed(_) | Self::Timeout | Self::CleanupIncomplete
+            Self::ReadFailed(_)
+                | Self::Timeout
+                | Self::CleanupIncomplete
+                // Board-wide: every other DDR5 slot would fail the same way.
+                | Self::PageSelectIgnored
         )
     }
 }
@@ -91,11 +106,17 @@ trait Device {
 struct Client<D> {
     device: D,
     deadline: Instant,
+    /// Intel SPD Write Disable (SMBHSTCFG bit 4): the PCH refuses writes to 0x50..0x57.
+    write_protected: bool,
 }
 
 impl<D: Device> Client<D> {
     fn query(device: D, deadline: Instant) -> Result<Self, Error> {
-        let mut client = Self { device, deadline };
+        let mut client = Self {
+            device,
+            deadline,
+            write_protected: false,
+        };
         let bytes = client.ioctl(QUERY_VERSION, &[], 4)?;
         let version = u32::from_le_bytes(
             bytes
@@ -115,6 +136,7 @@ impl<D: Device> Client<D> {
         {
             return Err(Error::UnsupportedController);
         }
+        self.write_protected = self.execute("ioctl_write_protection", &[], 1)?[0] != 0;
         Ok(())
     }
     fn ioctl(&mut self, code: u32, input: &[u8], output: usize) -> Result<Vec<u8>, Error> {
@@ -164,11 +186,26 @@ impl<D: Device> Client<D> {
     }
     fn hub_page(&mut self, address: u8, value: u8) -> Result<(), Error> {
         // SPD5118 MR11 only: preserve mode/reserved bits; no NVM address is writable here.
-        self.execute(
-            "ioctl_smbus_xfer",
-            &[u64::from(address), 0, 0x0b, 2, u64::from(value)],
-            0,
-        )?;
+        if self.write_protected {
+            // The PCH blocks write-flagged transactions to 0x50..0x57. A Process Call with
+            // the read bit passes and still writes MR11 = page; the high byte (0) lands in
+            // set-only MR12. Memtest86+ PR #441 and RAMSPDToolkit 1.2.0 do the same; see
+            // docs/research/2026-10-28-ddr5-spd-intel-write-protect.md.
+            self.execute(
+                "ioctl_smbus_xfer",
+                &[u64::from(address), 1, 0x0b, 4, u64::from(value)],
+                1,
+            )?;
+        } else {
+            self.execute(
+                "ioctl_smbus_xfer",
+                &[u64::from(address), 0, 0x0b, 2, u64::from(value)],
+                0,
+            )?;
+        }
+        if self.read_byte(address, 0x0b)? & 0x07 != value & 0x07 {
+            return Err(Error::PageSelectIgnored);
+        }
         Ok(())
     }
     fn slot(&mut self, address: u8) -> Result<Option<spd::Manufacturing>, Error> {
@@ -183,6 +220,14 @@ impl<D: Device> Client<D> {
         // SPD5118 MR0:MR1 is big-endian 0x5118. Other DDR5 hub types stay unsupported.
         if first == 0x51 && self.read_byte(address, 1)? == 0x18 {
             let original = self.read_byte(address, 0x0b)?;
+            if self.write_protected {
+                super::record(WinError::msg(
+                    "PawnIO SPD",
+                    format!(
+                        "SPD5118 at 0x{address:02X}: MR11 0x{original:02X}, SPD write protection on"
+                    ),
+                ));
+            }
             if original & 0xf8 != 0 {
                 return Err(Error::UnsupportedController);
             }
@@ -198,8 +243,8 @@ impl<D: Device> Client<D> {
                 spd::decode(&bytes).map_err(|_| Error::Malformed("DDR5 layout or required CRC"))
             })();
             // Restore the page on every exit, even when the read's budget has expired.
-            self.restore(|client| client.hub_page(address, original))?;
-            return read.map(Some);
+            let restored = self.restore(|client| client.hub_page(address, original));
+            return Self::settle(read, restored).map(Some);
         }
         // Only an EE1004-looking header permits DDR4 page-selection commands.
         let original_page = match self.execute("ioctl_smbus_xfer", &[0x36, 1, 0, 1], 1) {
@@ -221,17 +266,32 @@ impl<D: Device> Client<D> {
             }
             spd::decode(&bytes).map_err(|_| Error::Malformed("DDR4 layout or required CRC"))
         })();
-        self.restore(|client| client.ddr4_page(original_page))?;
-        read.map(Some)
+        let restored = self.restore(|client| client.ddr4_page(original_page));
+        Self::settle(read, restored).map(Some)
     }
     fn restore(&mut self, work: impl FnOnce(&mut Self) -> Result<(), Error>) -> Result<(), Error> {
         let deadline = self.deadline;
         self.deadline = self
             .deadline
             .max(Instant::now() + std::time::Duration::from_millis(500));
-        let result = work(self).map_err(|_| Error::CleanupIncomplete);
+        let result = work(self);
         self.deadline = deadline;
         result
+    }
+    /// The read error wins; a restore failure is then only recorded. Neither becomes
+    /// CleanupIncomplete, which is reserved for undrained requests.
+    fn settle<T>(read: Result<T, Error>, restored: Result<(), Error>) -> Result<T, Error> {
+        match (read, restored) {
+            (Err(error), Err(restore)) => {
+                super::record(WinError::msg(
+                    "PawnIO SPD page restore",
+                    restore.to_string(),
+                ));
+                Err(error)
+            }
+            (read, Ok(())) => read,
+            (Ok(_), Err(restore)) => Err(restore),
+        }
     }
 }
 
@@ -290,11 +350,14 @@ fn collect_with<D: Device>(
         }
         match client.slot(address) {
             Ok(Some(manufacturing)) => {
+                // A blank serial (all 00 or FF) repeats on every unprogrammed module of a kit.
                 if manufacturing.serial.as_ref().is_some_and(|serial| {
-                    result
-                        .modules
-                        .iter()
-                        .any(|module| module.manufacturing.serial.as_ref() == Some(serial))
+                    serial != "00000000"
+                        && serial != "FFFFFFFF"
+                        && result
+                            .modules
+                            .iter()
+                            .any(|module| module.manufacturing.serial.as_ref() == Some(serial))
                 }) {
                     result.failures.push(Error::Malformed(
                         "manufacturing serial repeated across SPD slots; association unproven",
@@ -325,6 +388,13 @@ pub fn collect(initial: &anticheat::Detection) -> Snapshot {
     native::collect(initial.clone())
 }
 
+/// Uninstalls a PawnIO this app installed in an earlier session that did not finish
+/// cleanup. A PawnIO without this app's ownership marker is never touched.
+#[cfg(not(test))]
+pub fn recover() {
+    native::recover();
+}
+
 // An ordinary cargo test cannot open PawnIO, even on a machine with it installed.
 #[cfg(test)]
 pub fn collect(_: &anticheat::Detection) -> Snapshot {
@@ -337,9 +407,12 @@ pub fn collect(_: &anticheat::Detection) -> Snapshot {
 #[cfg(not(test))]
 mod native {
     use super::*;
-    use crate::win::{self, OwnedHandle, wide};
+    use crate::win::{self, OwnedHandle, hash, process, wide};
     use std::{
-        io::Read,
+        fs::{self, File},
+        io::{self, Write},
+        os::windows::{ffi::OsStrExt, fs::OpenOptionsExt},
+        path::{Path, PathBuf},
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -351,7 +424,12 @@ mod native {
         Win32::{
             Foundation::{
                 ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_PATH_NOT_FOUND, GENERIC_READ,
-                GENERIC_WRITE, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+                GENERIC_WRITE, HWND, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+            },
+            Security::WinTrust::{
+                WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0,
+                WINTRUST_FILE_INFO, WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE,
+                WTD_STATEACTION_VERIFY, WTD_UI_NONE, WinVerifyTrust,
             },
             Storage::FileSystem::{
                 CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_DELETE, FILE_SHARE_READ,
@@ -364,6 +442,202 @@ mod native {
         },
         core::PCWSTR,
     };
+
+    const MARKER: &str = "installed-by-hwidchecker";
+    const SETUP_TIMEOUT: Duration = Duration::from_secs(60);
+    /// How long the PnP device may take to appear after a successful setup run.
+    const DEVICE_WAIT: Duration = Duration::from_secs(10);
+
+    fn install_error(op: &'static str, detail: impl Into<String>) -> Error {
+        Error::InstallFailed(WinError::msg(op, detail))
+    }
+
+    fn folder() -> Result<PathBuf, Error> {
+        let root = std::env::var_os("ProgramData")
+            .ok_or_else(|| install_error("PawnIO folder", "ProgramData is not set"))?;
+        Ok(PathBuf::from(root).join(r"HWIDChecker\pawnio"))
+    }
+
+    fn trusted(path: &Path) -> bool {
+        let path: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        let mut file = WINTRUST_FILE_INFO {
+            cbStruct: size_of::<WINTRUST_FILE_INFO>() as u32,
+            pcwszFilePath: PCWSTR(path.as_ptr()),
+            ..Default::default()
+        };
+        let mut data = WINTRUST_DATA {
+            cbStruct: size_of::<WINTRUST_DATA>() as u32,
+            dwUIChoice: WTD_UI_NONE,
+            // The SHA-256 pin already fixes the bytes; skip online revocation lookups.
+            fdwRevocationChecks: WTD_REVOKE_NONE,
+            dwUnionChoice: WTD_CHOICE_FILE,
+            Anonymous: WINTRUST_DATA_0 { pFile: &mut file },
+            dwStateAction: WTD_STATEACTION_VERIFY,
+            ..Default::default()
+        };
+        let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+        // SAFETY: data, file and the NUL-terminated path outlive both calls; no UI window.
+        let status =
+            unsafe { WinVerifyTrust(HWND::default(), &mut action, (&raw mut data).cast()) };
+        data.dwStateAction = WTD_STATEACTION_CLOSE;
+        // SAFETY: Releases the state the verify call above stored in data.
+        unsafe { WinVerifyTrust(HWND::default(), &mut action, (&raw mut data).cast()) };
+        status == 0
+    }
+
+    /// Writes the embedded setup, verifies it on disk and keeps a handle that blocks
+    /// writes and deletes, so the verified bytes are the bytes that run.
+    // shortcut: the folder inherits the ProgramData ACL; add an admin-only ACL if local non-admin tampering matters.
+    fn stage(folder: &Path) -> Result<(PathBuf, File), Error> {
+        let io = |op| move |error: io::Error| Error::InstallFailed(hash::io_error(op, error));
+        let path = folder.join("PawnIO_setup.exe");
+        match fs::remove_file(&path) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                return Err(io("Remove stale PawnIO setup")(error));
+            }
+            _ => {}
+        }
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .and_then(|mut file| file.write_all(SETUP))
+            .map_err(io("Write PawnIO setup"))?;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ.0)
+            .open(&path)
+            .map_err(io("Open PawnIO setup"))?;
+        let digest = hash::sha256_file(&file).map_err(Error::InstallFailed)?;
+        if !digest.eq_ignore_ascii_case(SETUP_HASH) {
+            return Err(install_error("PawnIO setup", "pinned SHA-256 mismatch"));
+        }
+        if !trusted(&path) {
+            return Err(install_error(
+                "PawnIO setup",
+                "Authenticode signature invalid",
+            ));
+        }
+        Ok((path, file))
+    }
+
+    /// Runs the staged setup silently and returns its exit code. Never `-unrestricted`.
+    fn setup(folder: &Path, action: &'static str) -> Result<i32, Error> {
+        let (path, locked) = stage(folder)?;
+        let output = process::run(
+            &path,
+            &[action, "-silent"],
+            SETUP_TIMEOUT,
+            &process::Cancel::new(),
+        )
+        .map_err(|error| install_error("PawnIO setup", error));
+        drop(locked);
+        if let Err(error) = fs::remove_file(&path) {
+            win::record(hash::io_error("Remove PawnIO setup", error));
+        }
+        Ok(output?.code)
+    }
+
+    /// Ownership of a PawnIO this session installed. Dropping it uninstalls PawnIO.
+    struct Installed(PathBuf);
+
+    impl Drop for Installed {
+        fn drop(&mut self) {
+            if QUARANTINED.load(Ordering::Acquire) {
+                win::record(WinError::msg(
+                    "PawnIO uninstall",
+                    "skipped while a request may still hold the device; retried at next start",
+                ));
+                return;
+            }
+            uninstall(&self.0);
+        }
+    }
+
+    fn uninstall(folder: &Path) {
+        let code = match setup(folder, "-uninstall") {
+            Ok(code) => code,
+            Err(error) => return win::record(error.diagnostic()),
+        };
+        if code != 0 {
+            win::record(WinError::msg(
+                "PawnIO uninstall",
+                format!("setup exited with code {code}"),
+            ));
+        }
+        // Device absence is the truth, as for install; otherwise retry at next start.
+        if (code == 0 || matches!(open_device(), Err(Error::NotInstalled)))
+            && let Err(error) = fs::remove_file(folder.join(MARKER))
+        {
+            win::record(hash::io_error("Remove PawnIO marker", error));
+        }
+    }
+
+    // shortcut: a second app instance starting mid-session uninstalls the first one's PawnIO; add a named mutex if that happens.
+    pub(super) fn recover() {
+        if let Ok(folder) = folder()
+            && folder.join(MARKER).exists()
+        {
+            uninstall(&folder);
+        }
+    }
+
+    // shortcut: no separate crash-guard process; the marker plus recover() at start covers crashes.
+    fn install() -> Result<Installed, Error> {
+        let folder = folder()?;
+        let io = |op| move |error: io::Error| Error::InstallFailed(hash::io_error(op, error));
+        fs::create_dir_all(&folder).map_err(io("Create PawnIO folder"))?;
+        // The marker exists before setup runs, so a crash at any later point is recovered.
+        fs::write(
+            folder.join(MARKER),
+            "PawnIO was installed by HWIDChecker and is uninstalled after reading.\r\n",
+        )
+        .map_err(io("Write PawnIO marker"))?;
+        let installed = Installed(folder);
+        let code = setup(&installed.0, "-install")?;
+        let until = Instant::now() + DEVICE_WAIT;
+        loop {
+            match open_device() {
+                Err(Error::NotInstalled) if Instant::now() < until => {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                Err(Error::NotInstalled) => {
+                    return Err(install_error(
+                        "PawnIO setup",
+                        format!("device missing after install (setup exit code {code})"),
+                    ));
+                }
+                // The device exists; open() reports any other failure.
+                _ => return Ok(installed),
+            }
+        }
+    }
+
+    fn open_device() -> Result<OwnedHandle, Error> {
+        let path = wide::to_wide(DEVICE_PATH);
+        // SAFETY: Device path lives through call; overlapped handle is owned by this session.
+        let handle = unsafe {
+            CreateFileW(
+                PCWSTR(path.as_ptr()),
+                GENERIC_READ.0 | GENERIC_WRITE.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAG_OVERLAPPED,
+                None,
+            )
+        }
+        .map_err(|e| {
+            let error = WinError::from_win("PawnIO open", e);
+            if [ERROR_FILE_NOT_FOUND.0, ERROR_PATH_NOT_FOUND.0].contains(&error.code) {
+                Error::NotInstalled
+            } else {
+                Error::OpenFailed(error)
+            }
+        })?;
+        // SAFETY: CreateFileW returned the sole owning handle for this file-object/VM.
+        unsafe { OwnedHandle::from_raw(handle) }.map_err(Error::OpenFailed)
+    }
 
     static BUSY: AtomicBool = AtomicBool::new(false);
     static QUARANTINED: AtomicBool = AtomicBool::new(false);
@@ -451,7 +725,7 @@ mod native {
                     if unsafe { WaitForSingleObject(request.event.as_raw(), 250) } != WAIT_OBJECT_0
                     {
                         QUARANTINED.store(true, Ordering::Release);
-                        // ponytail: retain one undrained request until reboot; audited cancellation is the upgrade path.
+                        // shortcut: retain one undrained request until reboot; audited cancellation is the upgrade path.
                         Box::leak(request);
                         return Err(Error::CleanupIncomplete);
                     }
@@ -482,16 +756,8 @@ mod native {
     }
 
     fn open() -> Result<(NativeDevice, Vec<u8>), Error> {
-        let root = std::env::var_os("ProgramData").ok_or(Error::ModuleUnavailable)?;
-        let path = std::path::PathBuf::from(root)
-            .join("HWIDChecker/kernel-reader/pawnio/0.2.11/SmbusI801.bin");
-        let file = std::fs::File::open(path).map_err(|_| Error::ModuleUnavailable)?;
-        let mut module = Vec::new();
-        file.take(MODULE_SIZE as u64 + 1)
-            .read_to_end(&mut module)
-            .map_err(|_| Error::ModuleUnavailable)?;
-        if module.len() != MODULE_SIZE
-            || !win::hash::sha256_bytes(&module)
+        if MODULE.len() != MODULE_SIZE
+            || !win::hash::sha256_bytes(MODULE)
                 .map_err(Error::ReadFailed)?
                 .eq_ignore_ascii_case(MODULE_HASH)
         {
@@ -518,35 +784,13 @@ mod native {
             )));
         }
         let bus = BusLock(mutex);
-        let path = wide::to_wide(DEVICE_PATH);
-        // SAFETY: Device path lives through call; overlapped handle is owned by this session.
-        let handle = unsafe {
-            CreateFileW(
-                PCWSTR(path.as_ptr()),
-                GENERIC_READ.0 | GENERIC_WRITE.0,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                None,
-                OPEN_EXISTING,
-                FILE_FLAG_OVERLAPPED,
-                None,
-            )
-        }
-        .map_err(|e| {
-            let error = WinError::from_win("PawnIO open", e);
-            if [ERROR_FILE_NOT_FOUND.0, ERROR_PATH_NOT_FOUND.0].contains(&error.code) {
-                Error::NotInstalled
-            } else {
-                Error::OpenFailed(error)
-            }
-        })?;
-        // SAFETY: CreateFileW returned the sole owning handle for this file-object/VM.
-        let handle = unsafe { OwnedHandle::from_raw(handle) }.map_err(Error::OpenFailed)?;
+        let handle = open_device()?;
         Ok((
             NativeDevice {
                 handle: Arc::new(handle),
                 _bus: bus,
             },
-            module,
+            MODULE.to_vec(),
         ))
     }
 
@@ -567,6 +811,30 @@ mod native {
             };
         }
         let busy = Busy;
+        // A PawnIO installed by someone else is used as is and never uninstalled.
+        // Declared before the worker so it drops (uninstalls) after the read finishes.
+        let _installed = match open_device() {
+            Err(Error::NotInstalled) => {
+                let fresh = anticheat::detect();
+                if fresh.gate_decision() != anticheat::GateDecision::Clear {
+                    return Snapshot {
+                        gate: Some(fresh),
+                        ..Snapshot::default()
+                    };
+                }
+                match install() {
+                    Ok(installed) => Some(installed),
+                    Err(error) => {
+                        return Snapshot {
+                            failures: vec![error],
+                            ..Snapshot::default()
+                        };
+                    }
+                }
+            }
+            _ => None,
+        };
+        // The read budget starts after setup, which has its own bounds.
         let deadline = Instant::now() + BUDGET;
         let (send, receive) = mpsc::channel();
         enum Event {
@@ -589,17 +857,14 @@ mod native {
                         },
                     )
                 })
-                .unwrap_or_else(|_| Snapshot {
-                    failures: vec![Error::CleanupIncomplete],
-                    ..Snapshot::default()
-                });
-                if result
-                    .failures
-                    .iter()
-                    .any(|failure| matches!(failure, Error::CleanupIncomplete))
-                {
+                .unwrap_or_else(|_| {
+                    // A panic may leave a request or page selection in an unknown state.
                     QUARANTINED.store(true, Ordering::Release);
-                }
+                    Snapshot {
+                        failures: vec![Error::CleanupIncomplete],
+                        ..Snapshot::default()
+                    }
+                });
                 let _ = send.send(Event::Done(result));
             });
         if spawned.is_err() {
@@ -645,6 +910,13 @@ mod tests {
         duplicate: bool,
         truncated: bool,
         version: u32,
+        write_protected: bool,
+        writes: usize,
+        /// Refuse SMBus writes after this many, the way a write-disabled PCH does.
+        refuse_writes_after: Option<usize>,
+        proc_calls: usize,
+        /// The hub accepts the transaction but keeps its page (for example, I2C mode).
+        ignore_select: bool,
     }
     impl Fake {
         fn new(generation: spd::Generation) -> Self {
@@ -659,6 +931,11 @@ mod tests {
                 duplicate: false,
                 truncated: false,
                 version: VERSION,
+                write_protected: false,
+                writes: 0,
+                refuse_writes_after: None,
+                proc_calls: 0,
+                ignore_select: false,
             }
         }
     }
@@ -696,6 +973,10 @@ mod tests {
                                 .collect(),
                         );
                     }
+                    if name == "ioctl_write_protection" {
+                        assert_eq!((input.len(), output), (32, 8));
+                        return Ok(u64::from(self.write_protected).to_le_bytes().to_vec());
+                    }
                     assert_eq!(name, "ioctl_smbus_xfer");
                     let cells: Vec<u64> = input[32..]
                         .as_chunks::<8>()
@@ -706,15 +987,39 @@ mod tests {
                     let [address, direction, command, protocol] = cells[..4] else {
                         panic!("four protocol cells required")
                     };
+                    if protocol == 4 {
+                        // Process Call page select: read bit set, MR11, one reply cell.
+                        assert_eq!((address, direction, command, output), (0x50, 1, 0x0b, 8));
+                        assert_eq!(cells.len(), 5);
+                        self.proc_calls += 1;
+                        if !self.ignore_select {
+                            self.hub_page = cells[4] as u8;
+                        }
+                        return Ok(0_u64.to_le_bytes().to_vec());
+                    }
                     if direction == 0 {
                         assert_eq!(cells.len(), 5);
                         assert_eq!(output, 0);
+                        assert!(
+                            !(self.write_protected && (0x50..=0x57).contains(&address)),
+                            "write-flagged SPD transaction under write protection"
+                        );
+                        self.writes += 1;
+                        if self.refuse_writes_after.is_some_and(|n| self.writes > n) {
+                            return Err(Error::ReadFailed(WinError {
+                                op: "fake",
+                                code: 433,
+                                detail: "write refused".into(),
+                            }));
+                        }
                         if address == 0x36 || address == 0x37 {
                             assert_eq!((command, protocol, cells[4]), (0, 1, 0));
                             self.page = (address - 0x36) as u8;
                         } else {
                             assert_eq!((address, command, protocol), (0x50, 0x0b, 2));
-                            self.hub_page = cells[4] as u8;
+                            if !self.ignore_select {
+                                self.hub_page = cells[4] as u8;
+                            }
                         }
                         return Ok(vec![]);
                     }
@@ -825,7 +1130,77 @@ mod tests {
             |_| {},
         );
         assert!(result.gate.is_some());
-        assert_eq!(calls.get(), 3, "no first hardware read");
+        assert_eq!(calls.get(), 4, "no first hardware read");
+    }
+
+    #[test]
+    fn restore_failures_return_the_real_error_and_never_cleanup_incomplete() {
+        // 1: the read itself fails on page 1, then the restore is refused too.
+        // 8: all eight page reads succeed, only the restore is refused.
+        for refuse_after in [1, 8] {
+            let mut fake = Fake::new(spd::Generation::Ddr5);
+            fake.refuse_writes_after = Some(refuse_after);
+            let mut client = Client::query(fake, Instant::now() + BUDGET).unwrap();
+            client.initialize(b"signed-fixture").unwrap();
+            let result = client.slot(0x50);
+            assert!(
+                matches!(&result, Err(Error::ReadFailed(e)) if e.code == 433),
+                "refuse after {refuse_after}: {result:?}"
+            );
+        }
+        let mut fake = Fake::new(spd::Generation::Ddr5);
+        fake.refuse_writes_after = Some(1);
+        let result = collect_with(
+            true,
+            &clear(),
+            || Ok((fake, b"signed-fixture".to_vec())),
+            clear,
+            Instant::now() + BUDGET,
+            |_| {},
+        );
+        assert!(result.modules.is_empty());
+        assert!(
+            !result.failures.is_empty(),
+            "present DIMM is not an empty slot"
+        );
+        assert!(
+            !result
+                .failures
+                .iter()
+                .any(|e| matches!(e, Error::CleanupIncomplete))
+        );
+    }
+
+    #[test]
+    fn write_protected_ddr5_selects_pages_by_read_flagged_process_call() {
+        let mut fake = Fake::new(spd::Generation::Ddr5);
+        fake.write_protected = true;
+        let mut client = Client::query(fake, Instant::now() + BUDGET).unwrap();
+        client.initialize(b"signed-fixture").unwrap();
+        let decoded = client.slot(0x50).unwrap().unwrap();
+        assert_eq!(decoded.serial.as_deref(), Some("8C31D7A2"));
+        // Eight page selects plus the restore, all Process Calls; no write-flagged transfer.
+        assert_eq!(client.device.proc_calls, 9);
+        assert_eq!(client.device.writes, 0);
+        assert_eq!(client.device.hub_page, 2);
+    }
+
+    #[test]
+    fn ignored_page_select_reads_no_data() {
+        for protected in [false, true] {
+            let mut fake = Fake::new(spd::Generation::Ddr5);
+            fake.write_protected = protected;
+            fake.ignore_select = true;
+            // A data read (command 0x80) would surface as Timeout instead.
+            fake.fail_command = Some(0x80);
+            let mut client = Client::query(fake, Instant::now() + BUDGET).unwrap();
+            client.initialize(b"signed-fixture").unwrap();
+            let result = client.slot(0x50);
+            assert!(
+                matches!(result, Err(Error::PageSelectIgnored)),
+                "protected {protected}: {result:?}"
+            );
+        }
     }
 
     #[test]
@@ -910,6 +1285,8 @@ mod tests {
             Error::Malformed("bad size"),
             Error::Timeout,
             Error::CleanupIncomplete,
+            Error::InstallFailed(WinError::msg("fake", "setup")),
+            Error::PageSelectIgnored,
         ] {
             assert!(!error.to_string().is_empty());
             assert!(!error.diagnostic().detail.contains("8C31D7A2"));
@@ -920,5 +1297,16 @@ mod tests {
         assert_eq!(MODULE_HASH.len(), 64);
         assert_eq!(MODULE_SIZE, 55_540);
         assert!(DEVICE_PATH.ends_with("\\Device\\PawnIO"));
+    }
+
+    #[test]
+    fn embedded_artifacts_match_their_pins() {
+        assert_eq!(MODULE.len(), MODULE_SIZE);
+        assert_eq!(win_hash(MODULE), MODULE_HASH);
+        assert_eq!(win_hash(SETUP), SETUP_HASH);
+    }
+
+    fn win_hash(bytes: &[u8]) -> String {
+        super::super::hash::sha256_bytes(bytes).expect("CNG SHA-256")
     }
 }
