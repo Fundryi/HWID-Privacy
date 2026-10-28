@@ -300,7 +300,8 @@ Every other byte stays unchanged, including the 32-bit numeric EDID serial, the 
 - An ASUS ROG Swift PG27AQDP with firmware MCM107.
 - The monitor's USB-B upstream cable connected to the PC.
 - Windows x64 and an administrator account.
-- About 15 to 25 minutes per change, with the monitor kept powered the whole time.
+- Time with the monitor kept powered the whole time: the first **Verify** takes longer because it saves your originals (about three rounds of 5 to 10 minutes). After that, **Verify** takes 5 to 10 minutes and a change or revert 15 to 25 minutes.
+- A writable folder for the tool, such as a folder on your desktop. The tool keeps its data in a `pg27-data` folder next to the exe. Use one folder per monitor.
 - A place outside the PC to keep your original records, such as a USB stick or cloud storage.
 
 ### Download
@@ -312,21 +313,21 @@ Every other byte stays unchanged, including the 32-bit numeric EDID serial, the 
 1. Close ASUS DisplayWidget, the ASUS firmware updater, and any other monitor or vendor portal app. They compete for the same channel.
 2. Run `HWIDChecker.exe` and save the **MONITOR INFORMATION** section as your baseline.
 3. Right-click `pg27aqdp-serial.exe` and choose **Run as administrator**.
-4. Click **Verify**. The tool reads both records. On the first Verify it saves your own original records, write-once, in `%LOCALAPPDATA%\pg27aqdp-serial\originals`.
+4. Click **Verify**. The tool reads both records. On the first Verify it saves your own original records, write-once, in `pg27-data\originals` next to the exe. The app shows the exact path.
 5. Copy the `originals` folder somewhere safe outside the PC. **Revert** needs it.
-6. Enter the new serial. The factory format is `S8LMRS` followed by six digits, for example `S8LMRS047216`. Do not copy this example. The tool warns when a serial does not match the factory format.
-7. Click **Plan**. Read the list. It shows every byte that will change in both records.
-8. Type the confirmation text exactly as shown.
-9. Click **Spoof**. Do not touch the monitor, the cable, or the power until the tool finishes. Watch the screen during the write.
+6. Enter the last four characters of the new serial. The tool fills in the `S8LMRS01` prefix, so `4726` becomes `S8LMRS014726`. Do not copy this example. **Edit full serial (risk mode)** lets you type all 12 characters; the tool warns when a serial does not match the factory format (`S8LMRS` followed by six digits).
+7. Click **Spoof**. Nothing is written yet. The **Confirm serial write** window opens and lists every byte that will change in both records.
+8. Read the list. Click **Confirm and write both records** to write, or **Cancel (no EEPROM write)** to stop.
+9. Do not touch the monitor, the cable, or the power until the tool finishes. Watch the screen during the write.
 10. The tool reads both pages back, checks them, and restores write protection. Wait for the final message.
 11. Unplug the monitor's power for 10 seconds, then plug it back in.
 12. Run HWIDChecker on each input, HDMI and DisplayPort. **Serial Number** must show the new serial on both. Windows lists the monitor as a new device the first time.
 
 ### Revert to the original serial
 
-Use the same flow with **Revert to Original** instead of a new serial: close vendor apps, **Verify**, **Plan**, type the confirmation, run it, power-cycle the monitor, then check both inputs with HWIDChecker.
+Use the same flow with **Revert to Original** instead of **Spoof**: close vendor apps, **Verify**, **Revert to Original**, check the list in the confirm window (the target is marked "your saved original"), click **Confirm and write both records**, power-cycle the monitor, then check both inputs with HWIDChecker.
 
-Revert writes the records saved in the `originals` folder. If that folder is lost, the tool cannot restore your original serial. Copy it back to `%LOCALAPPDATA%\pg27aqdp-serial\originals` before a Revert on a new Windows installation.
+Revert writes the serial saved in the `originals` folder. If that folder is lost, the tool cannot restore your original serial. Copy it back to `pg27-data\originals` next to the exe before a Revert on a new Windows installation or another PC.
 
 > [!WARNING]
 > This writes the monitor's own EEPROM. Power loss, a pulled cable, or another program using the update channel during a write can leave a record in an uncertain state. Keep the monitor and PC powered until the tool finishes. There is deliberately no Cancel button during a write.
@@ -349,7 +350,7 @@ What this option does not change:
 
 **The screen goes black during a write.** The monitor's display watchdog reset. The tool stops the run by itself. Unplug the monitor's power for 10 seconds, then run **Verify** before anything else.
 
-**The tool reports an uncertain write.** Stop. Keep the tool's log in `%LOCALAPPDATA%\pg27aqdp-serial`. Power-cycle the monitor, run **Verify**, and read which record differs. Then make a new **Plan**, either for the intended serial or **Revert to Original**. Never repeat a write without a fresh Plan.
+**The tool reports an uncertain write.** Stop. Keep the tool's log, `sessions.log` in the `pg27-data` folder. Power-cycle the monitor, run **Verify**, and read which record differs. Then start again with **Spoof** for the intended serial or **Revert to Original**, and check the new confirm window. Never repeat a write from an old confirm window.
 
 **HWIDChecker still shows the old serial.** Unplug the monitor's power for 10 seconds; the monitor reloads the records only at power-up. Check the active input, not a disconnected registry entry. Run **Verify** to confirm both records hold the new serial.
 

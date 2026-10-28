@@ -3,7 +3,7 @@
 This is this project's own tool, not a mirror of a third-party download. It was built by this project for the [monitor guide](../../monitor-spoofing.md#option-4-firmware-tool-for-the-asus-pg27aqdp).
 
 - Name: `pg27aqdp-serial.exe`
-- Version: TBD
+- Version: 0.1.0 (public build, contains no data from any specific monitor)
 - Platform: Windows x64. The executable requests administrator rights.
 - Purpose: change or revert the serial an ASUS ROG Swift PG27AQDP with MCM107 firmware stores in its identity record and its EDID serial descriptor, through the monitor's own update interface.
 - Supported: ASUS ROG Swift PG27AQDP, firmware MCM107 only. The tool refuses units its checks reject.
@@ -20,10 +20,10 @@ The executable is a single file. It carries these files from the ASUS MCM107 fir
 - `config.ini`
 - The MCM107 firmware image from the same package (the detection step needs it; the tool never flashes it)
 
-At run time these files are extracted to `%LOCALAPPDATA%\pg27aqdp-serial\`. The same folder holds the user's own original records (`originals`), the plan file and the session log.
+At run time these files are extracted to the `pg27-data` folder next to the exe (or `%LOCALAPPDATA%\pg27aqdp-serial\` if that folder is not writable). The same folder holds the user's own original records (`originals`), the plan file and the session log.
 
 ## Integrity
 
 | File | Bytes | SHA-256 |
 |---|---:|---|
-| `pg27aqdp-serial.exe` | TBD | `TBD` |
+| `pg27aqdp-serial.exe` | 6,489,600 | `4717adf0f0971f32b1808c8736adb651532c796491db6feeb78a70244aaf7377` |
