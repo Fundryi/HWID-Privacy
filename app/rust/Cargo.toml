@@ -27,6 +27,7 @@ windows = { version = "=0.62.2", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_EventLog",
     "Win32_System_IO",
     "Win32_System_Ioctl",
@@ -38,6 +39,7 @@ windows = { version = "=0.62.2", features = [
     "Win32_System_Pipes",
     "Win32_System_Power",
     "Win32_System_Registry",
+    "Win32_System_Services",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Time",
@@ -59,6 +61,8 @@ tiny-skia = { version = "=0.12.0", default-features = false, features = ["std", 
 
 [build-dependencies]
 embed-resource = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [profile.release]
 lto = "thin"

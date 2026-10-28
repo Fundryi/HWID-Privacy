@@ -35,6 +35,10 @@ Release: `.\app\rust\scripts\release.ps1` (next patch; `-Minor`, `-Major`, or `-
 
 The release script runs `build-dist.ps1`, which runs `check.ps1` and validates the dist executable, then copies exactly `app/rust/target/dist/HWIDChecker.exe` to the root after checking its version. The copied hash must match. Run `pwsh -NoProfile -File app/rust/scripts/check.ps1` for the standalone gate. Every script anchors paths to its own location and also works when invoked by absolute path from another folder.
 
+After successful publication, the release script removes older incremental sessions and abandoned working sessions, preserving each crate configuration's newest completed cache and all compiled dependencies. Cancelled/failed releases and `-DryRun` do not clean caches. Locks, reparse points, and unrecognized files cause cleanup to skip safely; cleanup failure does not undo a published release.
+
+Preview manually with `pwsh -NoProfile -File app/rust/scripts/clean-build-cache.ps1`; add `-Apply` to remove the listed obsolete sessions. This deliberately leaves `deps`, `build`, executables, settings, and private captures alone. It supports the pinned Rust 1.98.0 incremental layout; a toolchain bump requires reviewing the cleanup script. Logical bytes can exceed actual disk savings because Rust hard-links cache files.
+
 ### Roll back
 
 The [csharp-last GitHub release](https://github.com/Fundryi/HWID-Privacy/releases/tag/csharp-last) holds the last C# exe as the historical fallback. To roll back Rust source, revert and commit the code, then run `.\app\rust\scripts\release.ps1` with a version higher than the current release. Installed copies compare hashes at the fixed root-executable URL documented in [auto-update.md](auto-update.md); keep that path and filename unchanged.
@@ -144,7 +148,9 @@ app/
 │   │   ├── check.ps1                         # Formatting, lint, tests, release checks
 │   │   ├── build-test.ps1                    # Local build and optional launch
 │   │   ├── build-dist.ps1                    # Checked dist build
-│   │   └── release.ps1                       # Version, controlled staging, publication
+│   │   ├── release.ps1                       # Version, controlled staging, publication
+│   │   ├── clean-build-cache.ps1             # Preview/apply obsolete-session cleanup
+│   │   └── check-build-cache.ps1             # Isolated deletion-boundary checks
 │   ├── tests/fixtures/                       # Fabricated Rust regression data
 │   └── src/
 │       ├── main.rs                           # GUI and read-only CLI entrypoint

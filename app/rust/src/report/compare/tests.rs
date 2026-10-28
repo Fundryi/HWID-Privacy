@@ -1,6 +1,72 @@
 use super::*;
 
 #[test]
+fn spd_records_are_separate_from_firmware_rows_and_optional_presence_is_not_a_changed_serial() {
+    let baseline = "DeviceLocator   Manufacturer PartNumber     Capacity SerialNumber\r\n-------------------------------------------------------------------\r\nDIMM_A2         Kingston     KF432C16BB1/16 16 GB    FW7D9A2C8\r\n";
+    let deep = format!(
+        "{baseline}SPD (driver-read, PawnIO)\r\nSPD Module #1 (driver-read, PawnIO)\r\nSPD Controller/Address (PawnIO): i801 / 0x50 (SMBIOS association unproven)\r\nSPD Manufacturer (driver-read, PawnIO): Kingston\r\nSPD Part Number (driver-read, PawnIO): KF432C16BB1/16\r\nSPD Serial (driver-read, PawnIO): 8C31D7A2\r\nDeep hardware data read from PawnIO.\r\n"
+    );
+    let diff = difference("RAM MODULES", baseline, &deep);
+    let fields: Vec<_> = diff
+        .entities
+        .iter()
+        .flat_map(|entity| &entity.fields)
+        .collect();
+    assert!(
+        fields
+            .iter()
+            .any(|field| field.label == "SerialNumber" && field.kind == Kind::Same)
+    );
+    assert!(
+        fields
+            .iter()
+            .any(|field| field.label == "SPD Serial (driver-read, PawnIO)"
+                && !field.identifier // Existing comparison contract: unpaired additions have no ID verdict.
+                && field.kind == Kind::Added)
+    );
+    assert!(!fields.iter().any(|field| field.kind == Kind::Changed));
+    let parsed = split_section(
+        "RAM MODULES",
+        &deep,
+        &["FW7D9A2C8".into(), "8C31D7A2".into()],
+    );
+    assert_eq!(parsed.entities.len(), 2);
+    assert_eq!(parsed.entities[1].family, "SPD (PawnIO)");
+    assert_eq!(parsed.entities[1].ids, ["8C31D7A2"]);
+    assert!(identifier_label("SPD Serial (driver-read, PawnIO)"));
+    // Changing an unassociated SPD source leaves two unpaired records, not a DIMM change.
+    let changed = deep.replace("8C31D7A2", "8C31D7B9");
+    let diff = difference("RAM MODULES", &deep, &changed);
+    assert!(
+        !diff
+            .entities
+            .iter()
+            .flat_map(|e| &e.fields)
+            .any(|field| field.label == "SPD Serial (driver-read, PawnIO)"
+                && field.kind == Kind::Changed)
+    );
+    let text = format!("===== RAM MODULES =====\r\n{deep}");
+    let export = parse(&text, false).unwrap();
+    assert_eq!(export.sections[0].entities[1].family, "SPD (PawnIO)");
+    let same = difference("RAM MODULES", &deep, &deep);
+    assert!(same.entities.iter().flat_map(|e| &e.fields).any(|field| {
+        field.label == "SPD Serial (driver-read, PawnIO)"
+            && field.identifier
+            && field.kind == Kind::Same
+    }));
+    let live = from_sections(
+        &[super::super::Section {
+            title: "RAM MODULES",
+            body: deep,
+            ids: vec!["8C31D7A2".into()],
+            ..Default::default()
+        }],
+        false,
+    );
+    assert!(live.ids().contains(&"8C31D7A2".into()));
+}
+
+#[test]
 #[ignore = "read-only owner exports; set HWID_TRIM_BEFORE and HWID_TRIM_DUMP"]
 fn owner_id_trim_export_comparison() {
     let before_path = std::env::var_os("HWID_TRIM_BEFORE").expect("old export path");

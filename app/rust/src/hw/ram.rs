@@ -36,7 +36,67 @@ impl RamModule {
 
 /// Collects this hardware section through the shared output builder.
 pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
-    collect_modules(ctx.smbios_result(), wmi_modules, out)
+    let result = collect_modules(ctx.smbios_result(), wmi_modules, out);
+    ctx.prepare_deep_information();
+    if let Some(snapshot) = ctx.deep_spd.get() {
+        append_spd(snapshot, out);
+    }
+    result
+}
+
+fn append_spd(snapshot: &win::pawnio::Snapshot, out: &mut Out) {
+    for failure in &snapshot.failures {
+        out.fallback_failed("PawnIO SPD", &failure.diagnostic());
+    }
+    if snapshot.modules.is_empty() {
+        // A missing prepared dependency keeps the existing unavailable message.
+        for failure in &snapshot.failures {
+            if !matches!(
+                failure,
+                win::pawnio::Error::NotInstalled | win::pawnio::Error::ModuleUnavailable
+            ) {
+                out.text(&format!(
+                    "SPD (driver-read, PawnIO): Unavailable ({failure})"
+                ));
+            }
+        }
+        return;
+    }
+    out.blank().text("SPD (driver-read, PawnIO)");
+    for (index, module) in snapshot.modules.iter().enumerate() {
+        out.text(&format!("SPD Module #{} (driver-read, PawnIO)", index + 1));
+        // Bus enumeration never establishes a firmware DIMM locator association.
+        out.info(
+            "SPD Controller/Address (PawnIO)",
+            &format!(
+                "i801 / 0x{:02X} (SMBIOS association unproven)",
+                module.address
+            ),
+        );
+        out.info(
+            "SPD Memory Type (driver-read, PawnIO)",
+            match module.manufacturing.generation {
+                win::spd::Generation::Ddr4 => "DDR4",
+                win::spd::Generation::Ddr5 => "DDR5",
+            },
+        );
+        let data = &module.manufacturing;
+        if let Some(manufacturer) = &data.manufacturer {
+            out.info("SPD Manufacturer (driver-read, PawnIO)", manufacturer);
+        }
+        if let Some(part) = &data.part_number {
+            out.info("SPD Part Number (driver-read, PawnIO)", part);
+        }
+        if let Some(serial) = &data.serial {
+            out.id("SPD Serial (driver-read, PawnIO)", serial);
+        }
+        for failure in &data.failures {
+            out.fallback_failed("SPD decode", failure);
+        }
+    }
+    for failure in &snapshot.failures {
+        out.text(&format!("SPD (driver-read, PawnIO): Partial ({failure})"));
+    }
 }
 
 fn collect_modules(
@@ -415,6 +475,59 @@ mod tests {
         let mut empty = Out::new();
         write_table(&[], &mut empty);
         assert_eq!(empty.finish().body, "No RAM modules detected.");
+    }
+
+    #[test]
+    fn deep_spd_append_preserves_table_masks_serial_and_keeps_partial_diagnostics() {
+        let mut out = Out::new();
+        write_table(
+            &[RamModule::new(
+                "DIMM_A2".into(),
+                "Kingston".into(),
+                "KF432C16BB1/16".into(),
+                16 << 30,
+                "FW7D9A2C8".into(),
+            )],
+            &mut out,
+        );
+        out.source("SMBIOS");
+        let baseline = out.finish();
+        let mut deep = Out::new();
+        deep.text(baseline.body.trim_end_matches("\r\n"));
+        deep.id_value("FW7D9A2C8").source("SMBIOS");
+        let snapshot = win::pawnio::Snapshot {
+            modules: vec![win::pawnio::Module {
+                address: 0x50,
+                manufacturing: win::spd::decode(&win::spd::fixture(win::spd::Generation::Ddr4))
+                    .unwrap(),
+            }],
+            failures: vec![win::pawnio::Error::Timeout],
+            gate: None,
+        };
+        append_spd(&snapshot, &mut deep);
+        let section = deep.finish();
+        assert!(section.body.starts_with(&baseline.body));
+        assert_eq!(section.source, "SMBIOS");
+        assert_eq!(section.ids, ["FW7D9A2C8", "8C31D7A2"]);
+        assert_eq!(section.failures.len(), 1);
+        assert!(section.body.contains("SMBIOS association unproven"));
+        let masked = crate::report::masked(&section);
+        assert!(!masked.body.contains("8C31D7A2"));
+        assert!(
+            masked
+                .body
+                .contains("SPD Serial (driver-read, PawnIO): XXXXXXXX")
+        );
+        // The same append works after an independent inventory failure.
+        let mut failed = Out::new();
+        failed.fallback_failed("WMI", &win::Error::msg("fixture", "denied"));
+        append_spd(&snapshot, &mut failed);
+        assert!(
+            failed
+                .finish()
+                .body
+                .contains("SPD Serial (driver-read, PawnIO)")
+        );
     }
 
     #[test]

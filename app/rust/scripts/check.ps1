@@ -76,6 +76,7 @@ Push-Location $RustRoot
 try {
     if (Test-Path Env:RUSTFLAGS) { throw 'RUSTFLAGS is set. Remove it: it replaces the configured +crt-static rustflags.' }
     if (Test-Path Env:CARGO_ENCODED_RUSTFLAGS) { throw 'CARGO_ENCODED_RUSTFLAGS is set; remove this rustflags override.' }
+    Invoke-Checked pwsh @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'check-build-cache.ps1'))
     Invoke-Checked cargo @('fmt', '--check')
     Invoke-Checked cargo @('clippy', '--locked', '--all-targets', '--', '-D', 'warnings')
     Invoke-Checked cargo @('test', '--locked')

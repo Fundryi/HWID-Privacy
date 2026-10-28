@@ -326,6 +326,14 @@ fn fallback_chain_returns_last_error_and_handles_an_empty_chain() {
 #[test]
 fn context_accessors_reuse_snapshots_and_retain_errors() {
     let ctx = Ctx::new();
+    ctx.anticheat
+        .set(win::anticheat::Detection::default())
+        .expect("fabricated unknown anti-cheat snapshot");
+    assert_eq!(
+        ctx.anticheat().presence(),
+        win::anticheat::Presence::Unknown
+    );
+    assert!(std::ptr::eq(ctx.anticheat(), ctx.anticheat()));
     ctx.hardware_ids
         .set(Ok(HashMap::from([(
             "USB\\VID_046D&PID_C534\\SN8D4C2A9".to_owned(),
@@ -400,6 +408,139 @@ fn context_accessors_reuse_snapshots_and_retain_errors() {
 }
 
 #[test]
+fn anticheat_guidance_preserves_bytes_sources_ids_and_export_context() {
+    use win::anticheat::{DetectedAntiCheat, Detection, Evidence, FailedLayer, Gate, Layer};
+
+    let detected = vec![
+        DetectedAntiCheat {
+            id: "vanguard".into(),
+            name: "Riot Vanguard".into(),
+            gate: Gate::Must,
+            kernel_mode: true,
+            boot_resident: true,
+            games_sample: vec!["VALORANT".into()],
+            evidence: vec![
+                Evidence {
+                    layer: Layer::Service,
+                    matched_name: "vgc".into(),
+                },
+                Evidence {
+                    layer: Layer::Driver,
+                    matched_name: "vgk.sys".into(),
+                },
+            ],
+        },
+        DetectedAntiCheat {
+            id: "hyperion".into(),
+            name: "Hyperion / Byfron".into(),
+            gate: Gate::Should,
+            kernel_mode: false,
+            boot_resident: false,
+            games_sample: Vec::new(),
+            evidence: vec![Evidence {
+                layer: Layer::Process,
+                matched_name: "RobloxPlayerBeta.exe".into(),
+            }],
+        },
+        DetectedAntiCheat {
+            id: "vac".into(),
+            name: "Valve Anti-Cheat / VACnet".into(),
+            gate: Gate::Dont,
+            kernel_mode: false,
+            boot_resident: false,
+            games_sample: Vec::new(),
+            evidence: vec![Evidence {
+                layer: Layer::Process,
+                matched_name: "cs2.exe".into(),
+            }],
+        },
+    ];
+    let failure = FailedLayer {
+        layer: Layer::Driver,
+        error: win::Error {
+            op: "K32EnumDeviceDrivers",
+            code: 5,
+            detail: "arbitrary enumeration string must stay private".into(),
+        },
+    };
+    let clear = "Anti-cheat: No supported anti-cheat detected (snapshot only)\r\n";
+    let unknown = concat!(
+        "Anti-cheat: Status unavailable\r\n",
+        "Hardware check may be less reliable. Optional driver reads are disabled because anti-cheat status could not be verified.\r\n"
+    );
+    let found = concat!(
+        "Anti-cheat: Running or detected (Riot Vanguard, Hyperion / Byfron, Valve Anti-Cheat / VACnet)\r\n",
+        "Hardware check may be less reliable while anti-cheat is active. Some hardware tools refuse to run.\r\n",
+        "Anti-cheat evidence: Riot Vanguard (kernel anti-cheat); service: vgc; loaded driver: vgk.sys\r\n",
+        "Anti-cheat evidence: Hyperion / Byfron (intrusive); process: RobloxPlayerBeta.exe\r\n",
+        "Anti-cheat evidence: Valve Anti-Cheat / VACnet (lightweight); process: cs2.exe\r\n"
+    );
+    for (version, entries, failures, guidance) in [
+        (Some(1), Vec::new(), Vec::new(), clear),
+        (None, Vec::new(), Vec::new(), unknown),
+        (Some(2), Vec::new(), Vec::new(), unknown),
+        (Some(1), Vec::new(), vec![failure.clone()], unknown),
+        (Some(1), detected.clone(), Vec::new(), found),
+        (Some(1), detected, vec![failure], found),
+    ] {
+        let snapshot = Detection {
+            database_version: version,
+            detected: entries,
+            failed_layers: failures,
+        };
+        let mut out = Out::new();
+        out.id("Machine GUID", "b27f41e8-902c-4e63-a185-7d36c04982ba")
+            .text("Existing field/error: Écran 😀")
+            .separator()
+            .blank()
+            .source("existing source");
+        let mut baseline = out.finish();
+        baseline.title = "SYSTEM INFORMATION";
+        let mut out = Out::new();
+        out.text(baseline.body.strip_suffix("\r\n").unwrap())
+            .id_value(&baseline.ids[0])
+            .source(&baseline.source);
+        system::append_anticheat(&snapshot, &mut out);
+        let mut section = out.finish();
+        section.title = baseline.title;
+        assert_eq!(section.body, format!("{}{guidance}", baseline.body));
+        assert_eq!(section.ids, baseline.ids);
+        assert_eq!(section.source, baseline.source);
+        assert_eq!(
+            report::masked(&section).body,
+            format!("{}{guidance}", report::masked(&baseline).body)
+        );
+        assert!(!section.body.contains("VALORANT"));
+        assert!(!section.body.contains("Cannot read deep hardware"));
+        assert!(!section.body.contains("Deep data unavailable"));
+        let unchanged = Section {
+            title: "RAM MODULES",
+            body: "Name: Écran 😀\r\n  padded table  \r\n".into(),
+            ..Section::default()
+        };
+        let before = full_report(&[baseline, unchanged.clone()]);
+        let after = full_report(&[section.clone(), unchanged]);
+        assert_eq!(
+            after.replacen(guidance, "", 1).as_bytes(),
+            before.as_bytes()
+        );
+        if snapshot.failed_layers.is_empty() {
+            assert!(section.failures.is_empty());
+        } else {
+            assert_eq!(
+                section.failures,
+                [
+                    "Anti-cheat: K32EnumDeviceDrivers failed: 0x00000005 anti-cheat Driver layer unavailable"
+                ]
+            );
+            let diagnostics = report::diagnostics(&[section], &[], false);
+            assert!(!diagnostics.contains("arbitrary enumeration string"));
+        }
+    }
+    assert_eq!(PROVIDERS.len(), 15);
+}
+
+#[test]
 fn raw_report_literal_preserves_empty_and_untrimmed_bodies() {
     let sections = [
         Section {
@@ -428,4 +569,219 @@ fn raw_report_literal_preserves_empty_and_untrimmed_bodies() {
             "\r\n"
         )
     );
+}
+
+// Security decisions and title attribution cannot be exercised for every AC on one real PC.
+#[test]
+fn deep_option_preserves_off_bytes_and_names_only_blocking_evidence() {
+    use win::anticheat::{DetectedAntiCheat, Detection, Evidence, FailedLayer, Gate, Layer};
+    fn family(
+        name: &str,
+        gate: Gate,
+        games: &[&str],
+        layer: Layer,
+        matched: &str,
+    ) -> DetectedAntiCheat {
+        DetectedAntiCheat {
+            id: name.into(),
+            name: name.into(),
+            gate,
+            kernel_mode: true,
+            boot_resident: false,
+            games_sample: games.iter().map(|game| (*game).into()).collect(),
+            evidence: vec![Evidence {
+                layer,
+                matched_name: matched.into(),
+            }],
+        }
+    }
+    fn hardware(_: &Ctx, out: &mut Out) -> win::Result<()> {
+        out.id("Serial", "SN8D4C2A9")
+            .text("  Écran 😀 table padding  ");
+        Ok(())
+    }
+    let clear = Detection {
+        database_version: Some(1),
+        ..Detection::default()
+    };
+    let dont = family(
+        "Valve Anti-Cheat / VACnet",
+        Gate::Dont,
+        &["Counter-Strike 2"],
+        Layer::Process,
+        "steam.exe",
+    );
+    let must = family(
+        "miHoYo / HoYoverse Protect",
+        Gate::Must,
+        &["Genshin Impact", "Honkai: Star Rail"],
+        Layer::Process,
+        "GENSHINIMPACT.EXE",
+    );
+    let should = family(
+        "Hyperion / Byfron",
+        Gate::Should,
+        &["Roblox"],
+        Layer::Service,
+        "fixture-service",
+    );
+    let failure = FailedLayer {
+        layer: Layer::Driver,
+        error: win::Error::msg("fixture", "access denied"),
+    };
+    let providers = [
+        Provider {
+            title: "SYSTEM INFORMATION",
+            collect: hardware,
+        },
+        Provider {
+            title: "RAM MODULES",
+            collect: hardware,
+        },
+    ];
+    for only in [None, Some("system information"), Some("ram modules")] {
+        let mut baseline: Option<String> = None;
+        for deep_hardware_information in [false, true] {
+            let ctx = Ctx::with_options(CollectionOptions {
+                deep_hardware_information,
+            });
+            ctx.anticheat.set(clear.clone()).unwrap();
+            let sections = super::collection::collect_with_context(
+                &providers,
+                only,
+                &|_, _| {},
+                Duration::from_secs(2),
+                ctx,
+            );
+            let report = full_report(&sections);
+            if deep_hardware_information {
+                assert_eq!(
+                    report
+                        .matches("Deep data unavailable on this system.")
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    report.replace("Deep data unavailable on this system.\r\n", ""),
+                    baseline.as_ref().unwrap().as_str()
+                );
+            } else {
+                baseline = Some(report);
+            }
+        }
+    }
+    for (snapshot, expected, ram_skip) in [
+        (clear.clone(), "Deep data unavailable on this system.", None),
+        (
+            Detection {
+                detected: vec![dont.clone()],
+                ..clear.clone()
+            },
+            "Deep data unavailable on this system.",
+            None,
+        ),
+        (
+            Detection::default(),
+            "Cannot read deep hardware data right now: anti-cheat status could not be verified.",
+            Some("SPD (driver): Skipped - anti-cheat status unavailable"),
+        ),
+        (
+            Detection {
+                detected: vec![dont.clone()],
+                failed_layers: vec![failure.clone()],
+                ..clear.clone()
+            },
+            "Cannot read deep hardware data right now: anti-cheat status could not be verified.",
+            Some("SPD (driver): Skipped - anti-cheat status unavailable"),
+        ),
+        (
+            Detection {
+                detected: vec![must.clone(), should.clone(), dont.clone()],
+                failed_layers: vec![failure.clone()],
+                ..clear.clone()
+            },
+            "Cannot read deep hardware data right now: Genshin Impact / miHoYo / HoYoverse Protect, Hyperion / Byfron is running.",
+            Some(
+                "SPD (driver): Skipped - anti-cheat detected (Genshin Impact / miHoYo / HoYoverse Protect, Hyperion / Byfron)",
+            ),
+        ),
+        (
+            Detection {
+                detected: vec![should],
+                ..clear.clone()
+            },
+            "Cannot read deep hardware data right now: Hyperion / Byfron is running.",
+            Some("SPD (driver): Skipped - anti-cheat detected (Hyperion / Byfron)"),
+        ),
+    ] {
+        for title in ["SYSTEM INFORMATION", "RAM MODULES", "CPU"] {
+            let provider = Provider {
+                title,
+                collect: hardware,
+            };
+            let off = Ctx::new();
+            off.anticheat.set(snapshot.clone()).unwrap();
+            let baseline = collect_provider(&provider, &off);
+            assert_eq!(
+                baseline.body,
+                "Serial: SN8D4C2A9\r\n  Écran 😀 table padding  \r\n"
+            );
+            assert!(off.deep_status.get().is_none());
+            let on = Ctx::with_options(CollectionOptions {
+                deep_hardware_information: true,
+            });
+            on.anticheat.set(snapshot.clone()).unwrap();
+            if snapshot.gate_decision() != win::anticheat::GateDecision::Clear {
+                on.prepare_deep_information();
+                assert!(
+                    on.deep_spd.get().is_none(),
+                    "gate refusal cannot reach the source factory"
+                );
+            }
+            let section = collect_provider(&provider, &on);
+            assert!(section.body.starts_with(&baseline.body));
+            assert_eq!(section.ids, baseline.ids);
+            assert_eq!(section.source, baseline.source);
+            assert_eq!(section.failures, baseline.failures);
+            if title == "CPU" {
+                assert_eq!(section.body.as_bytes(), baseline.body.as_bytes());
+                continue;
+            }
+            assert!(section.body.contains(expected));
+            assert_eq!(
+                section.body.contains("SPD (driver): Skipped"),
+                title == "RAM MODULES" && ram_skip.is_some()
+            );
+            if title == "RAM MODULES"
+                && let Some(skip) = ram_skip
+            {
+                assert!(section.body.contains(skip));
+            }
+            assert!(
+                !section
+                    .body
+                    .contains("is running.\r\nDeep data unavailable")
+            );
+            assert!(!section.body.contains("Valve Anti-Cheat"));
+            assert!(!section.body.contains("Honkai: Star Rail"));
+            if section.body.contains("Hyperion") {
+                assert!(section.body.contains(
+                    "Associated games (Hyperion / Byfron; active title unknown): Roblox"
+                ));
+                assert!(!section.body.contains("Roblox / Hyperion"));
+            }
+            assert_eq!(
+                report::masked(&section)
+                    .body
+                    .strip_prefix(&report::masked(&baseline).body),
+                section.body.strip_prefix(&baseline.body)
+            );
+            assert!(full_report(std::slice::from_ref(&section)).contains(expected));
+            // A cached outcome is reused; no fresh detector or hardware-source call exists here.
+            assert!(std::ptr::eq(
+                on.deep_information_status().unwrap(),
+                on.deep_information_status().unwrap()
+            ));
+        }
+    }
 }

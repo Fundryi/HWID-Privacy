@@ -1,6 +1,6 @@
 //! Parallel provider execution, deadlines and failure reporting.
 
-use super::{Ctx, PROVIDERS, Provider};
+use super::{CollectionOptions, Ctx, DeepInformationStatus, PROVIDERS, Provider};
 use crate::{
     report::{self, Out, Section},
     win,
@@ -16,6 +16,21 @@ pub fn collect_all(only: Option<&str>, on_done: &(dyn Fn(usize, &Section) + Sync
     collect_with_deadline(&PROVIDERS, only, on_done, Duration::from_secs(60))
 }
 
+/// Collects with the preference snapshot supplied by the GUI or ordinary dump caller.
+pub fn collect_all_with_options(
+    only: Option<&str>,
+    on_done: &(dyn Fn(usize, &Section) + Sync),
+    options: CollectionOptions,
+) -> Vec<Section> {
+    collect_with_context(
+        &PROVIDERS,
+        only,
+        on_done,
+        Duration::from_secs(60),
+        Ctx::with_options(options),
+    )
+}
+
 // The private provider/deadline hook exercises panic, error and timeout handling
 // without hardware access, elevation, or a public timeout setting.
 /// Runs the selected providers with independent deadlines and ordered results.
@@ -25,7 +40,32 @@ pub(super) fn collect_with_deadline(
     on_done: &(dyn Fn(usize, &Section) + Sync),
     deadline: Duration,
 ) -> Vec<Section> {
-    let ctx = Arc::new(Ctx::new());
+    collect_with_context(providers, only, on_done, deadline, Ctx::new())
+}
+
+pub(super) fn collect_with_context(
+    providers: &[Provider],
+    only: Option<&str>,
+    on_done: &(dyn Fn(usize, &Section) + Sync),
+    deadline: Duration,
+    ctx: Ctx,
+) -> Vec<Section> {
+    let ctx = Arc::new(ctx);
+    // One advisory snapshot before providers start; unknown never skips a provider.
+    ctx.anticheat();
+    if providers.iter().any(|provider| {
+        provider.title == "RAM MODULES"
+            && only.is_none_or(|title| report::eq_ignore_case(title, provider.title))
+    }) {
+        ctx.prepare_deep_information();
+    }
+    ctx.deep_information_status();
+    // A RAM-only scan needs the same outcome without adding a SYSTEM INFORMATION section.
+    let deep_summary = if only.is_some_and(|title| report::eq_ignore_case(title, "RAM MODULES")) {
+        "RAM MODULES"
+    } else {
+        "SYSTEM INFORMATION"
+    };
     let selected: Vec<_> = providers
         .iter()
         .enumerate()
@@ -44,13 +84,13 @@ pub(super) fn collect_with_deadline(
             collect: provider.collect,
         };
         let title = provider.title;
-        let ctx = Arc::clone(&ctx);
+        let worker_ctx = Arc::clone(&ctx);
         let sender = sender.clone();
         match thread::Builder::new()
             .name(provider.title.to_owned())
             .spawn(move || {
                 if let Err(message) = win::catch_panic(|| {
-                    let section = collect_provider(&provider, &ctx);
+                    let section = collect_provider_with_summary(&provider, &worker_ctx, "");
                     if let Err(error) = sender.send((slot, Instant::now(), section)) {
                         // Expected for an abandoned provider that finishes after collection ends.
                         win::record(win::Error::msg(
@@ -66,11 +106,12 @@ pub(super) fn collect_with_deadline(
             // retain its Arc<Ctx> and be free to finish after this function returns.
             Ok(handle) => drop(handle),
             Err(error) => {
-                let section = error_section(
+                let mut section = error_section(
                     title,
                     &win::Error::msg("thread::spawn", error.to_string()),
                     started,
                 );
+                append_deep_to_section(&ctx, &mut section, deep_summary);
                 on_done(index, &section);
                 sections[slot] = Some(section);
             }
@@ -124,7 +165,8 @@ pub(super) fn collect_with_deadline(
                 })
                 .collect(),
         };
-        for (slot, section) in completed {
+        for (slot, mut section) in completed {
+            append_deep_to_section(&ctx, &mut section, deep_summary);
             on_done(selected[slot].0, &section);
             sections[slot] = Some(section);
         }
@@ -135,6 +177,10 @@ pub(super) fn collect_with_deadline(
 
 /// Runs one provider for diagnostic timing, preserving errors and caught panics.
 pub fn collect_provider(provider: &Provider, ctx: &Ctx) -> Section {
+    collect_provider_with_summary(provider, ctx, provider.title)
+}
+
+fn collect_provider_with_summary(provider: &Provider, ctx: &Ctx, deep_summary: &str) -> Section {
     let start = Instant::now();
     let mut out = Out::new();
     let result = match win::catch_panic(|| (provider.collect)(ctx, &mut out)) {
@@ -147,7 +193,60 @@ pub fn collect_provider(provider: &Provider, ctx: &Ctx) -> Section {
     if let Err(error) = result {
         record_error(&mut out, provider.title, &error);
     }
+    if provider.title == deep_summary
+        && matches!(deep_summary, "SYSTEM INFORMATION" | "RAM MODULES")
+    {
+        append_deep_information(ctx, &mut out, deep_summary == "RAM MODULES");
+    }
     finish_section(out, provider.title, start)
+}
+
+fn append_deep_information(ctx: &Ctx, out: &mut Out, ram: bool) {
+    let Some(status) = ctx.deep_information_status() else {
+        return;
+    };
+    match status {
+        DeepInformationStatus::Available { partial } => {
+            out.text(if *partial {
+                "Deep hardware data partially available (PawnIO)."
+            } else {
+                "Deep hardware data read from PawnIO."
+            });
+        }
+        DeepInformationStatus::Unavailable => {
+            out.text("Deep data unavailable on this system.");
+        }
+        DeepInformationStatus::Unknown => {
+            out.text("Cannot read deep hardware data right now: anti-cheat status could not be verified.");
+            if ram {
+                out.text("SPD (driver): Skipped - anti-cheat status unavailable");
+            }
+        }
+        DeepInformationStatus::Blocked {
+            names,
+            associated_games,
+        } => {
+            out.text(&format!(
+                "Cannot read deep hardware data right now: {names} is running."
+            ));
+            if ram {
+                out.text(&format!(
+                    "SPD (driver): Skipped - anti-cheat detected ({names})"
+                ));
+            }
+            for games in associated_games {
+                out.text(games);
+            }
+        }
+    }
+}
+
+fn append_deep_to_section(ctx: &Ctx, section: &mut Section, summary: &str) {
+    if section.title == summary {
+        let mut out = Out::new();
+        append_deep_information(ctx, &mut out, summary == "RAM MODULES");
+        section.body.push_str(&out.finish().body);
+    }
 }
 
 fn finish_section(out: Out, title: &'static str, start: Instant) -> Section {

@@ -1,6 +1,6 @@
 #![windows_subsystem = "windows"]
 
-use hwidchecker::{clean, hw, report, ui, win};
+use hwidchecker::{clean, hw, report, settings, ui, win};
 
 use std::{
     ffi::{OsStr, OsString},
@@ -155,7 +155,14 @@ fn run(options: Options) -> Result<(), String> {
             Ok(())
         }
         Mode::Dump(path) => {
-            let sections = hw::collect_all(options.only.as_deref(), &|_, _| {});
+            let collection_options = hw::CollectionOptions {
+                deep_hardware_information: settings::Settings::load().deep_hardware_information(),
+            };
+            let sections = hw::collect_all_with_options(
+                options.only.as_deref(),
+                &|_, _| {},
+                collection_options,
+            );
             write(&path, hw::full_report(&sections))?;
             let diagnostics = report::diagnostics(&sections, &win::take_recorded(), false);
             let mut diag_path = path.into_os_string();

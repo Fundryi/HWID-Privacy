@@ -38,6 +38,8 @@ The fifteen sections are disk, motherboard, BIOS, chassis, system, RAM, CPU, TPM
 
 ## Collection and export
 
+`settings.rs` saves `deep_hardware_information` beside the updater preference in `%LOCALAPPDATA%\HWIDChecker\settings.json`, using the same atomic writer and default OFF. The sidebar toggle applies to the next scan. Main-window startup/Refresh, Old View and ordinary full/filtered dumps pass an immutable `CollectionOptions` snapshot through `Ctx`; `collect_all`, direct baseline contexts and `--time` remain OFF. The collection coordinator caches one gate outcome from the advisory anti-cheat snapshot. In Phase 0 no deep source exists: ON appends unavailable data, named blocking-AC/game refusal, or unknown-status refusal to SYSTEM INFORMATION (RAM for a RAM-only dump). All ordinary providers continue. Copy and exports use those collected bodies; no driver, download, service mutation or new section is introduced.
+
 The main window starts collection, receives sections and progress from workers, and displays the selected section. Refresh starts a new collection. Export serializes the complete report to `HWID-EXPORT-dd.MM.yyyy-HH;mm;ss.txt`. Output preserves CRLF line endings, UTF-16 width semantics, the 93-character main separator and 40-character item separator. Data and diagnostics are separate.
 
 ## Device and event-log cleaning

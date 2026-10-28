@@ -1,0 +1,13 @@
+[package]
+name = "hwid-reader-abi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "abi/lib.rs"
+
+# Isolated host-only contract crate. The KMDF driver is C/MSBuild, not Cargo.
+# No WDK, build.rs, bindgen, third-party crates or main-app workspace membership.
+[workspace]
+

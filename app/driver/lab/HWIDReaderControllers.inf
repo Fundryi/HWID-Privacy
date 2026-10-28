@@ -1,0 +1,50 @@
+; Explicit LAB function-driver binding, NOT an upper/lower filter. Replaces the
+; controller's function driver. Requires the owner's board/resource/arbitration
+; review first. Do not install this on the normal PC or distribute this package.
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%Provider%
+DriverVer=10/07/2026,0.1.0.0
+CatalogFile=HWIDReaderControllers.cat
+PnpLockdown=1
+[Manufacturer]
+%Provider%=Models,NTamd64.10.0...10240
+[Models.NTamd64.10.0...10240]
+%Intel%=Install,PCI\VEN_8086&DEV_A123
+%Intel%=Install,PCI\VEN_8086&DEV_9D23
+%Intel%=Install,PCI\VEN_8086&DEV_A2A3
+%AMD%=Install,PCI\VEN_1022&DEV_790B
+[DestinationDirs]
+DriverCopy=13
+[SourceDisksNames]
+1=%Disk%,,,
+[SourceDisksFiles]
+HWIDReader.sys=1
+[DriverCopy]
+HWIDReader.sys
+[Install.NT]
+CopyFiles=DriverCopy
+[Install.NT.HW]
+AddReg=DeviceSecurity
+[DeviceSecurity]
+HKR,,Security,0,"D:P(A;;GA;;;SY)(A;;GA;;;BA)"
+[Install.NT.Services]
+AddService=HWIDReader,0x00000002,Service
+[Service]
+DisplayName=%Device%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%13%\HWIDReader.sys
+[Install.NT.Wdf]
+KmdfService=HWIDReader,Wdf
+[Wdf]
+KmdfLibraryVersion=1.15
+[Strings]
+Provider="HWID-Privacy"
+Device="HWID Reader (lab controller)"
+Intel="HWID Reader Intel 100/200 SMBus (lab)"
+AMD="HWID Reader AMD FCH SMBus (lab, revision/resource gated)"
+Disk="HWID Reader lab controller package"

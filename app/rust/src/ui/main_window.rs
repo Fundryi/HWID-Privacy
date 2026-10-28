@@ -45,6 +45,7 @@ const STARTUP_UPDATES: u16 = 26;
 const COMPARE_EXPORTS: u16 = 27;
 const COMPARE_NOW: u16 = 29;
 const COMPARE_PAIR: u16 = 30;
+const DEEP_INFORMATION: u16 = 31;
 const REFRESH: u16 = 20;
 const EXPORT: u16 = 21;
 const CLEAN_DEVICES: u16 = 22;
@@ -190,7 +191,9 @@ fn handle(form: &Form, state: &State, event: Event) {
         }
         Event::Timer(SPIN_TIMER) => form.spin(SPINNER),
         Event::Click(id) => on_click(form, state, id),
-        Event::Toggled(STARTUP_UPDATES, checked) => set_startup_updates(form, state, checked),
+        Event::Toggled(id, checked) if matches!(id, STARTUP_UPDATES | DEEP_INFORMATION) => {
+            set_setting(form, state, id, checked)
+        }
         Event::Toggled(MASK_IDS, checked) => set_mask(form, state, checked),
         _ => {}
     }
@@ -249,7 +252,7 @@ fn on_click(form: &Form, state: &State, id: u16) {
         OLD_VIEW => {
             // C# parity: SectionedViewForm.cs:821-872.
             set_button_text(form, OLD_VIEW, false, OLD_VIEW_LOADING);
-            raw_view::show(form.hwnd(), state.mask.get());
+            raw_view::show(form.hwnd(), state.mask.get(), collection_options(state));
             set_button_text(form, OLD_VIEW, true, OLD_VIEW_TEXT);
         }
         _ => {
@@ -329,18 +332,30 @@ fn on_find_key(form: &Form, find: &super::find::Find, key: window::FindKey) -> b
 fn load_settings(form: &Form, state: &State) {
     let settings = settings::Settings::load();
     form.set_checked(STARTUP_UPDATES, settings.check_updates_on_start());
+    form.set_checked(DEEP_INFORMATION, settings.deep_hardware_information());
     *state.settings.borrow_mut() = settings;
 }
 
-fn set_startup_updates(form: &Form, state: &State, checked: bool) {
-    let result = state
-        .settings
-        .borrow_mut()
-        .set_check_updates_on_start(checked);
+fn set_setting(form: &Form, state: &State, id: u16, checked: bool) {
+    let result = if id == DEEP_INFORMATION {
+        state
+            .settings
+            .borrow_mut()
+            .set_deep_hardware_information(checked)
+    } else {
+        state
+            .settings
+            .borrow_mut()
+            .set_check_updates_on_start(checked)
+    };
     if let Err(error) = result {
         form.set_checked(
-            STARTUP_UPDATES,
-            state.settings.borrow().check_updates_on_start(),
+            id,
+            if id == DEEP_INFORMATION {
+                state.settings.borrow().deep_hardware_information()
+            } else {
+                state.settings.borrow().check_updates_on_start()
+            },
         );
         msgbox::show(
             form.hwnd(),
@@ -349,6 +364,12 @@ fn set_startup_updates(form: &Form, state: &State, checked: bool) {
             Buttons::Ok,
             Icon::Error,
         );
+    }
+}
+
+fn collection_options(state: &State) -> hw::CollectionOptions {
+    hw::CollectionOptions {
+        deep_hardware_information: state.settings.borrow().deep_hardware_information(),
     }
 }
 
@@ -397,15 +418,20 @@ fn spawn_load(form: &Form, state: &State, load: u64, refresh: bool) {
     let Some(poster) = form.poster() else {
         return;
     };
+    let options = collection_options(state);
     let spawned = std::thread::Builder::new()
         .name("main load".to_owned())
         .spawn(move || {
             let progress = poster.clone();
             let result = win::catch_panic(|| {
-                hw::collect_all(None, &|index, _| {
-                    // `false` only when the window is already gone.
-                    let _ = progress.post(Msg::Progress { load, index });
-                })
+                hw::collect_all_with_options(
+                    None,
+                    &|index, _| {
+                        // `false` only when the window is already gone.
+                        let _ = progress.post(Msg::Progress { load, index });
+                    },
+                    options,
+                )
             });
             // Helper records only feed `--dump` diagnostics; drain them so they do not pile up.
             win::take_recorded();
@@ -681,7 +707,8 @@ fn section_icon(title: &str) -> char {
 /// C# `GetSidebarWidth` with the owner-approved DPI-scaled clamp (AD-37).
 fn sidebar_width(form: &Form, client_w: i32) -> i32 {
     (client_w * theme::SIDEBAR_WIDTH_PERCENT / 100).clamp(
-        form.scale(theme::SIDEBAR_MIN_WIDTH),
+        // WP-0C: keep the full caption readable even when the section list needs a scrollbar.
+        form.scale(theme::SIDEBAR_MIN_WIDTH + 32),
         form.scale(theme::SIDEBAR_MAX_WIDTH),
     )
 }
@@ -753,7 +780,9 @@ fn responsive(form: &Form, state: &State, client: Size) {
         });
         let cell_margin = t.find(SIDEBAR_CELL).map_or(0, |n| n.margin.vertical());
         let cell_margin_w = t.find(SIDEBAR_CELL).map_or(0, |n| n.margin.horizontal());
-        let block_h = s(theme::TOOLS_BLOCK_CONTENT) + theme::STROKE;
+        let block_h =
+            s(theme::TOOLS_BLOCK_CONTENT + theme::TOOLS_ROW_HEIGHT + theme::TOOLS_ROW_GAP)
+                + theme::STROKE;
         if let Some(divider) = t.find_mut(TOOLS_DIVIDER) {
             divider.size.h = theme::STROKE;
         }
@@ -791,7 +820,7 @@ fn responsive(form: &Form, state: &State, client: Size) {
                 }
             }
         }
-        for id in [STARTUP_UPDATES, COMPARE_PAIR] {
+        for id in [STARTUP_UPDATES, DEEP_INFORMATION, COMPARE_PAIR] {
             if let Some(row) = t.find_mut(id) {
                 row.size.w = item_w;
             }
@@ -892,6 +921,13 @@ fn tools_block(item_w: i32) -> Node {
             .toggle(),
     );
     toggle.margin.b = theme::TOOLS_ROW_GAP;
+    let mut deep = row(
+        DEEP_INFORMATION,
+        ButtonSpec::sidebar("Deep hardware information")
+            .icon(glyph::CPU)
+            .toggle(),
+    );
+    deep.margin.b = theme::TOOLS_ROW_GAP;
     let half = (item_w - theme::TOOLS_SPLIT_GAP) / 2;
     let pair = Node::flow(
         FlowDir::LeftToRight,
@@ -942,7 +978,7 @@ fn tools_block(item_w: i32) -> Node {
         .anchor(Anchor(Anchor::LEFT.0 | Anchor::RIGHT.0))
         .margin(theme::TOOLS_DIVIDER_MARGIN)
         .back(theme::BORDER);
-    Node::flow(FlowDir::TopDown, false, vec![divider, toggle, pair])
+    Node::flow(FlowDir::TopDown, false, vec![divider, toggle, deep, pair])
         .id(TOOLS)
         .fill()
         .auto_size()
@@ -1601,7 +1637,7 @@ mod live {
             let font = dpi::Font::new(theme::SECTION_BUTTON_FONT, dpi).unwrap();
             (0..hw::PROVIDERS.len())
                 .map(section_id)
-                .chain([STARTUP_UPDATES])
+                .chain([STARTUP_UPDATES, DEEP_INFORMATION])
                 .filter(|&id| {
                     let (w, spec) = form
                         .with_tree(|t| {
@@ -2018,32 +2054,42 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
             .join("HWIDChecker")
             .join("settings.json");
         let previous = std::fs::read(&path).ok();
-        let initial = form.is_checked(STARTUP_UPDATES);
-        let toggle = form.control(STARTUP_UPDATES).unwrap();
-        form.focus(STARTUP_UPDATES);
-        let enter = MSG {
-            hwnd: toggle,
-            message: WM_KEYDOWN,
-            wParam: WPARAM(VK_RETURN.0 as usize),
-            ..Default::default()
-        };
-        assert!(window::pre_translate(&enter));
-        assert_eq!(form.is_checked(STARTUP_UPDATES), !initial);
-        assert_eq!(
-            text_of(toggle),
-            format!("Auto Update, {}", if initial { "off" } else { "on" })
-        );
-        assert_eq!(
-            settings::Settings::load().check_updates_on_start(),
-            !initial
-        );
-        // SAFETY: Native Space down/up to this test's focused button, no desktop input.
-        unsafe {
-            SendMessageW(toggle, WM_KEYDOWN, Some(WPARAM(VK_SPACE.0 as usize)), None);
-            SendMessageW(toggle, WM_KEYUP, Some(WPARAM(VK_SPACE.0 as usize)), None);
+        for (id, caption) in [
+            (STARTUP_UPDATES, "Auto Update"),
+            (DEEP_INFORMATION, "Deep hardware information"),
+        ] {
+            let saved = || {
+                let settings = settings::Settings::load();
+                if id == DEEP_INFORMATION {
+                    settings.deep_hardware_information()
+                } else {
+                    settings.check_updates_on_start()
+                }
+            };
+            let initial = form.is_checked(id);
+            let toggle = form.control(id).unwrap();
+            form.focus(id);
+            let enter = MSG {
+                hwnd: toggle,
+                message: WM_KEYDOWN,
+                wParam: WPARAM(VK_RETURN.0 as usize),
+                ..Default::default()
+            };
+            assert!(window::pre_translate(&enter));
+            assert_eq!(form.is_checked(id), !initial);
+            assert_eq!(
+                text_of(toggle),
+                format!("{caption}, {}", if initial { "off" } else { "on" })
+            );
+            assert_eq!(saved(), !initial);
+            // SAFETY: Native Space down/up to this test's focused button, no desktop input.
+            unsafe {
+                SendMessageW(toggle, WM_KEYDOWN, Some(WPARAM(VK_SPACE.0 as usize)), None);
+                SendMessageW(toggle, WM_KEYUP, Some(WPARAM(VK_SPACE.0 as usize)), None);
+            }
+            assert_eq!(form.is_checked(id), initial);
+            assert_eq!(saved(), initial);
         }
-        assert_eq!(form.is_checked(STARTUP_UPDATES), initial);
-        assert_eq!(settings::Settings::load().check_updates_on_start(), initial);
         for (id, caption) in [
             (COMPARE_NOW, "Compare now"),
             (COMPARE_EXPORTS, "Compare files"),
@@ -2057,6 +2103,173 @@ Layout passes on the real main window: {resize_passes} per resize, {dpi_passes} 
         }
         println!(
             "RESULT tools: Enter/Space toggle, accessible names, persisted reload, Compare pair ready"
+        );
+    }
+
+    #[test]
+    #[ignore = "opens native windows and temporarily toggles the real settings file, restoring it on exit"]
+    fn deep_information_toggle() {
+        use std::os::windows::fs::OpenOptionsExt;
+        struct Restore {
+            path: PathBuf,
+            bytes: Option<Vec<u8>>,
+        }
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                match &self.bytes {
+                    Some(bytes) => {
+                        std::fs::write(&self.path, bytes).unwrap();
+                    }
+                    None => {
+                        let _ = std::fs::remove_file(&self.path);
+                    }
+                }
+            }
+        }
+        let path = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap())
+            .join("HWIDChecker/settings.json");
+        let _restore = Restore {
+            bytes: std::fs::read(&path).ok(),
+            path: path.clone(),
+        };
+        let output = std::env::temp_dir().join("opencode/kernel-reader/wp-0c-ui");
+        std::fs::create_dir_all(&output).unwrap();
+        assert!(dpi::set_per_monitor_v2_for_tests());
+        assert!(activate_comctl6_in(&output.to_string_lossy()));
+        let (spec, nodes, _) = parts();
+        let state = Rc::new(State::default());
+        let target = Rc::clone(&state);
+        // Only controls/settings here: no hardware, updater, cleaner or production gate override.
+        let form = Form::create(HWND::default(), spec, nodes, move |form, event| {
+            match event {
+                Event::Created => {
+                    load_settings(form, &target);
+                    set_loading(form, false);
+                }
+                Event::Resize { client, .. } => responsive(form, &target, client),
+                Event::Toggled(id, checked) if matches!(id, STARTUP_UPDATES | DEEP_INFORMATION) => {
+                    set_setting(form, &target, id, checked);
+                }
+                _ => {}
+            }
+            true
+        })
+        .unwrap();
+        form.show();
+        form.set_timer(TICK, 20);
+        pump_for(100);
+        trunk_tools_check(&form);
+        let before = collection_options(&state);
+        let initial = form.is_checked(DEEP_INFORMATION);
+        form.click(DEEP_INFORMATION);
+        assert_eq!(form.is_checked(DEEP_INFORMATION), !initial);
+        assert_eq!(
+            collection_options(&state).deep_hardware_information,
+            !initial
+        );
+        assert_eq!(
+            before.deep_hardware_information, initial,
+            "existing scan snapshot stays immutable"
+        );
+        let restarted = State::default();
+        load_settings(&form, &restarted);
+        assert_eq!(
+            collection_options(&restarted).deep_hardware_information,
+            !initial
+        );
+        assert_eq!(state.load.get(), 0, "toggling never starts collection");
+
+        // Deny replacement to exercise the actual error box and displayed/in-memory rollback.
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        let dismiss = std::thread::spawn(|| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                for hwnd in own_windows() {
+                    if msgbox::testing::is_box(hwnd) && text_of(hwnd) == "Settings Error" {
+                        let text = msgbox::testing::text(hwnd);
+                        if text.is_empty() {
+                            continue;
+                        }
+                        msgbox::testing::press(hwnd, windows::Win32::UI::WindowsAndMessaging::IDOK);
+                        return text;
+                    }
+                }
+                assert!(Instant::now() < deadline, "Settings Error was not shown");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        form.click(DEEP_INFORMATION);
+        assert!(
+            dismiss
+                .join()
+                .unwrap()
+                .starts_with("Could not save settings:")
+        );
+        assert_eq!(form.is_checked(DEEP_INFORMATION), !initial);
+        assert_eq!(
+            collection_options(&state).deep_hardware_information,
+            !initial
+        );
+        drop(lock);
+        assert_eq!(
+            settings::Settings::load().deep_hardware_information(),
+            !initial
+        );
+
+        for value in [96, 120, 144, 168, 192] {
+            dpi_change(&form, value);
+            let size = dpi::scale_size(theme::MAIN_MIN_SIZE, value);
+            // SAFETY: Resizes only the test's native window, using a value-only Win32 call.
+            unsafe {
+                SetWindowPos(
+                    form.hwnd(),
+                    None,
+                    0,
+                    0,
+                    size.w,
+                    size.h,
+                    SWP_NOMOVE | SWP_NOZORDER,
+                )
+                .unwrap();
+            }
+            pump_for(50);
+            let font = dpi::Font::new(theme::SECTION_BUTTON_FONT, form.dpi()).unwrap();
+            form.with_tree(|tree| {
+                let toggle = tree.find(DEEP_INFORMATION).unwrap();
+                let Kind::Leaf(control) = &toggle.kind else {
+                    panic!("toggle control");
+                };
+                let need = crate::ui::controls::measure(
+                    control,
+                    font.handle(),
+                    toggle.padding,
+                    Size::default(),
+                    Size::default(),
+                    form.dpi(),
+                );
+                assert!(
+                    need.w <= toggle.bounds.w,
+                    "deep label fits at {value} DPI: {} <= {}",
+                    need.w,
+                    toggle.bounds.w
+                );
+                assert!(tree.find(STARTUP_UPDATES).unwrap().bounds.bottom() <= toggle.bounds.y);
+                assert!(toggle.bounds.bottom() <= tree.find(COMPARE_PAIR).unwrap().bounds.y);
+            });
+            shot_dir(
+                form.hwnd(),
+                &output.to_string_lossy(),
+                &format!("deep-toggle-{value}"),
+            );
+        }
+        form.close();
+        println!(
+            "WP-0C real controls: Enter/Space/click, saved reload, immutable snapshot, save-error rollback and minimum-window label at 100-200% DPI passed. Screenshots: {}",
+            output.display()
         );
     }
 

@@ -3,7 +3,7 @@
 use crate::{
     hw::{Ctx, first_ok},
     report::{Out, trim_net},
-    win::{self, firmware, registry, time, wmi},
+    win::{self, anticheat, firmware, registry, time, wmi},
 };
 
 const CURRENT_VERSION: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
@@ -20,7 +20,7 @@ const REGISTRY_ID: &str = "registry (ProductId)";
 const WMI_ID: &str = "WMI (Win32_OperatingSystem)";
 
 /// Collects system identifiers with native/registry sources and the legacy WMI fallbacks.
-pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
+pub fn collect(ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
     let mut sources = Vec::new();
     match product_keys(out) {
         Ok((keys, source)) => {
@@ -126,7 +126,63 @@ pub fn collect(_ctx: &Ctx, out: &mut Out) -> Result<(), win::Error> {
         }
     }
     out.source(&sources.join("; "));
+    append_anticheat(ctx.anticheat(), out);
     Ok(())
+}
+
+pub(super) fn append_anticheat(snapshot: &anticheat::Detection, out: &mut Out) {
+    for failure in &snapshot.failed_layers {
+        out.fallback_failed("Anti-cheat", &super::anticheat_error(failure));
+    }
+    match snapshot.presence() {
+        anticheat::Presence::Clear => {
+            out.info(
+                "Anti-cheat",
+                "No supported anti-cheat detected (snapshot only)",
+            );
+        }
+        anticheat::Presence::Unknown => {
+            out.info("Anti-cheat", "Status unavailable").text(
+                "Hardware check may be less reliable. Optional driver reads are disabled because anti-cheat status could not be verified.",
+            );
+        }
+        anticheat::Presence::Detected => {
+            let names = snapshot
+                .detected
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.info("Anti-cheat", &format!("Running or detected ({names})"))
+                .text("Hardware check may be less reliable while anti-cheat is active. Some hardware tools refuse to run.");
+            for entry in &snapshot.detected {
+                let category = match entry.gate {
+                    anticheat::Gate::Must => "kernel anti-cheat",
+                    anticheat::Gate::Should => "intrusive",
+                    anticheat::Gate::Dont => "lightweight",
+                };
+                let evidence = entry
+                    .evidence
+                    .iter()
+                    .map(|hit| {
+                        let layer = match hit.layer {
+                            anticheat::Layer::Service => "service",
+                            anticheat::Layer::Driver => "loaded driver",
+                            anticheat::Layer::Process => "process",
+                            anticheat::Layer::Database => "database",
+                            anticheat::Layer::Worker => "worker",
+                        };
+                        format!("{layer}: {}", hit.matched_name)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                out.info(
+                    "Anti-cheat evidence",
+                    &format!("{} ({category}); {evidence}", entry.name),
+                );
+            }
+        }
+    }
 }
 
 fn product_keys(out: &mut Out) -> win::Result<(Vec<Option<String>>, &'static str)> {

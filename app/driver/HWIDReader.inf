@@ -1,0 +1,48 @@
+; Hardware-agnostic ROOT shell. Owner creates/removes its devnode on a lab PC.
+; No controller is automatically installed; no boot/system-start service.
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%Provider%
+DriverVer=10/07/2026,0.1.0.0
+CatalogFile=HWIDReader.cat
+PnpLockdown=1
+
+[Manufacturer]
+%Provider%=Models,NTamd64.10.0...10240
+[Models.NTamd64.10.0...10240]
+%Device%=Install,ROOT\HWIDReader
+
+[DestinationDirs]
+DriverCopy=13
+[SourceDisksNames]
+1=%Disk%,,,
+[SourceDisksFiles]
+HWIDReader.sys=1
+[DriverCopy]
+HWIDReader.sys
+
+[Install.NT]
+CopyFiles=DriverCopy
+[Install.NT.HW]
+AddReg=DeviceSecurity
+[DeviceSecurity]
+HKR,,Security,0,"D:P(A;;GA;;;SY)(A;;GA;;;BA)"
+[Install.NT.Services]
+AddService=HWIDReader,0x00000002,Service
+[Service]
+DisplayName=%Device%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%13%\HWIDReader.sys
+[Install.NT.Wdf]
+KmdfService=HWIDReader,Wdf
+[Wdf]
+KmdfLibraryVersion=1.15
+
+[Strings]
+Provider="HWID-Privacy"
+Device="HWID Reader control shell (lab)"
+Disk="HWID Reader package"

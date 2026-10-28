@@ -194,6 +194,12 @@ try {
     Complete-Step
     Write-Host "Release $tag published: $url" -ForegroundColor Green
     Write-Host '      Installed copies get this update on their next update check.'
+    try {
+        Invoke-Checked pwsh @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'clean-build-cache.ps1'), '-Apply') 'Build cache cleanup refused' |
+            ForEach-Object { Write-Host "      $_" }
+    } catch {
+        Write-Warning "Release published; cache cleanup skipped: $($_.Exception.Message)"
+    }
 } catch {
     if ($stepOpen) { Write-Host ' failed' -ForegroundColor Red }
     Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red

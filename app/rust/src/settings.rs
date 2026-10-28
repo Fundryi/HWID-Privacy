@@ -35,7 +35,7 @@ impl Settings {
 
     fn read(path: &Path) -> win::Result<Self> {
         let bytes = fs::read(path).map_err(|e| io_error("Read settings", e))?;
-        let values: Map<String, Value> = serde_json::from_slice(&bytes)
+        let mut values: Map<String, Value> = serde_json::from_slice(&bytes)
             .map_err(|e| Error::msg("Read settings JSON", e.to_string()))?;
         if values
             .get("check_updates_on_start")
@@ -45,6 +45,16 @@ impl Settings {
                 "Read settings JSON",
                 "check_updates_on_start must be a boolean",
             ));
+        }
+        if values
+            .get("deep_hardware_information")
+            .is_some_and(|v| !v.is_boolean())
+        {
+            win::record(Error::msg(
+                "Read settings JSON",
+                "deep_hardware_information must be a boolean",
+            ));
+            values.remove("deep_hardware_information");
         }
         Ok(Self { values })
     }
@@ -59,12 +69,25 @@ impl Settings {
 
     /// Saves the preference at once, retaining the old in-memory value on failure.
     pub fn set_check_updates_on_start(&mut self, checked: bool) -> win::Result<()> {
-        self.save_to(&settings_path()?, checked)
+        self.save_to(&settings_path()?, "check_updates_on_start", checked)
     }
 
-    fn save_to(&mut self, path: &Path, checked: bool) -> win::Result<()> {
+    /// Whether the next collection requests deep information; defaults to false.
+    pub fn deep_hardware_information(&self) -> bool {
+        self.values
+            .get("deep_hardware_information")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    /// Saves immediately, without changing the current value if persistence fails.
+    pub fn set_deep_hardware_information(&mut self, checked: bool) -> win::Result<()> {
+        self.save_to(&settings_path()?, "deep_hardware_information", checked)
+    }
+
+    fn save_to(&mut self, path: &Path, key: &str, checked: bool) -> win::Result<()> {
         let mut values = self.values.clone();
-        values.insert("check_updates_on_start".to_owned(), Value::Bool(checked));
+        values.insert(key.to_owned(), Value::Bool(checked));
         let json = serde_json::to_string_pretty(&values)
             .map_err(|e| Error::msg("Serialize settings", e.to_string()))?
             .replace('\n', "\r\n");
@@ -173,7 +196,14 @@ mod tests {
         )
         .unwrap();
         let mut settings = Settings::read(&path).unwrap();
-        settings.save_to(&path, true).unwrap();
+        assert!(!settings.deep_hardware_information());
+        settings
+            .save_to(&path, "deep_hardware_information", true)
+            .unwrap();
+        assert!(!settings.check_updates_on_start());
+        settings
+            .save_to(&path, "check_updates_on_start", true)
+            .unwrap();
         let bytes = fs::read(&path).unwrap();
         assert!(!bytes.starts_with(&[0xef, 0xbb, 0xbf]));
         assert!(bytes.windows(2).any(|pair| pair == b"\r\n"));
@@ -185,13 +215,33 @@ mod tests {
         );
         let reloaded = Settings::read(&path).unwrap();
         assert!(reloaded.check_updates_on_start());
+        assert!(reloaded.deep_hardware_information());
         assert_eq!(reloaded.values["future"]["name"], "retained");
         assert_eq!(reloaded.values["future"]["n"], 42);
         // Replacing a directory must fail without losing either persisted or in-memory data.
-        assert!(settings.save_to(&dir, false).is_err());
+        assert!(
+            settings
+                .save_to(&dir, "check_updates_on_start", false)
+                .is_err()
+        );
+        assert!(
+            settings
+                .save_to(&dir, "deep_hardware_information", false)
+                .is_err()
+        );
         assert!(settings.check_updates_on_start());
+        assert!(settings.deep_hardware_information());
         assert_eq!(fs::read(&path).unwrap(), bytes);
-        settings.save_to(&path, false).unwrap();
+        settings
+            .save_to(&path, "deep_hardware_information", false)
+            .unwrap();
+        let reloaded = Settings::read(&path).unwrap();
+        assert!(!reloaded.deep_hardware_information());
+        assert!(reloaded.check_updates_on_start());
+        assert_eq!(reloaded.values["future"]["n"], 42);
+        settings
+            .save_to(&path, "check_updates_on_start", false)
+            .unwrap();
         assert!(!Settings::read(&path).unwrap().check_updates_on_start());
         for invalid in ["null", "[]", "{", r#"{"check_updates_on_start":"true"}"#] {
             fs::write(&path, invalid).unwrap();
@@ -199,6 +249,18 @@ mod tests {
         }
         fs::write(&path, "{}").unwrap();
         assert!(!Settings::read(&path).unwrap().check_updates_on_start());
+        assert!(!Settings::read(&path).unwrap().deep_hardware_information());
+        for invalid in ["null", "0", "\"true\"", "[]", "{}"] {
+            fs::write(&path, format!(r#"{{"check_updates_on_start":true,"deep_hardware_information":{invalid},"future":42}}"#)).unwrap();
+            let mut settings = Settings::read(&path).unwrap();
+            assert!(!settings.deep_hardware_information());
+            assert!(settings.check_updates_on_start());
+            settings
+                .save_to(&path, "deep_hardware_information", true)
+                .unwrap();
+            assert_eq!(Settings::read(&path).unwrap().values["future"], 42);
+        }
+        fs::write(&path, "{}").unwrap();
         assert_eq!(
             fs::read_dir(&dir).unwrap().count(),
             1,

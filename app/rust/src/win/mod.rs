@@ -1,5 +1,6 @@
 //! Windows helpers and their frozen cross-work-package contracts.
 
+pub mod anticheat;
 pub mod battery;
 pub mod bluetooth;
 pub mod dialog;
@@ -14,11 +15,13 @@ pub mod iphlp;
 pub mod ndis;
 pub mod nvidia;
 mod panic_guard;
+pub mod pawnio;
 pub use panic_guard::{catch_panic, is_guarded};
 pub mod process;
 pub mod registry;
 pub mod security;
 pub mod setupapi;
+pub mod spd;
 pub mod storage;
 pub mod tbs;
 pub mod time;

@@ -327,6 +327,32 @@ fn split_section(title: &str, body: &str, ids: &[String]) -> Section {
             current.heading = line.replace(": #", " ");
             continue;
         }
+        if title_upper == "RAM MODULES" {
+            let spd_heading =
+                line.starts_with("SPD Module #") && line.ends_with(" (driver-read, PawnIO)");
+            if spd_heading {
+                ram_columns.clear();
+                if !current.rows.is_empty() {
+                    section.entities.push(std::mem::take(&mut current));
+                }
+                current.family = "SPD (PawnIO)".into();
+                current.heading = line.into();
+                continue;
+            }
+            if line.starts_with("SPD (")
+                || line.starts_with("Deep ")
+                || line.starts_with("Cannot read deep ")
+                || line.starts_with("Associated games (")
+            {
+                ram_columns.clear();
+                add_fields(&mut section.header, line);
+                continue;
+            }
+            if current.family == "SPD (PawnIO)" {
+                add_fields(&mut current, line);
+                continue;
+            }
+        }
         let separator = line.len() >= 4 && line.bytes().all(|c| c == b'-');
         let disk_root = raw.starts_with("└── PHYSICALDRIVE");
         let gpu = gpu_prefix(line);

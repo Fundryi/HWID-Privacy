@@ -17,9 +17,9 @@ pub const TITLE: &str = "Old View - Raw Hardware Data";
 const TEXT: u16 = 1;
 
 /// Shows a fresh raw report in the modal Old View window.
-pub fn show(owner: HWND, mask: bool) {
+pub fn show(owner: HWND, mask: bool, options: hw::CollectionOptions) {
     // C# parity: SectionedViewForm.cs:833 collects again instead of showing the main snapshot.
-    let report = match collect(owner, mask) {
+    let report = match collect(owner, mask, options) {
         Some(Ok(report)) => report,
         Some(Err(error)) => return debug_error(owner, &error),
         // The owner closed (or the app quit) while collecting: nothing is left to show on.
@@ -43,7 +43,11 @@ fn debug_error(owner: HWND, error: &str) {
 
 /// Collects on a worker while the UI keeps running (C# `await`); `None` when the owner is gone.
 /// The wait is bounded by the 60 s per-provider deadline of `hw::collect_all`.
-fn collect(owner: HWND, mask: bool) -> Option<Result<String, String>> {
+fn collect(
+    owner: HWND,
+    mask: bool,
+    options: hw::CollectionOptions,
+) -> Option<Result<String, String>> {
     let (tx, rx) = mpsc::channel();
     // SAFETY: Reads the calling (UI) thread id; no pointers.
     let ui_thread = unsafe { GetCurrentThreadId() };
@@ -51,7 +55,7 @@ fn collect(owner: HWND, mask: bool) -> Option<Result<String, String>> {
         .name("old view".to_owned())
         .spawn(move || {
             let report = win::catch_panic(|| {
-                let mut sections = hw::collect_all(None, &|_, _| {});
+                let mut sections = hw::collect_all_with_options(None, &|_, _| {}, options);
                 if mask {
                     sections = sections.iter().map(crate::report::masked).collect();
                 }
