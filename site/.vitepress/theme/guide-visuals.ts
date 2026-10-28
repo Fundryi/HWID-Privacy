@@ -179,11 +179,12 @@ export const guideVisuals: Record<string, GuideVisualData> = {
         text: 'Modified input or board path; model-specific.',
       },
     ],
-    note: 'Visibility follows the method and connection path. An HDMI emulator does not automatically intercept native DisplayPort. The direct-EEPROM example is a first-hand 2013 ASUS VG248QE report [C]. It is untested by this project and retains the existing hardware and recovery warning. Preserve every timing and capability block unless you intentionally want different behavior.',
+    note: 'Visibility follows the method and connection path. An HDMI emulator does not automatically intercept native DisplayPort. The PG27AQDP firmware tool changes the stored serial on every input of that one model and firmware, verified by this project on the studied unit [C]. The direct-EEPROM example is a first-hand 2013 ASUS VG248QE report [C]. It is untested by this project and retains the existing hardware and recovery warning. Preserve every timing and capability block unless you intentionally want different behavior.',
     sources: [
       { label: 'Method scope', href: '/guides/monitor-spoofing/monitor-spoofing.html#what-this-changes' },
       { label: 'HDMI and DisplayPort paths', href: '/guides/monitor-spoofing/monitor-spoofing.html#ddc-ddcci-hdmi-and-displayport' },
-      { label: 'EEPROM research boundary', href: '/guides/monitor-spoofing/monitor-spoofing.html#option-4-direct-monitor-eeprom-modification' },
+      { label: 'PG27AQDP firmware tool', href: '/guides/monitor-spoofing/monitor-spoofing.html#option-4-firmware-tool-for-the-asus-pg27aqdp' },
+      { label: 'EEPROM research boundary', href: '/guides/monitor-spoofing/monitor-spoofing.html#option-5-direct-monitor-eeprom-modification' },
     ],
   },
 }

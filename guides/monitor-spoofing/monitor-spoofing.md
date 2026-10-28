@@ -1,9 +1,9 @@
 # Monitor and EDID Privacy Guide
 
 > [!NOTE]
-> **TL;DR:** Changes the EDID identity (manufacturer, model, serial) a monitor reports to the system, through a software override or an inline emulator. Direct EEPROM rewrite changes the display hardware itself.
+> **TL;DR:** Changes the EDID identity (manufacturer, model, serial) a monitor reports to the system, through a software override or an inline emulator. For the ASUS PG27AQDP, this project's firmware tool changes the serial stored in the monitor. Direct EEPROM rewrite changes the display hardware itself.
 > Who reads it: Windows (`WmiMonitorID`, registry EDID), the GPU driver, and any fingerprinting stack that reads display identity.
-> **Status:** the EEPROM rewrite report is first-hand from 2013 Blur Busters / Toni Wilen **[C]**. The override and emulator methods are documented against vendor and Microsoft sources **[A]**.
+> **Status:** the EEPROM rewrite report is first-hand from 2013 Blur Busters / Toni Wilen **[C]**. The override and emulator methods are documented against vendor and Microsoft sources **[A]**. The PG27AQDP firmware tool is verified by this project on the studied unit **[C]**.
 > **Risk:** a bad EDID can remove the picture, hide valid resolutions, disable audio, HDR, VRR, or HDCP, and leave you without a usable recovery screen. Keep an untouched backup and a second display or direct-cable recovery path before changing anything.
 
 Evidence grades appear inline. See [How to read these guides](../getting-started/getting-started.md#how-to-read-these-guides). This guide uses the same evidence model as the [fTPM identity reset guide](../resets/ftpm-reset-tutorial.md).
@@ -19,7 +19,8 @@ Evidence grades appear inline. See [How to read these guides](../getting-started
 - [Option 1: Windows software override](#option-1-windows-software-override)
 - [Option 2: Programmable HDMI EDID emulator](#option-2-programmable-hdmi-edid-emulator)
 - [Option 3: Other inline emulators](#option-3-other-inline-emulators)
-- [Option 4: Direct monitor EEPROM modification](#option-4-direct-monitor-eeprom-modification)
+- [Option 4: Firmware tool for the ASUS PG27AQDP](#option-4-firmware-tool-for-the-asus-pg27aqdp)
+- [Option 5: Direct monitor EEPROM modification](#option-5-direct-monitor-eeprom-modification)
 - [Verify with HWIDChecker](#verify-with-hwidchecker)
 - [Troubleshooting](#troubleshooting)
 - [Sources](#sources)
@@ -30,11 +31,12 @@ Extended Display Identification Data, or EDID, is the descriptor a display prese
 
 Monitor privacy work should change only the identity fields that need to change. Preserve every timing and capability block unless you intentionally want different behavior. Microsoft warns that invalid EDID data can make Windows choose incorrect display modes. **[A]**
 
-There are three practical levels:
+There are four practical levels:
 
 1. A **Windows EDID override** changes what one Windows installation supplies to its display stack. It does not rewrite the monitor. **[A]**
 2. A **programmable inline emulator** presents its stored EDID to sources connected through it. This is reversible and does not open the monitor. **[A]**
-3. A **direct EEPROM rewrite** changes the display hardware. It is model-specific, may require board work, and is not validated by this project. **[C]**
+3. A **firmware tool** rewrites the serial records through the monitor's own update interface. This project's tool supports only the ASUS PG27AQDP with MCM107 firmware and is verified on the studied unit. **[C]**
+4. A **direct EEPROM rewrite** changes the display hardware. It is model-specific, may require board work, and is not validated by this project. **[C]**
 
 ## What this changes
 
@@ -54,6 +56,7 @@ The scope depends on the method:
 |---|---|---:|---|
 | Windows override | That Windows display stack | No | Driver and connection-path behavior can differ |
 | Inline HDMI emulator | Sources connected through the emulator | Yes | Device capacity, bandwidth, and protocol support |
+| PG27AQDP firmware tool | Every input of the monitor, HDMI and DisplayPort | Yes | One model and firmware only |
 | Direct EEPROM rewrite | The modified monitor input or board path | Yes | High hardware and recovery risk |
 
 ## How monitor identity is stored
@@ -270,7 +273,87 @@ The external source describes a `DC240HZ5D-2` unit with a USB-C programming port
 
 If you independently obtain authoritative instructions for your exact revision, the safe sequence is still: direct baseline, full readback, edited copy, checksum validation, write to a recoverable slot, readback comparison, then HWIDChecker and signal-feature verification. Every Dichen-specific action remains **[S]** until physically tested and documented.
 
-## Option 4: Direct monitor EEPROM modification
+## Option 4: Firmware tool for the ASUS PG27AQDP
+
+**Status:** verified by this project on the studied unit. **[C]** The serial change was checked on HDMI and DisplayPort after a monitor power cycle. One unit was tested. Every other model and firmware is unsupported.
+
+This project's own tool changes the serial a supported monitor stores and reports. It talks to the monitor through the monitor's own update interface on the USB-B upstream cable. No case opening, soldering, programmer, or inline emulator is needed.
+
+It changes two records in the monitor's serial EEPROM:
+
+| Record | What reads it | What the tool changes |
+|---|---|---|
+| Identity record | The monitor firmware, the on-screen service serial, and vendor tools | The 12-character serial |
+| EDID record | Windows and the GPU, on both HDMI and DisplayPort | The `0xFF` serial-text descriptor and the stored block checksum |
+
+Every other byte stays unchanged, including the 32-bit numeric EDID serial, the model name, timings, and capability blocks. The tool does not touch the firmware flash. A stock firmware update does not rewrite these records, so the change survives updates. **[C]**
+
+### Supported model and firmware
+
+| Monitor | Firmware | Status |
+|---|---|---|
+| ASUS ROG Swift PG27AQDP | MCM107 | Verified on the studied unit **[C]** |
+| Any other model or firmware | Any | Unsupported. The tool refuses units its checks reject. |
+
+### Requirements
+
+- An ASUS ROG Swift PG27AQDP with firmware MCM107.
+- The monitor's USB-B upstream cable connected to the PC.
+- Windows x64 and an administrator account.
+- About 15 to 25 minutes per change, with the monitor kept powered the whole time.
+- A place outside the PC to keep your original records, such as a USB stick or cloud storage.
+
+### Download
+
+- **[pg27aqdp-serial.exe](./tools/pg27aqdp-serial/pg27aqdp-serial.exe)**. One file. It contains the vendor update interface it needs. Provenance and hashes are in `PROVENANCE.md` in the same repository folder.
+
+### Change the serial
+
+1. Close ASUS DisplayWidget, the ASUS firmware updater, and any other monitor or vendor portal app. They compete for the same channel.
+2. Run `HWIDChecker.exe` and save the **MONITOR INFORMATION** section as your baseline.
+3. Right-click `pg27aqdp-serial.exe` and choose **Run as administrator**.
+4. Click **Verify**. The tool reads both records. On the first Verify it saves your own original records, write-once, in `%LOCALAPPDATA%\pg27aqdp-serial\originals`.
+5. Copy the `originals` folder somewhere safe outside the PC. **Revert** needs it.
+6. Enter the new serial. The factory format is `S8LMRS` followed by six digits, for example `S8LMRS047216`. Do not copy this example. The tool warns when a serial does not match the factory format.
+7. Click **Plan**. Read the list. It shows every byte that will change in both records.
+8. Type the confirmation text exactly as shown.
+9. Click **Spoof**. Do not touch the monitor, the cable, or the power until the tool finishes. Watch the screen during the write.
+10. The tool reads both pages back, checks them, and restores write protection. Wait for the final message.
+11. Unplug the monitor's power for 10 seconds, then plug it back in.
+12. Run HWIDChecker on each input, HDMI and DisplayPort. **Serial Number** must show the new serial on both. Windows lists the monitor as a new device the first time.
+
+### Revert to the original serial
+
+Use the same flow with **Revert to Original** instead of a new serial: close vendor apps, **Verify**, **Plan**, type the confirmation, run it, power-cycle the monitor, then check both inputs with HWIDChecker.
+
+Revert writes the records saved in the `originals` folder. If that folder is lost, the tool cannot restore your original serial. Copy it back to `%LOCALAPPDATA%\pg27aqdp-serial\originals` before a Revert on a new Windows installation.
+
+> [!WARNING]
+> This writes the monitor's own EEPROM. Power loss, a pulled cable, or another program using the update channel during a write can leave a record in an uncertain state. Keep the monitor and PC powered until the tool finishes. There is deliberately no Cancel button during a write.
+
+> [!CAUTION]
+> In this project's testing, every display upset (black screen, lost USB channel) recovered after a 10-second monitor power cycle. No unit was damaged, and the serial records survived every incident, including two stock firmware flashes. That is one unit, not a guarantee. A stock firmware reflash does not restore the serial. Only Revert with your saved originals does. **[C]**
+
+What this option does not change:
+
+- The serial printed on the case label.
+- The generic serial of the USB hub inside the monitor.
+- Old monitor entries Windows has already stored in the registry.
+- Records the vendor already holds, such as warranty or RMA registrations.
+
+### Troubleshooting the firmware tool
+
+**The tool refuses the monitor.** The model, firmware, or a record check did not match. The tool supports only the PG27AQDP with MCM107. Do not try to force it.
+
+**The tool cannot reach the monitor.** Close every vendor and monitor app. Reconnect the USB-B cable. If it still fails, unplug the monitor's power for 10 seconds and try again. Replugging only the USB cable may not reset the hub, because the monitor powers it.
+
+**The screen goes black during a write.** The monitor's display watchdog reset. The tool stops the run by itself. Unplug the monitor's power for 10 seconds, then run **Verify** before anything else.
+
+**The tool reports an uncertain write.** Stop. Keep the tool's log in `%LOCALAPPDATA%\pg27aqdp-serial`. Power-cycle the monitor, run **Verify**, and read which record differs. Then make a new **Plan**, either for the intended serial or **Revert to Original**. Never repeat a write without a fresh Plan.
+
+**HWIDChecker still shows the old serial.** Unplug the monitor's power for 10 seconds; the monitor reloads the records only at power-up. Check the active input, not a disconnected registry entry. Run **Verify** to confirm both records hold the new serial.
+
+## Option 5: Direct monitor EEPROM modification
 
 **Status:** first-hand 2013 report for the ASUS VG248QE, credited to Toni Wilen. **[C]** Untested by this project.
 

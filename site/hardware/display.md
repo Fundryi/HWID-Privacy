@@ -1,6 +1,6 @@
 ---
 title: "Monitor / EDID guide chooser"
-description: "Choose Windows settings, an HDMI emulator or the monitor EEPROM. Keep the full EDID and signal features."
+description: "Choose Windows settings, an HDMI emulator, the PG27AQDP firmware tool or the monitor EEPROM. Keep the full EDID and signal features."
 aside: false
 journey: display
 ---
@@ -9,7 +9,7 @@ journey: display
 
 # Monitor / EDID guide chooser
 
-Choose Windows settings, an HDMI emulator or the monitor EEPROM. Keep the full EDID and signal features.
+Choose Windows settings, an HDMI emulator, the PG27AQDP firmware tool or the monitor EEPROM. Keep the full EDID and signal features.
 
 - **Identify:** [Identify EDID and the connection path](../../guides/monitor-spoofing/monitor-spoofing.md#how-monitor-identity-is-stored)
 - **Prepare:** [Backup and recovery requirements](../../guides/monitor-spoofing/monitor-spoofing.md#requirements)
@@ -22,7 +22,7 @@ Choose Windows settings, an HDMI emulator or the monitor EEPROM. Keep the full E
 %% hwid-journey:display
 flowchart TD
   accTitle: Monitor and EDID route
-  accDescr: Choose Windows settings, an HDMI emulator or the monitor EEPROM. Keep the full EDID and signal features.
+  accDescr: Choose Windows settings, an HDMI emulator, the PG27AQDP firmware tool or the monitor EEPROM. Keep the full EDID and signal features.
   j_display_start(["Monitor / EDID"])
   j_display_scope{"Which EDID method?"}
   j_display_device{"Which HDMI emulator?"}
@@ -38,6 +38,8 @@ flowchart TD
   class j_display_display_generic journey-limitation
   j_display_display_dichen["Dichen 5\nUntested"]
   class j_display_display_dichen journey-research
+  j_display_display_pg27aqdp["ASUS PG27AQDP tool\nMCM107 · verified here"]
+  class j_display_display_pg27aqdp journey-procedure
   j_display_display_eeprom["VG248QE EEPROM\n2013 report · untested here"]
   class j_display_display_eeprom journey-research
   j_display_display_displayport["Native DisplayPort / DDC\nHDMI-only limit"]
@@ -45,6 +47,7 @@ flowchart TD
   j_display_start --> j_display_scope
   j_display_scope --> j_display_display_windows
   j_display_scope -->|"HDMI emulator"| j_display_device
+  j_display_scope --> j_display_display_pg27aqdp
   j_display_scope --> j_display_display_eeprom
   j_display_scope --> j_display_display_displayport
   j_display_scope -->|"Input / method unknown"| j_display_identity
@@ -58,7 +61,8 @@ flowchart TD
   click j_display_display_drhdmi8k href "https://hwid.idkzal.cc/guides/monitor-spoofing/monitor-spoofing.html#dr-hdmi-8k" "Dr HDMI 8K" _self
   click j_display_display_generic href "https://hwid.idkzal.cc/guides/monitor-spoofing/monitor-spoofing.html#generic-hdmi-edid-adapters" "Generic adapter limits" _self
   click j_display_display_dichen href "https://hwid.idkzal.cc/guides/monitor-spoofing/monitor-spoofing.html#dichen-5-programmable-fuser" "Dichen research" _self
-  click j_display_display_eeprom href "https://hwid.idkzal.cc/guides/monitor-spoofing/monitor-spoofing.html#option-4-direct-monitor-eeprom-modification" "Direct EEPROM research" _self
+  click j_display_display_pg27aqdp href "https://hwid.idkzal.cc/guides/monitor-spoofing/monitor-spoofing.html#option-4-firmware-tool-for-the-asus-pg27aqdp" "PG27AQDP firmware tool" _self
+  click j_display_display_eeprom href "https://hwid.idkzal.cc/guides/monitor-spoofing/monitor-spoofing.html#option-5-direct-monitor-eeprom-modification" "Direct EEPROM research" _self
   click j_display_display_displayport href "https://hwid.idkzal.cc/guides/monitor-spoofing/monitor-spoofing.html#ddc-ddcci-hdmi-and-displayport" "DisplayPort / DDC limits" _self
 ```
 
@@ -83,9 +87,14 @@ flowchart TD
 - [Dichen research](../../guides/monitor-spoofing/monitor-spoofing.md#dichen-5-programmable-fuser) (research). **Dichen-specific actions remain untested** Authoritative capacity, utility and recovery evidence is missing.
   Topic names: Dichen 5 / DC240HZ5D-2: untested research.
 
+## Monitor firmware
+
+- [PG27AQDP firmware tool](../../guides/monitor-spoofing/monitor-spoofing.md#option-4-firmware-tool-for-the-asus-pg27aqdp) (procedure). **Verified on the studied unit; MCM107 firmware only** Changes the identity and EDID serial records. Keep the saved originals for Revert.
+  Topic names: ASUS PG27AQDP: firmware serial tool.
+
 ## Other paths
 
-- [Direct EEPROM research](../../guides/monitor-spoofing/monitor-spoofing.md#option-4-direct-monitor-eeprom-modification) (research). **ASUS VG248QE 2013 third-party report; untested here** Does not establish another board revision, monitor model or DisplayPort path.
+- [Direct EEPROM research](../../guides/monitor-spoofing/monitor-spoofing.md#option-5-direct-monitor-eeprom-modification) (research). **ASUS VG248QE 2013 third-party report; untested here** Does not establish another board revision, monitor model or DisplayPort path.
   Topic names: Direct EEPROM: exact monitor / input only.
 - [DisplayPort / DDC limits](../../guides/monitor-spoofing/monitor-spoofing.md#ddc-ddcci-hdmi-and-displayport) (limitation). **HDMI-only emulation does not intercept native DisplayPort** Working DDC/CI controls do not establish EEPROM write access.
   Topic names: DisplayPort / DDC path: hardware boundary.

@@ -15,7 +15,10 @@ const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
 const gettingStarted = '/guides/getting-started/getting-started'
 // New mirrored downloads are served from the built site as well as held in the
 // repository, so the local preview works before the first publication.
-const localDownloads = ['guides/monitor-spoofing/tools/monitorinfoview/monitorinfoview.zip']
+const localDownloads = [
+  'guides/monitor-spoofing/tools/monitorinfoview/monitorinfoview.zip',
+  'guides/monitor-spoofing/tools/pg27aqdp-serial/pg27aqdp-serial.exe',
+]
 // srcDir is the repo root, so there is no public/ folder; the logo travels as a data URI
 const logo = `data:image/svg+xml;base64,${fs.readFileSync(new URL('./theme/logo.svg', import.meta.url)).toString('base64')}`
 

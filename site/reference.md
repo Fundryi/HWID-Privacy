@@ -16,7 +16,7 @@ Use this index when you already know what you need. Each link opens the relevant
 | Storage | [Identify the controller first](/guides/ssd-spoofing/ssd-spoofing.html#which-controller-do-i-have), [M.2 prerequisites](/guides/ssd-spoofing/ssd-spoofing.html#prerequisites), [SATA prerequisites](/guides/ssd-spoofing/ssd-spoofing.html#prerequisites-1) |
 | Network adapters | [Intel tool caveats and backup](/guides/mac-spoofing/mac-spoofing.html#intel-tool-caveats-and-backup), [NIC method selector](/hardware/network.html) |
 | RAM | [Read-only views and programmer tools](/guides/ram-spoofing/ram-spoofing.html#tools) |
-| Monitor | [MonitorInfoView, AW EDID Editor and CRU](/guides/monitor-spoofing/monitor-spoofing.html#tools) |
+| Monitor | [MonitorInfoView, AW EDID Editor and CRU](/guides/monitor-spoofing/monitor-spoofing.html#tools); [PG27AQDP serial tool](/guides/monitor-spoofing/monitor-spoofing.html#option-4-firmware-tool-for-the-asus-pg27aqdp) |
 | Router | [Requirements and recovery access](/guides/arp-spoofing/arp-spoofing.html#requirements) |
 | Firmware variables | [Read-only inspection setup](/guides/nvram-spoofing/nvram-spoofing.html#requirements) |
 

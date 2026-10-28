@@ -194,13 +194,14 @@ Keyboards, mice, and sticks expose USB serials that fingerprinting stacks can re
 
 ### 7. **EDID / Monitor Spoofing**
 
-Changes the EDID identity (manufacturer, model, serial) a monitor reports to the system, through a software override or an inline emulator.
+Changes the EDID identity (manufacturer, model, serial) a monitor reports to the system, through a software override, an inline emulator, or a firmware tool for a supported monitor.
 
 - **Complete Guide**: [Monitor / EDID Guide](guides/monitor-spoofing/monitor-spoofing.md)
 - **Why It Matters**: Monitors contain EDID data with a potentially unique serial.
 - **Tools**:
   - **Fuser** or **Dr.HDMI** ([4K version](https://hdfury.com/product/dr-hdmi-4k/)).
   - EDID can be dumped, edited in a hex tool, and re-flashed via these devices.
+  - **ASUS ROG Swift PG27AQDP (firmware MCM107)**: this project's [pg27aqdp-serial tool](guides/monitor-spoofing/monitor-spoofing.md#option-4-firmware-tool-for-the-asus-pg27aqdp) changes the serial stored in the monitor through its own update interface, on HDMI and DisplayPort. No soldering, no emulator. Verified on the studied unit only.
 - **Result**: The monitor appears as a different device, reducing traceability.
 - Using a Fuser on 🍊 is not recommended, even with EDID spoofing.
 

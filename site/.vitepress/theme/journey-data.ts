@@ -458,11 +458,12 @@ export const journeys: ComponentJourney[] = [
   {
     guideId: 'display',
     title: 'Monitor and EDID route',
-    intro: 'Choose Windows settings, an HDMI emulator or the monitor EEPROM. Keep the full EDID and signal features.',
+    intro: 'Choose Windows settings, an HDMI emulator, the PG27AQDP firmware tool or the monitor EEPROM. Keep the full EDID and signal features.',
     // Source: monitor-spoofing.md#how-monitor-identity-is-stored, #prepare-a-safe-edited-edid,
     // #option-1-windows-software-override, #dr-hdmi-4k, #dr-hdmi-8k,
     // #generic-hdmi-edid-adapters, #dichen-5-programmable-fuser,
-    // #option-4-direct-monitor-eeprom-modification, #ddc-ddcci-hdmi-and-displayport.
+    // #option-4-firmware-tool-for-the-asus-pg27aqdp,
+    // #option-5-direct-monitor-eeprom-modification, #ddc-ddcci-hdmi-and-displayport.
     nodes: [
       { id: 'start', kind: 'start', label: 'Monitor / EDID' },
       question('scope', 'Which EDID method?'),
@@ -473,6 +474,7 @@ export const journeys: ComponentJourney[] = [
       leaf('display-drhdmi8k', 'Dr HDMI 8K', 'Check firmware / capacity'),
       leaf('display-generic', 'Other HDMI adapter', 'Programming unverified'),
       leaf('display-dichen', 'Dichen 5', 'Untested'),
+      leaf('display-pg27aqdp', 'ASUS PG27AQDP tool', 'MCM107 · verified here'),
       leaf('display-eeprom', 'VG248QE EEPROM', '2013 report · untested here'),
       leaf('display-displayport', 'Native DisplayPort / DDC', 'HDMI-only limit'),
     ],
@@ -480,6 +482,7 @@ export const journeys: ComponentJourney[] = [
       edge('start', 'scope'),
       edge('scope', 'display-windows'),
       edge('scope', 'device', 'HDMI emulator'),
+      edge('scope', 'display-pg27aqdp'),
       edge('scope', 'display-eeprom'),
       edge('scope', 'display-displayport'),
       edge('scope', 'identity', 'Input / method unknown'),
@@ -496,6 +499,7 @@ export const journeys: ComponentJourney[] = [
       topic('display-drhdmi8k', 'Dr HDMI 8K', 'procedure', 'Vendor mechanism; firmware and complete EDID capacity required', 'Firmware 1.4 adds documented 384 / 512-byte support. Signal-feature support is a separate device requirement.'),
       topic('display-generic', 'Generic adapter limits', 'limitation', 'No generic programming model or software verified', 'Presets or sink copy do not establish user-programmable EDID.'),
       topic('display-dichen', 'Dichen research', 'research', 'Dichen-specific actions remain untested', 'Authoritative capacity, utility and recovery evidence is missing.'),
+      topic('display-pg27aqdp', 'PG27AQDP firmware tool', 'procedure', 'Verified on the studied unit; MCM107 firmware only', 'Changes the identity and EDID serial records. Keep the saved originals for Revert.'),
       topic('display-eeprom', 'Direct EEPROM research', 'research', 'ASUS VG248QE 2013 third-party report; untested here', 'Does not establish another board revision, monitor model or DisplayPort path.'),
       topic('display-displayport', 'DisplayPort / DDC limits', 'limitation', 'HDMI-only emulation does not intercept native DisplayPort', 'Working DDC/CI controls do not establish EEPROM write access.'),
     ],
@@ -503,6 +507,7 @@ export const journeys: ComponentJourney[] = [
       { label: 'Identify & prepare', destinationIds: ['identity', 'prepare-edid'] },
       { label: 'Windows', destinationIds: ['display-windows'] },
       { label: 'Inline HDMI', destinationIds: ['display-drhdmi4k', 'display-drhdmi8k', 'display-generic', 'display-dichen'] },
+      { label: 'Monitor firmware', destinationIds: ['display-pg27aqdp'] },
       { label: 'Other paths', destinationIds: ['display-eeprom', 'display-displayport'] },
     ],
   },
