@@ -3,10 +3,10 @@
 use serde::Deserialize;
 use std::collections::HashSet;
 
-pub const SOURCE_PATH: &str = "../../docs/research/2026-10-07-anticheat-detection-database.json";
+pub const SOURCE_PATH: &str = "assets/anticheat-database.json";
 pub const EMBEDDED: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/research/2026-10-07-anticheat-detection-database.json"
+    "/assets/anticheat-database.json"
 ));
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]

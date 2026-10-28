@@ -1,0 +1,710 @@
+{
+  "version": 1,
+  "updated": "2026-10-07",
+  "anticheats": [
+    {
+      "id": "eac",
+      "name": "Easy Anti-Cheat",
+      "vendor": "Epic Games / Easy Anti-Cheat Oy",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["EasyAntiCheat", "EasyAntiCheatSys", "EasyAntiCheat_EOS", "EasyAntiCheat_EOSSys"],
+      "drivers": [
+        {"file": "EasyAntiCheat.sys", "path": "C:\\Program Files (x86)\\EasyAntiCheat\\EasyAntiCheat.sys"},
+        {"file": "EasyAntiCheat_EOS.sys", "path": "C:\\Program Files (x86)\\EasyAntiCheat_EOS\\EasyAntiCheat_EOS.sys"}
+      ],
+      "processes": ["EasyAntiCheat.exe", "EasyAntiCheat_EOS.exe", "start_protected_game.exe"],
+      "notes": "Demand-start kernel anti-cheat. Legacy and EOS use shared machine-wide SCM names; games register a ProductId with the shared service rather than receiving a unique per-game SCM name. Game-local setup/bootstrap files live below each game's EasyAntiCheat folder.",
+      "games_sample": ["Fortnite", "Apex Legends", "Elden Ring", "Rust", "Rocket League"],
+      "sources": [
+        "[A] https://dev.epicgames.com/docs/epic-online-services/trust-and-safety/anti-cheat-interfaces/anti-cheat-interfaces",
+        "[A] https://dev.epicgames.com/docs/epic-online-services/trust-and-safety/anti-cheat-interfaces/anti-cheat-integration-check-list",
+        "[A] https://www.easy.ac/support/game/guides/eac-windows-service",
+        "[C] https://superuser.com/questions/1870179/how-can-i-prevent-windows-from-owning-a-sys-file-under-the-system-process"
+      ]
+    },
+    {
+      "id": "battleye",
+      "name": "BattlEye",
+      "vendor": "BattlEye Innovations e.K.",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["BEService", "BEDaisy"],
+      "drivers": [
+        {"file": "BEDaisy.sys", "path": "C:\\Program Files (x86)\\Common Files\\BattlEye\\BEDaisy.sys"}
+      ],
+      "processes": ["BEService.exe", "BEService_x64.exe", "BELauncher.exe"],
+      "notes": "The shared BEService and demand-start BEDaisy driver run only for a protected title. Per-game launchers are often named <game>_BE.exe, so launcher matching must be path/signature-qualified rather than wildcarded globally.",
+      "games_sample": ["PUBG: Battlegrounds", "Fortnite", "Rainbow Six Siege", "Destiny 2", "Grand Theft Auto Online"],
+      "sources": [
+        "[A] https://www.battleye.com/support/faq/",
+        "[A] https://www.epicgames.com/help/en-US/c-Category_TechnicalSupport/c-ThirdPartySupport/battleye-a000086631",
+        "[C] https://www.joesandbox.com/analysis/1880349/0/pdfexecutive"
+      ]
+    },
+    {
+      "id": "riot-vanguard",
+      "name": "Riot Vanguard",
+      "vendor": "Riot Games",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": true,
+      "services": ["vgk", "vgc"],
+      "drivers": [
+        {"file": "vgk.sys", "path": "C:\\Program Files\\Riot Vanguard\\vgk.sys"}
+      ],
+      "processes": ["vgc.exe", "vgtray.exe"],
+      "notes": "vgk is a system/boot-start driver and can remain loaded with no Riot game or tray process running. vgc is the companion user-mode service. Driver/service state is authoritative; vgtray.exe is only a convenience signal.",
+      "games_sample": ["VALORANT", "League of Legends"],
+      "sources": [
+        "[A] https://support.riotgames.com/en-us/riot/performance/uninstall-and-disable-vanguard",
+        "[A] https://www.riotgames.com/en/news/a-message-about-vanguard-from-our-security-privacy-teams",
+        "[S] https://github.com/Elmasunder/BNVANGUARD"
+      ]
+    },
+    {
+      "id": "faceit",
+      "name": "FACEIT Anti-Cheat",
+      "vendor": "ESL FACEIT Group",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": true,
+      "services": ["FACEIT", "FACEITService"],
+      "drivers": [
+        {"file": "FACEIT_AC.sys", "path": "C:\\Program Files\\FACEIT AC\\FACEIT_AC.sys"},
+        {"file": "FACEIT.sys", "path": "C:\\Windows\\System32\\drivers\\FACEIT.sys"}
+      ],
+      "processes": ["faceitclient.exe", "faceitservice.exe", "FACEIT_Start_Protected_Game.exe"],
+      "notes": "Current consumer installs expose FACEITService and FACEIT_AC.sys; FACEIT/FACEIT.sys are observed older driver-service names. The driver is documented as continuously running once enabled, so absence of the client process does not clear the gate.",
+      "games_sample": ["Counter-Strike 2 on FACEIT", "FACEIT Labs partner titles"],
+      "sources": [
+        "[A] https://labs-docs.faceit.com/AntiCheat/ClientApp/",
+        "[A] https://www.faceit.com/en/anti-cheat-eula",
+        "[C] https://www.systemlookup.com/O23/8184-FACEITService_exe.html",
+        "[C] https://learn.microsoft.com/en-us/answers/questions/3793704/windows-wont-boot-due-to-faceit-sys-driver",
+        "[C] https://www.advanceduninstaller.com/FACEIT-Anti-Cheat-aa373fa76392cbc3925b38a114f65695-application.htm"
+      ]
+    },
+    {
+      "id": "ricochet",
+      "name": "RICOCHET Anti-Cheat",
+      "vendor": "Activision",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["atvi-randgrid", "atvi-randgrid_sr", "atvi-randgrid_msstore", "atvi-randgrid_dev_loose", "atvi-brynhildr"],
+      "drivers": [
+        {"file": "randgrid.sys", "path": "<Call of Duty install directory>\\randgrid.sys"},
+        {"file": "randgrid.sys", "path": "C:\\ProgramData\\Battle.net_components\\<randgrid component>\\randgrid.sys"},
+        {"file": "Aurum.sys", "path": "<legacy/unconfirmed deployment path>"}
+      ],
+      "processes": ["cod.exe"],
+      "notes": "The current verified driver is randgrid.sys with store/channel-specific atvi-randgrid service names. atvi-brynhildr and Aurum.sys are legacy community-observed names, not guaranteed current. The driver starts with Call of Duty and shuts down when the game exits.",
+      "games_sample": ["Call of Duty: Black Ops 7", "Call of Duty: Black Ops 6", "Call of Duty: Warzone", "Call of Duty: Modern Warfare III"],
+      "sources": [
+        "[A] https://www.callofduty.com/ca/en/warzone/ricochet",
+        "[A] https://support.activision.com/content/atvi/support/web/no/articles/ricochet-overview.html",
+        "[C] https://blizztrack.com/config/randgridcornav/pc/dc049eac705e2c3e537ff92702f01c97",
+        "[C] https://github.com/somacaru/call-of-duty-fix/blob/master/docs/EXECUTION_CHECKLIST.md",
+        "[C] https://steamcommunity.com/app/1938090/discussions/0/4033600533816530936/",
+        "[C] https://learn.microsoft.com/en-us/answers/questions/4303599/how-to-fix-blue-screen-error",
+        "[C] https://us.forums.blizzard.com/en/blizzard/t/cod-blzbntbna00000012blzbntagt00000960blzbntbgs7ffff01/19773/1370",
+        "[S] https://www.unknowncheats.me/forum/anti-cheat-bypass/473691-activision-ricochet-driver.html"
+      ]
+    },
+    {
+      "id": "valve-vac",
+      "name": "Valve Anti-Cheat / VACnet",
+      "vendor": "Valve Corporation",
+      "gate": "DONT_GATE",
+      "kernel_mode": false,
+      "boot_resident": false,
+      "services": [],
+      "drivers": [],
+      "processes": ["steam.exe", "steamservice.exe"],
+      "notes": "VAC modules are delivered through Steam and/or the protected game; VACnet is server-side analysis. There is no distinct kernel driver or reliable VAC-only process. Steam processes are shared by all Steam use and must never be used as a gate signal.",
+      "games_sample": ["Counter-Strike 2", "Dota 2", "Team Fortress 2"],
+      "sources": [
+        "[A] https://partner.steamgames.com/doc/features/anticheat/vac_integration",
+        "[C] https://github.com/danielkrupinski/VAC",
+        "[S] https://whereisr0da.github.io/blog/posts/2021-03-10-quick-vac/"
+      ]
+    },
+    {
+      "id": "ea-javelin",
+      "name": "EA Javelin Anticheat",
+      "vendor": "Electronic Arts",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["EAAntiCheatService", "EAAntiCheat"],
+      "drivers": [
+        {"file": "eaanticheat.sys", "path": "C:\\Windows\\System32\\drivers\\eaanticheat.sys"}
+      ],
+      "processes": ["EAAntiCheat.GameService.exe", "EAAntiCheat.GameServiceLauncher.exe", "EAAntiCheat.Installer.exe"],
+      "notes": "Rebranded from EA anticheat; binaries retain EAAntiCheat names. The user-mode service and kernel driver are demand-start and EA states that every anti-cheat process shuts down with the protected game. Shared installation is normally C:\\Program Files\\EA\\AC with launcher copies in game directories.",
+      "games_sample": ["EA SPORTS FC", "Battlefield 2042", "Battlefield 6", "F1", "Madden NFL"],
+      "sources": [
+        "[A] https://www.ea.com/security/news/eaac-deep-dive",
+        "[A] https://www.ea.com/news/ea-javelin-anticheat-2026-update",
+        "[A] https://help.ea.com/en/articles/platforms/pc-ea-anticheat/",
+        "[C] https://forums.ea.com/discussions/fc-26-technical-issues-en/fc-26-will-not-launch-%E2%80%94-eaanticheatservice-error-87/13645644"
+      ]
+    },
+    {
+      "id": "tencent-ace",
+      "name": "Anti-Cheat Expert (ACE)",
+      "vendor": "Tencent",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["AntiCheatExpert Service", "AntiCheatExpert Protection", "ACE-BASE", "ACE-GAME", "ACE-BOOT", "ACE-CORE", "ACE-SSC-DRV64"],
+      "drivers": [
+        {"file": "ACE-BASE.sys", "path": "C:\\Windows\\System32\\drivers\\ACE-BASE.sys"},
+        {"file": "ACE-GAME.sys", "path": "C:\\Windows\\System32\\drivers\\ACE-GAME.sys"},
+        {"file": "ACE-BOOT.sys", "path": "C:\\Windows\\System32\\drivers\\ACE-BOOT.sys"},
+        {"file": "ACE-ADVT.sys", "path": "C:\\Windows\\System32\\drivers\\ACE-ADVT.sys"},
+        {"file": "ACE-SSC-DRV64.sys", "path": "C:\\Windows\\System32\\drivers\\ACE-SSC-DRV64.sys"}
+      ],
+      "processes": ["SGuard64.exe", "SGuardSvc64.exe", "ACE-Service64.exe", "ACE-Helper.exe", "ACE-Tray.exe"],
+      "notes": "ACE is installed under C:\\Program Files\\AntiCheatExpert and/or inside a game's AntiCheatExpert tree. Products deploy different subsets of the BASE/GAME/BOOT/CORE/ADVT/SSC driver families. Services are normally demand-start but can linger briefly after a game exits.",
+      "games_sample": ["Delta Force", "Arena Breakout: Infinite", "Wuthering Waves", "Tarisland", "The First Descendant"],
+      "sources": [
+        "[A] https://down.anticheatexpert.com/docs/ACE-files/acekeeper/privacy_policy_intl.pdf",
+        "[A] https://down.anticheatexpert.com/docs/ACE-files/acekeeper/terms_service_intl.pdf",
+        "[C] https://github.com/xiaoyeuzixi/ace-czr/blob/main/03_ACE%E5%A4%84%E7%90%86%E6%BA%90%E7%A0%81%E4%B8%8E%E5%88%86%E6%9E%90/%E5%BD%93%E5%89%8D%E6%B8%B8%E6%88%8F%E5%88%86%E6%9E%90/ace_analysis_report.md",
+        "[C] https://github.com/poli0981/frameledger/blob/main/docs/19_SAFETY_AND_ANTICHEAT.md",
+        "[C] https://www.reddit.com/r/BloodHunt/comments/pjof7l/uninstalling_the_game_does_not_remove_the_anticheat/"
+      ]
+    },
+    {
+      "id": "xigncode3",
+      "name": "XIGNCODE3",
+      "vendor": "Wellbia.com Co., Ltd.",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["xhunter1", "xhunter2"],
+      "drivers": [
+        {"file": "xhunter1.sys", "path": "C:\\Windows\\xhunter1.sys"},
+        {"file": "xhunter2.sys", "path": "C:\\Windows\\xhunter2.sys"}
+      ],
+      "processes": ["xcoronahost.xem"],
+      "notes": "Demand-start driver written to the Windows directory and normally unloaded near game exit. x3.xem and helper .xem modules are commonly mapped inside the game and are not always separately enumerable processes. xhunter2 is a 2026 driver-family successor observed alongside xhunter1.",
+      "games_sample": ["Black Desert Online", "Trove", "3on3 FreeStyle", "DJMAX RESPECT V"],
+      "sources": [
+        "[A] https://wellbia.com/?action=SiteComp&module=Html&sSubNo=1",
+        "[A] https://wellbia.com/index.php?action=SiteBoard&iBrdNo=3&module=Board&sMode=SELECT_FORM",
+        "[C] https://github.com/miyakejima/xigncode3-blackdesert",
+        "[C] https://github.com/BlackSnufkin/AxHunter"
+      ]
+    },
+    {
+      "id": "wellbia-uncheater",
+      "name": "UNCHEATER",
+      "vendor": "Wellbia.com Co., Ltd.",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["ucldr_battlegrounds_gl", "xhunter1", "xhunter2"],
+      "drivers": [
+        {"file": "xhunter1.sys", "path": "C:\\Windows\\xhunter1.sys"},
+        {"file": "xhunter2.sys", "path": "C:\\Windows\\xhunter2.sys"},
+        {"file": "uncheater.sys", "path": "C:\\Windows\\System32\\drivers\\uncheater.sys"}
+      ],
+      "processes": ["ucsvc.exe", "ucldr_battlegrounds_gl.exe"],
+      "notes": "Lighter Wellbia product that shares the xhunter driver family with XIGNCODE3. Typical files are under C:\\Program Files\\Common Files\\Uncheater; service names can be game-specific ucldr_<title> variants.",
+      "games_sample": ["PUBG: Battlegrounds"],
+      "sources": [
+        "[A] https://uncheater-faq.wellbia.com/index_kr.html",
+        "[C] https://github.com/MicrosoftDocs/windows-driver-docs/blob/staging/windows-driver-docs-pr/ifs/allocated-altitudes.md",
+        "[S] https://www.reddit.com/r/PUBATTLEGROUNDS/comments/homi63/pubg_is_installing_some_sneakypeaky_like_service/"
+      ]
+    },
+    {
+      "id": "nprotect-gameguard",
+      "name": "nProtect GameGuard",
+      "vendor": "INCA Internet Co., Ltd.",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["npggsvc"],
+      "drivers": [
+        {"file": "npggNT.des", "path": "<game directory>\\GameGuard\\npggNT.des"},
+        {"file": "npggNT64.des", "path": "<game directory>\\GameGuard\\npggNT64.des"},
+        {"file": "npptNT2.sys", "path": "C:\\Windows\\System32\\drivers\\npptNT2.sys"}
+      ],
+      "processes": ["GameMon.des", "GameMon64.des", "GameGuard.des", "GameGuard64.des", "ggerror.des", "npgmup.des"],
+      "notes": "GameGuard uses PE images with .des extensions, including kernel components. npggsvc commonly points to GameMon.des copied into System32/SysWOW64; other modules remain in each game's GameGuard folder. It starts with the game.",
+      "games_sample": ["Helldivers 2", "Phantasy Star Online 2: New Genesis", "UNDECEMBER", "Aion (selected regions)"],
+      "sources": [
+        "[A] https://gameguard.nprotect.com/",
+        "[A] https://www.inca.co.kr/include_file/pdf_down/nProtect_GameGuard_en.pdf",
+        "[C] https://www.manalyzer.org/report/027d09c7639e8c2b2ae3ae91262ac00af4d81878352b423090d8ad63ebf7deb2",
+        "[S] https://steamcommunity.com/app/1549250/discussions/0/3388420307302919948/"
+      ]
+    },
+    {
+      "id": "ahnlab-hackshield",
+      "name": "AhnLab HackShield",
+      "vendor": "AhnLab, Inc.",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["EagleXNt", "EagleX64"],
+      "drivers": [
+        {"file": "EagleXNt.sys", "path": "C:\\Windows\\System32\\drivers\\EagleXNt.sys"},
+        {"file": "EagleX64.sys", "path": "C:\\Windows\\System32\\drivers\\EagleX64.sys"}
+      ],
+      "processes": ["HSUpdate.exe", "hslogmgr.exe"],
+      "notes": "Legacy/discontinued commercial product still present in older live games and old installations. The main scanner is commonly an in-process SDK (EhSvc.dll); updater/log executables are not sufficient alone to prove the driver is active.",
+      "games_sample": ["MapleStory (legacy deployments)", "Combat Arms (legacy)", "Dragon Nest (legacy)"],
+      "sources": [
+        "[A] https://download.ahnlab.com/asecReport/ASEC_Report_201009.pdf",
+        "[C] https://sourceforge.net/projects/maplestoryv95/files/MapleStory/HShield/",
+        "[C] https://www.herdprotect.com/eaglexnt.sys-94da2105847bd2f4985ab09089b14a487e3a0629.aspx",
+        "[S] https://www.bleepingcomputer.com/forums/t/523581/bsod/"
+      ]
+    },
+    {
+      "id": "esea",
+      "name": "ESEA Client Anti-Cheat",
+      "vendor": "E-Sports Entertainment / ESL FACEIT Group",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": true,
+      "services": ["ESEADriver2"],
+      "drivers": [
+        {"file": "ESEADriver2.sys", "path": "%LOCALAPPDATA%\\Temp\\ESEADriver2.sys"}
+      ],
+      "processes": ["eseaclient.exe", "eseaclientsteam.exe"],
+      "notes": "Historical ESEA kernel driver has been observed as a system-start service staged from the user's Temp directory. The current ESEA platform is integrated into the ESL FACEIT ecosystem, but legacy/current client installations remain detectable by these names.",
+      "games_sample": ["Counter-Strike", "Counter-Strike 2 ESEA leagues"],
+      "sources": [
+        "[C] https://www.bleepingcomputer.com/forums/t/608101/claymore-cpu-miner-fried-my-gfx-card/",
+        "[C] https://www.bleepingcomputer.com/forums/t/331124/resident-shield-alertfake-avg/",
+        "[S] https://www.shouldiremoveit.com/esea-client-109701-program.aspx"
+      ]
+    },
+    {
+      "id": "cevo-paladin",
+      "name": "CEVO Client / Paladin",
+      "vendor": "CEVO, Inc.",
+      "gate": "SHOULD_GATE",
+      "kernel_mode": false,
+      "boot_resident": false,
+      "services": [],
+      "drivers": [],
+      "processes": [],
+      "notes": "Historical tournament client. No trustworthy current SCM, driver, or executable basename was recovered. Do not add guessed CEVOClient names to a production detector; retain this entry as an explicit coverage/re-verification item.",
+      "games_sample": ["Counter-Strike", "Counter-Strike: Global Offensive (historical)"],
+      "sources": [
+        "[C] https://sear.unisq.edu.au/8381/1/Thomas_2009.pdf",
+        "[S] https://www.elitepvpers.com/forum/counter-strike-trading/3664453-hexui-cs-go-hack-reseller.html"
+      ]
+    },
+    {
+      "id": "hoyo-protect",
+      "name": "miHoYo / HoYoverse Protect",
+      "vendor": "miHoYo / HoYoverse",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["mhyprot2", "HoYoProtect"],
+      "drivers": [
+        {"file": "mhyprot2.sys", "path": "%TEMP%\\mhyprot2.sys or <game directory>\\mhyprot2.sys"},
+        {"file": "mhyprotect.sys", "path": "%TEMP%\\mhyprotect.sys or <game directory>\\mhyprotect.sys"},
+        {"file": "HoYoKProtect.sys", "path": "C:\\Windows\\System32\\drivers\\HoYoKProtect.sys"}
+      ],
+      "processes": ["GenshinImpact.exe", "StarRail.exe", "ZenlessZoneZero.exe"],
+      "notes": "mhyprot2/mhyprotect are older Genshin-era names; HoYoKProtect/HoYoProtect is the newer driver/service family. Components start with the game rather than at boot, but stale service/file registrations can remain after uninstall.",
+      "games_sample": ["Genshin Impact", "Honkai: Star Rail", "Zenless Zone Zero", "Honkai Impact 3rd"],
+      "sources": [
+        "[A] https://www.hoyolab.com/article/164528",
+        "[C] https://www.trendmicro.com/vinfo/us/threat-encyclopedia/malware/trojan.win64.mhyprotinst.b",
+        "[C] https://www.systemlookup.com/Drivers/13096-HoYoKProtect_sys.html",
+        "[C] https://github.com/keowu/mhyprot2"
+      ]
+    },
+    {
+      "id": "denuvo-anticheat",
+      "name": "Denuvo Anti-Cheat",
+      "vendor": "Irdeto / Denuvo",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["Denuvo Anti-Cheat", "Denuvo Anti-Cheat Update Service"],
+      "drivers": [
+        {"file": "denuvo-anti-cheat.sys", "path": "C:\\Windows\\System32\\drivers\\denuvo-anti-cheat.sys"}
+      ],
+      "processes": ["denuvo-anti-cheat-update-service.exe", "denuvo-anti-cheat-update-service-launcher.exe"],
+      "notes": "The update service may be installed persistently, but Irdeto states that the kernel driver runs only while a protected game/mode is active. Typical installation root is C:\\Program Files\\Denuvo Anti-Cheat.",
+      "games_sample": ["eFootball", "Sniper Elite: Resistance", "THE FINALS", "ARC Raiders"],
+      "sources": [
+        "[A] https://irdeto.com/video-games/denuvo-anti-cheat/kernel-anti-cheat",
+        "[A] https://irdeto.com/media/q-a-about-denuvo-anti-cheat-and-windows-kernel-mode-drivers",
+        "[C] https://www.systemlookup.com/Drivers/12549-denuvo_anti_cheat_sys.html",
+        "[C] https://steamcommunity.com/app/2169200/discussions/1/592896539385447179/"
+      ]
+    },
+    {
+      "id": "denuvo-antitamper",
+      "name": "Denuvo Anti-Tamper / DRM",
+      "vendor": "Irdeto / Denuvo",
+      "gate": "DONT_GATE",
+      "kernel_mode": false,
+      "boot_resident": false,
+      "services": [],
+      "drivers": [],
+      "processes": [],
+      "notes": "Separate product from Denuvo Anti-Cheat. It is normally integrated into the game executable and has no stable standalone runtime identifier. Do not infer the anti-cheat driver from the presence of Denuvo Anti-Tamper or a Denuvo-protected game.",
+      "games_sample": ["Many single-player Denuvo-protected titles"],
+      "sources": [
+        "[A] https://irdeto.com/media/q-a-about-denuvo-anti-cheat-and-windows-kernel-mode-drivers",
+        "[S] https://www.pcgamingwiki.com/wiki/Denuvo"
+      ]
+    },
+    {
+      "id": "equ8",
+      "name": "EQU8 Anti-Cheat",
+      "vendor": "Int3 Software AB / 1047 Games",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["equ8_helper", "EQU8_HELPER_0", "EQU8_HELPER_13", "EQU8_HELPER_19", "EQU8_HELPER_36", "EQU8_HELPER_39", "EQU8_13", "equ8_tabg2"],
+      "drivers": [
+        {"file": "equ8_helper.sys", "path": "C:\\Windows\\System32\\drivers\\equ8_helper.sys"},
+        {"file": "EQU8_HELPER_0.sys", "path": "C:\\Windows\\System32\\drivers\\EQU8_HELPER_0.sys"},
+        {"file": "EQU8_HELPER_13.sys", "path": "C:\\Windows\\System32\\drivers\\EQU8_HELPER_13.sys"},
+        {"file": "EQU8_HELPER_19.sys", "path": "C:\\Windows\\System32\\drivers\\EQU8_HELPER_19.sys"},
+        {"file": "EQU8_HELPER_36.sys", "path": "C:\\Windows\\System32\\drivers\\EQU8_HELPER_36.sys"},
+        {"file": "EQU8_HELPER_39.sys", "path": "C:\\Windows\\System32\\drivers\\EQU8_HELPER_39.sys"}
+      ],
+      "processes": ["anticheat.x64.equ8.exe", "anticheat.x86.equ8.exe", "agent.x64.equ8.exe", "agent.x86.equ8.exe"],
+      "notes": "EQU8 uses game/build-specific numbered helper service and driver names; observed suffixes include 0, 13, 19, 36, and 39, and user-mode service names can be game-specific. Files and agents commonly live under C:\\ProgramData\\EQU8\\<game>\\bin. Implement prefix-plus-signer validation rather than freezing only this suffix list.",
+      "games_sample": ["Splitgate", "Diabotical", "Totally Accurate Battlegrounds", "Dual Universe"],
+      "sources": [
+        "[C] https://aftermathlabs.net/blog/12/08/2021/",
+        "[C] https://any.run/report/2f21983a7a559ee06ee2382f5d4579f91f6818b6c2e599391645075418ca76cc/18c6b239-445a-44bb-bb11-e77292ef0aae",
+        "[S] https://www.file.net/process/anticheat.x64.equ8.exe.html"
+      ]
+    },
+    {
+      "id": "punkbuster",
+      "name": "PunkBuster",
+      "vendor": "Even Balance, Inc.",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": true,
+      "services": ["PnkBstrA", "PnkBstrB", "PnkBstrK"],
+      "drivers": [
+        {"file": "PnkBstrK.sys", "path": "C:\\Windows\\System32\\drivers\\PnkBstrK.sys"}
+      ],
+      "processes": ["PnkBstrA.exe", "PnkBstrB.exe"],
+      "notes": "PnkBstrA is designed to auto-start with Windows; PnkBstrB and the demand-loaded PnkBstrK driver are used while playing on PunkBuster-enabled servers. On 64-bit systems executables can appear under System32 or SysWOW64.",
+      "games_sample": ["Battlefield 3", "Battlefield 4", "Battlefield Hardline", "Wolfenstein: Enemy Territory"],
+      "sources": [
+        "[A] https://www.evenbalance.com/downloads.php",
+        "[A] https://www.evenbalance.com/faq-players.html",
+        "[C] https://forums.ea.com/discussions/battlefield-franchise-discussion-en/pnkbstrtb-exe-disappearing-from-services-msc/6248415/replies/6248421",
+        "[C] https://www.winehq.org/pipermail/wine-bugs/2011-May/275804.html"
+      ]
+    },
+    {
+      "id": "nexon-ngs",
+      "name": "Nexon Game Security / NGS-X",
+      "vendor": "NEXON Korea Corporation",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["NGS"],
+      "drivers": [
+        {"file": "BlackCat64.sys", "path": "<game directory>\\BlackCipher or Plugins\\x86_64\\grap\\BlackCat64.sys"}
+      ],
+      "processes": ["NGService.exe", "BlackCipher.aes", "BlackCipher64.aes", "grap-core64.aes", "grap-communicator64.aes"],
+      "notes": "NGService is commonly installed at C:\\ProgramData\\Nexon\\NGS\\NGService.exe or inside a game tree. Older BlackCipher and newer NGS-X/GRAP packages differ; BlackCat64.sys is directly observed in a current NGS-X package.",
+      "games_sample": ["MapleStory", "The First Descendant", "Blue Archive"],
+      "sources": [
+        "[A] https://tfd.nexon.com/en/guide/3079929",
+        "[C] https://www.systemlookup.com/O23/7503-NGService_exe.html",
+        "[C] https://github.com/dspp779/CyderBits/blob/main/docs/games/maplestory/classic-grap-ngs-x.md",
+        "[S] https://steamcommunity.com/app/2073850/discussions/0/4299321616501113134/"
+      ]
+    },
+    {
+      "id": "netease-neac",
+      "name": "NetEase Anti-Cheat / NEAC Protect",
+      "vendor": "NetEase Games",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["NeacSafe64", "NeacSafe64_ex"],
+      "drivers": [
+        {"file": "NeacSafe64.sys", "path": "<game directory or temporary staging path>\\NeacSafe64.sys"},
+        {"file": "NeacSafe64_ex.sys", "path": "<game directory or temporary staging path>\\NeacSafe64_ex.sys"}
+      ],
+      "processes": ["NeacClient.exe"],
+      "notes": "Naraka packages ship NeacClient and both driver variants. Some newer games stage the driver from a temporary path and delete the on-disk image after load, so loaded-module/service enumeration is required and file existence is insufficient.",
+      "games_sample": ["NARAKA: BLADEPOINT", "Marvel Rivals", "FragPunk"],
+      "sources": [
+        "[C] https://egdata.app/builds/67a1f3e212722509fd2b46e6/files",
+        "[C] https://github.com/SteamDatabase/FileDetectionRuleSets/blob/main/rules.ini",
+        "[C] https://vms.drweb.co.jp/virus/?i=32620208",
+        "[S] https://rawcheats.com/blog/how-marvel-rivals-anti-cheat-works-neacsafe-explained"
+      ]
+    },
+    {
+      "id": "esportal",
+      "name": "Esportal Anti-Cheat",
+      "vendor": "Esportal AB",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": true,
+      "services": ["EspoDriver"],
+      "drivers": [
+        {"file": "EspoDriver.sys", "path": "C:\\Windows\\System32\\drivers\\EspoDriver.sys"}
+      ],
+      "processes": [],
+      "notes": "EspoDriver is a boot-time kernel anti-cheat driver and can remain loaded after the Esportal client is closed or uninstalled. No stable current client executable basename was verified strongly enough for inclusion.",
+      "games_sample": ["Counter-Strike 2 on Esportal"],
+      "sources": [
+        "[C] https://www.systemlookup.com/Drivers/12749-EspoDriver_sys.html",
+        "[C] https://learn.microsoft.com/en-us/answers/questions/4149698/unable-to-delete-espodriver-sys",
+        "[S] https://www.reddit.com/r/GlobalOffensive/comments/ts42p9/esportal_anticheat_and_mm_failing_to_find_servers/"
+      ]
+    },
+    {
+      "id": "mygames-anticheat",
+      "name": "MY.GAMES / Mail.Ru Anti-Cheat (MYAC/MRAC)",
+      "vendor": "MY.GAMES / Mail.Ru",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": true,
+      "services": ["mracsvc", "mracdrv", "myacsvc", "myacdrv1"],
+      "drivers": [
+        {"file": "mracdrv.sys", "path": "C:\\Windows\\System32\\drivers\\mracdrv.sys"},
+        {"file": "mracdrv1.sys", "path": "C:\\Windows\\System32\\drivers\\mracdrv1.sys"},
+        {"file": "myacdrv1.sys", "path": "C:\\Windows\\System32\\drivers\\myacdrv1.sys"}
+      ],
+      "processes": ["mracsvc.exe", "myacsvc.exe"],
+      "notes": "Older deployments use MRAC/mrac names; newer MY.GAMES deployments use MYAC/myac names. Service components normally live in System32 and can persist or start at boot after the parent game closes.",
+      "games_sample": ["Warface", "Conqueror's Blade", "War Robots: Frontiers"],
+      "sources": [
+        "[A] https://documentation.my.games/hotbox/devdocs/pdfcopy/en/373.20220726.pdf",
+        "[C] https://github.com/MicrosoftDocs/windows-driver-docs/blob/staging/windows-driver-docs-pr/ifs/allocated-altitudes.md",
+        "[C] https://www.winehq.org/pipermail/wine-bugs/2019-April/513379.html",
+        "[S] https://steamcommunity.com/app/1491000/discussions/0/598520761350680323/"
+      ]
+    },
+    {
+      "id": "sard",
+      "name": "SARD Anti-Cheat",
+      "vendor": "SARD Anti-Cheat",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": [],
+      "drivers": [
+        {"file": "sard.sys", "path": "<game directory>\\sard.sys"}
+      ],
+      "processes": [],
+      "notes": "Vendor documentation confirms customizable kernel monitoring that runs only with the protected game. The only stable public filename recovered is sard.sys; SCM and user-process names are product-specific and remain unverified.",
+      "games_sample": ["Caliber", "Lineage 2", "Point Blank", "Ragnarok Online"],
+      "sources": [
+        "[A] https://doc.sard.ac/Product_Overview.html",
+        "[A] https://doc.sard.ac/FAQ/general.html",
+        "[A] https://playcaliber.com/en/news/1172/new-anti-cheat-and-players-myths-lets-bust-popular-misconceptions/"
+      ]
+    },
+    {
+      "id": "frost-security",
+      "name": "4game Guard / Frost Security",
+      "vendor": "Innova / 4game",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": [],
+      "drivers": [
+        {"file": "frost_32.sys", "path": "<game directory>\\Frost\\frost_32.sys"},
+        {"file": "frost_64.sys", "path": "<game directory>\\Frost\\frost_64.sys"}
+      ],
+      "processes": ["FrostUpdater.exe"],
+      "notes": "Game-local kernel drivers and updater. 4game launcher processes are shared launcher components and are not sufficient proof that Frost is active. No stable SCM driver name was recovered.",
+      "games_sample": ["Aion (4game regions)", "Lineage II (4game regions)"],
+      "sources": [
+        "[C] https://4gameforum.com/threads/744179/",
+        "[A] https://eu.4gameforum.com/threads/4056/",
+        "[S] https://www.displaylink.org/forum/showthread.php?nojs=1&p=80138"
+      ]
+    },
+    {
+      "id": "xtrap",
+      "name": "X-Trap",
+      "vendor": "Wiselogic / WiseGuard",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["XTrapD13", "XTrapD14", "XTrapD15", "XTrapD16", "XTrapD21"],
+      "drivers": [
+        {"file": "XTrapD13.sys", "path": "C:\\Windows\\System32\\drivers\\XTrapD13.sys"},
+        {"file": "XTrapD14.sys", "path": "C:\\Windows\\System32\\drivers\\XTrapD14.sys"},
+        {"file": "XTrapD15.sys", "path": "C:\\Windows\\System32\\drivers\\XTrapD15.sys"},
+        {"file": "XTrapD16.sys", "path": "C:\\Windows\\System32\\drivers\\XTrapD16.sys"},
+        {"file": "XTrapD21.sys", "path": "C:\\Windows\\System32\\drivers\\XTrapD21.sys"}
+      ],
+      "processes": ["XTrap.xt"],
+      "notes": "Legacy but still encountered in live regional MMOs. The numbered XTrapD driver changes by product/version; XTrap.xt is an executable despite its extension. Treat unlisted XTrapD<number> variants as a signed-prefix detection candidate.",
+      "games_sample": ["CrossFire (selected regions)", "Silkroad Online", "Fiesta Online", "Lost Saga"],
+      "sources": [
+        "[C] https://www.reviversoft.com/processes/xtrap.xt",
+        "[C] https://www.file.net/process/xtrap.xt.html",
+        "[S] https://www.solarstrike.net/phpBB3/viewtopic.php?p=7597"
+      ]
+    },
+    {
+      "id": "ksophon",
+      "name": "KSophon Anti-Cheat",
+      "vendor": "Perfect World / Hotta Studio",
+      "gate": "MUST_GATE",
+      "kernel_mode": true,
+      "boot_resident": false,
+      "services": ["ksophon_x64"],
+      "drivers": [
+        {"file": "ksophon_x64.sys", "path": "C:\\Windows\\System32\\drivers\\ksophon_x64.sys"}
+      ],
+      "processes": [],
+      "notes": "Kernel driver observed with Tower of Fantasy and reported to remain after uninstall. No independently verifiable user-mode process basename was recovered.",
+      "games_sample": ["Tower of Fantasy"],
+      "sources": [
+        "[S] https://www.reddit.com/r/TowerofFantasy/comments/wnfg0n/anti_cheat_stays_even_after_uninstalling_the_game/",
+        "[S] https://areweanticheatyet.com/breakdown"
+      ]
+    },
+    {
+      "id": "zakynthos",
+      "name": "Zakynthos Anti-Cheat",
+      "vendor": "KRAFTON / PUBG Studios",
+      "gate": "SHOULD_GATE",
+      "kernel_mode": false,
+      "boot_resident": false,
+      "services": ["zksvc"],
+      "drivers": [],
+      "processes": ["zksvc.exe", "TslGame_ZK.exe"],
+      "notes": "PUBG proprietary anti-cheat service installed under C:\\Program Files\\Common Files\\PUBG. KRAFTON documents DMA-focused protection, but no stable standalone kernel driver filename was verified; keep SHOULD_GATE until that boundary is re-verified.",
+      "games_sample": ["PUBG: Battlegrounds"],
+      "sources": [
+        "[A] https://pubg.com/en/news/9126",
+        "[C] https://www.reddit.com/r/PUBATTLEGROUNDS/comments/15od2np/how_do_i_remove_zakynthos_service/",
+        "[S] https://www.reddit.com/r/PUBATTLEGROUNDS/comments/njzyya/game_running_fine_without_2_anticheats/"
+      ]
+    },
+    {
+      "id": "byfron-hyperion",
+      "name": "Hyperion / Byfron",
+      "vendor": "Roblox Corporation / Byfron Technologies",
+      "gate": "SHOULD_GATE",
+      "kernel_mode": false,
+      "boot_resident": false,
+      "services": [],
+      "drivers": [],
+      "processes": ["RobloxPlayerBeta.exe"],
+      "notes": "User-mode anti-tamper built into the 64-bit Roblox player; there is no separate Hyperion service or verified kernel driver. Gate only while RobloxPlayerBeta.exe is running, with Roblox signature/path validation.",
+      "games_sample": ["Roblox"],
+      "sources": [
+        "[A] https://en.help.roblox.com/hc/en-us/articles/24275616578708-Anti-cheat-Messages",
+        "[C] https://roblox.fandom.com/wiki/Hyperion",
+        "[S] https://yaelbridgetomath.com/api/v1/downloads/5"
+      ]
+    },
+    {
+      "id": "blizzard-warden",
+      "name": "Blizzard Warden",
+      "vendor": "Blizzard Entertainment",
+      "gate": "SHOULD_GATE",
+      "kernel_mode": false,
+      "boot_resident": false,
+      "services": [],
+      "drivers": [],
+      "processes": ["Wow.exe", "WowClassic.exe", "Overwatch.exe", "Diablo IV.exe"],
+      "notes": "Intrusive user-mode scanner delivered in or alongside Blizzard game clients; no independent Warden process, service, or driver is reliably enumerable. Game-process detection must be path/signature-qualified and maintained per title.",
+      "games_sample": ["World of Warcraft", "Overwatch 2", "Diablo IV"],
+      "sources": [
+        "[A] https://www.blizzard.com/en-us/legal/cd5930c0-2784-420c-a23d-1e0d6ff8599b/anti-cheating-agreement",
+        "[S] https://en.wikipedia.org/wiki/Warden_(software)",
+        "[S] https://caniplayonlinux.com/games/overwatch-2/"
+      ]
+    },
+    {
+      "id": "halo-arbiter",
+      "name": "Arbiter Anti-Cheat",
+      "vendor": "Xbox Game Studios / 343 Industries",
+      "gate": "SHOULD_GATE",
+      "kernel_mode": false,
+      "boot_resident": false,
+      "services": [],
+      "drivers": [],
+      "processes": ["HaloInfinite.exe"],
+      "notes": "Halo Infinite's user-mode/integrated anti-cheat layer. No distinct Windows service or kernel driver was found; process detection identifies the protected game, not a standalone Arbiter component.",
+      "games_sample": ["Halo Infinite"],
+      "sources": [
+        "[C] https://steamdb.info/tech/AntiCheat/Arbiter/",
+        "[S] https://www.gamingonlinux.com/anticheat/vendor/arbiter/"
+      ]
+    },
+    {
+      "id": "fairfight",
+      "name": "FairFight",
+      "vendor": "GameBlocks / Ubisoft",
+      "gate": "DONT_GATE",
+      "kernel_mode": false,
+      "boot_resident": false,
+      "services": [],
+      "drivers": [],
+      "processes": [],
+      "notes": "Primarily server-side statistical/behavioral detection with no stable local Windows anti-cheat service, driver, or process. Do not gate driver reads merely because a title advertises FairFight.",
+      "games_sample": ["Battlefield 1", "Battlefield V", "Star Wars Battlefront II", "Tom Clancy's The Division"],
+      "sources": [
+        "[S] https://areweanticheatyet.com/breakdown",
+        "[S] https://www.pcgamingwiki.com/wiki/List_of_games_with_anti-cheat_technology"
+      ]
+    },
+    {
+      "id": "anybrain",
+      "name": "AnyBrain",
+      "vendor": "Anybrain, S.A.",
+      "gate": "DONT_GATE",
+      "kernel_mode": false,
+      "boot_resident": false,
+      "services": [],
+      "drivers": [],
+      "processes": [],
+      "notes": "Behavioral-biometric/AI SDK integrated into the game with no stable standalone Windows runtime identifier or kernel driver. A game may also use a separate kernel anti-cheat, which must be detected independently.",
+      "games_sample": ["THE FINALS", "ARC Raiders", "Hunt: Showdown 1896", "KovaaK's"],
+      "sources": [
+        "[A] https://anybrain.gg/",
+        "[A] https://blog.anybrain.gg/unlocking-the-power-of-player-behavior-analysis/",
+        "[C] https://steamdb.info/tech/AntiCheat/AnyBrain/"
+      ]
+    },
+    {
+      "id": "r6-shieldguard",
+      "name": "R6 ShieldGuard",
+      "vendor": "Ubisoft",
+      "gate": "DONT_GATE",
+      "kernel_mode": false,
+      "boot_resident": false,
+      "services": [],
+      "drivers": [],
+      "processes": ["RainbowSix.exe", "RainbowSix_Vulkan.exe"],
+      "notes": "Umbrella name for Rainbow Six Siege's game-security systems, live executable hardening, behavioral detections, and BattlEye integration. There is no verified separate ShieldGuard driver/service; BattlEye is already a MUST_GATE entry, so gating this umbrella again would add only duplicate game-process coverage.",
+      "games_sample": ["Rainbow Six Siege X"],
+      "sources": [
+        "[A] https://www.ubisoft.com/en-us/game/rainbow-six/siege/news-updates/xvEzvsuxW34DS4WPs7zWA/r6-shieldguard-y10s3-update",
+        "[A] https://news.ubisoft.com/en-gb/article/t63XgnGFUidxcAZQiPqoe",
+        "[A] https://www.battleye.com/2016/08/05/battleye-released-for-rainbow-six-siege/"
+      ]
+    }
+  ]
+}
