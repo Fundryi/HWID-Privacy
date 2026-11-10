@@ -3,7 +3,8 @@
 > [!NOTE]
 > **TL;DR:** Changes the MAC address your network presents. A Windows `NetworkAddress` override is software-only and reversible; writing the controller's EEPROM, flash, OTP, or eFuse is permanent.
 > Who reads it: the local network, DHCP servers, any fingerprinting stack that enumerates adapters, and anti-cheats that log NIC identity.
-> **Status:** the ConnectX-3 procedure was tested on real hardware **[C]**. The Intel, Realtek onboard, and ASIX procedures are community-tested or untested **[S]** unless marked.
+> **Recommended:** a Realtek RTL8159 USB 10GbE adapter (tested: Lekuo DR59R11) with this project's [rtl8159-flasher](#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended). One exe, no driver install, changes the MAC and the USB serial.
+> **Status:** the RTL8159 storage behavior and the ConnectX-3 procedure were tested on real hardware **[C]**. The Intel, Realtek onboard, and ASIX procedures are community-tested or untested **[S]** unless marked.
 > **Risk:** an eFuse or OTP write is one-time. A wrong write can break the adapter.
 > System requirements: Windows 10/11 for the Windows methods; DOS boot for Intel onboard NICs.
 
@@ -15,11 +16,12 @@ Evidence grades appear inline. See [How to read these guides](../getting-started
 
 | Category | NIC | Speed | Difficulty | Method |
 |---|---|---|---|---|
+| **Recommended** | [Realtek RTL8159 USB (Lekuo DR59R11)](#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended) | 10 GbE | Easy - one exe, no driver install; MAC and USB serial | This project's rtl8159-flasher |
 | **Reference** | [Current and permanent MAC addresses](#current-mac-permanent-mac-and-burned-in-storage) | N/A | Read before choosing a method | Microsoft NDIS documentation |
 | **Windows** | [Software-only override](#windows-networkaddress-override-software-only) | Any supported speed | Easy and reversible, but driver support varies | `Set-NetAdapter` / `NetworkAddress` |
 | **System** | [Intel NICs](#intel-nics) | 1 GbE | Hard - requires DOS boot, BIOS changes; may fail on some chipsets | EEUPDATE via DOS boot USB |
 | **System/PCIe** | [Realtek NICs](#realtek-nics) | 1-2.5 GbE | Medium - tools are trial-and-error; depends on chipset | eFuse Programmer |
-| **USB** | [USB NICs overview](#usb-nics) | 1-2.5 GbE | Depends on controller, board revision, and storage | Controller-matched vendor tool |
+| **USB** | [USB NICs overview](#usb-nics) | 1-10 GbE | Depends on controller, board revision, and storage | Controller-matched vendor tool |
 | **USB** | [Realtek USB NICs](#realtek-usb-nics-update) | 2.5 GbE | Easy - plug in, run tool, done | Realtek USB PG Tool |
 | **USB** | [TP-Link UE300](#tp-link-ue300--rtl8153) | 1 GbE | Medium - controller is known, storage implementation still must be identified | Realtek USB PG Tool |
 | **USB** | [ASIX AX88179](#asix-ax88179ab-now-too) | 1 GbE | Easy - widely available, simple tool | ASIXFlash / Captain Mac Tool |
@@ -235,6 +237,110 @@ For Realtek network adapters, you can modify the MAC address using the Realtek e
    - It should match your programmed MAC address
 
 ## USB NICs
+
+### Realtek RTL8159 10GbE (Lekuo DR59R11, recommended)
+
+**Status:** the storage behavior is verified by this project on one Lekuo DR59R11 **[C]**: MAC change, every serial mode, and free switch-back, each checked after a replug. Those hardware writes used the project's study scripts. The app sends the same write sequence, but a write done by the app itself has not yet run on hardware. **[S]**
+
+This is the top recommendation in this guide for a changeable MAC:
+
+| Why | Detail |
+|---|---|
+| Simple | One exe from this project. No driver install, no DOS boot, no programmer, no vendor tool. |
+| Fast | 10GbE over USB-C. Full speed needs a USB 3.2 Gen2x2 (20 Gbps) port. |
+| Two identifiers | Changes the stored MAC and the USB serial. Nothing else on the chip. |
+| Way back | Every change is a small new entry. Switching back to an earlier value is often free. **Restore original** returns to the factory values. |
+| Safe defaults | Backup first, exact bytes shown before a write, check after the write. |
+
+#### Hardware
+
+| Item | Value |
+|---|---|
+| Tested adapter | [Lekuo DR59R11](https://lekuo.com/product_view.php?id=661), USB-C to 10GBASE-T RJ45 |
+| Chip | Realtek RTL8159 |
+| USB ID | `0BDA:815A` (generic Realtek ID) |
+| Driver | Windows built-in Realtek driver was enough on the test PC. The Realtek driver from the Lekuo download (1159.21.20.1009) also works. |
+| Storage | 4 KB eFuse inside the chip. One-time programmable, append-only. About 1250 bytes free from the factory. |
+
+Lekuo's own speed figures: about 9.45 Gbps on a USB 3.2 Gen2x2 port, about 7.2 Gbps on Gen2 (10 Gbps), and about 3.5 Gbps on Gen1 (5 Gbps). Thunderbolt and USB4 ports usually run this adapter at 10 Gbps USB. **[A]** This project did not measure link speed.
+
+#### Other RTL8159 adapters
+
+| Adapter | Expectation |
+|---|---|
+| Lekuo DR59R11 | Verified **[C]** |
+| Other RTL8159 adapters with USB ID `0BDA:815A` | Very likely to work: same chip, same driver path, same storage. The tool checks the chip ID before anything else. **[S]** |
+| RTL8159 adapters with their own vendor USB ID | Not listed by the tool. |
+| Adapters with an extra EEPROM or SPI flash chip | Unknown. The MAC may load from that chip, so an eFuse change may not show. |
+| RTL8159 in the larger QFN100 package | Unknown. |
+| RTL8157 and older Realtek chips | Not supported. Use the [Realtek USB PG Tool](#realtek-usb-nics-update). |
+
+#### How the storage works
+
+- The MAC and the USB serial live in the chip's eFuse. Each change adds a small entry at the end. At power-up the newest entry wins.
+- A change shows only after you unplug and replug the adapter. A driver restart (`pnputil /restart-device`) does not reload it.
+- To go back to an earlier value, the tool can zero out the newer entries. The chip skips zeroed bytes, so the older entry is active again. This costs no space.
+
+| Change | eFuse bytes used |
+|---|---:|
+| New MAC | 4 to 9 |
+| Custom serial | 25 |
+| Switch serial mode | 4 |
+| Switch back to an earlier value (when offered as free) | 0 |
+
+USB serial options:
+
+| Option | USB serial Windows sees | Example |
+|---|---|---|
+| Follows the MAC (factory default) | `0003` + MAC, changes with the MAC | `000388C9B34EA217` for MAC `88:C9:B3:4E:A2:17` |
+| All zeros | `000000000000000`, stays when the MAC changes | `000000000000000` |
+| No serial | None. Windows then names the adapter by its USB port, so another port means a new adapter in Windows. | none |
+| Custom | 15 characters, `0-9` and `A-F`, fixed | `5C1E07A39B2D46F` |
+
+Do not copy these examples. Pick your own values.
+
+#### Requirements
+
+- An RTL8159 USB adapter with USB ID `0BDA:815A`. Check it in Device Manager, **Details**, **Hardware Ids** (`USB\VID_0BDA&PID_815A`).
+- Windows 10 or 11 x64 and an administrator account.
+- A writable folder for the tool, such as a folder on your desktop. The tool keeps its backups in a `backups` folder next to the exe.
+- No `NetworkAddress` override on this adapter. See [Check for a Windows override](#1-check-for-a-windows-override).
+
+#### Download
+
+- **[rtl8159-flasher.exe](./usb-rtl8159/rtl8159-flasher.exe)**. One file, version 1.0.0. Provenance and hash are in `PROVENANCE.md` in the same repository folder.
+
+#### Change the MAC and serial
+
+1. Plug in the adapter. Unplug any other RTL8159 adapter.
+2. Run `HWIDChecker.exe` and save the **NETWORK ADAPTERS (NIC's)** section as your baseline.
+3. Right-click `rtl8159-flasher.exe` and choose **Run as administrator**.
+4. Select the adapter. The tool reads the full eFuse twice, checks that both reads match, and saves the backup file `backups\<factory MAC>.rtl8159.json`. **Open backup folder** shows it.
+5. Copy the `backups` folder somewhere outside the PC. If the backup file is missing or damaged, the tool refuses to write.
+6. Use the **Safe** tab. The first three MAC bytes (the maker part, `88:C9:B3` on the Lekuo) stay fixed. Enter the last six hex digits. The **Advanced** tab lets you change all twelve digits and warns when the maker part changes.
+7. Pick a serial option. It starts at the adapter's current setting, so keeping it costs nothing.
+8. Click **Review & write...**. Nothing is written yet. The review window lists the exact bytes, the cost, and the space left.
+9. Read the list. Tick **I understand this is permanent (it can only be overwritten by a newer change)** and click **Write now**, or cancel.
+10. The tool writes, reads every byte back, and checks the full eFuse. Wait for it to finish. Do not unplug the adapter during the write.
+11. When the tool asks, unplug the adapter and plug it back in. The tool finds it again and shows **Applied** (green) or **Mismatch** (red).
+12. Run HWIDChecker again and compare with your baseline. A changed USB serial makes Windows add a new "Ethernet N" entry after the replug; the old one is stale.
+
+#### Go back
+
+- **History:** the tool lists every MAC and serial setting the adapter has stored, newest first. Each entry shows whether going back is a free switch-back or needs a new entry, and how many bytes. **Use this** fills in the change; nothing is written until you review and confirm.
+- **Restore original...:** returns to the factory MAC and the original serial setting.
+
+> [!WARNING]
+> **Untested on hardware:** a write done by the app itself, and the one-click change that runs two steps (a free switch-back, then a new entry). The six hardware writes behind this section used the project's study scripts with the same write sequence. The app's write path is covered by its own tests but has not yet written a real adapter. Watch the review window and the result after replug. **[S]**
+
+> [!CAUTION]
+> eFuse is one-time programmable. Every new entry uses space for good, and a backup cannot give that space back. Zeroing entries for a switch-back is also permanent. If the adapter loses power during a write, the tool's write order keeps the old identity active, but a write that stopped halfway blocks further changes until the tool reads the adapter again. Never force a plan the tool refuses.
+
+What this does not change:
+
+- The USB IDs (`0BDA:815A`), the product strings, and the chip's other settings.
+- Old adapter entries Windows has already stored in the registry.
+- The MAC on any other network adapter in the PC.
 
 ### Realtek USB NICs (Update)
 
@@ -768,6 +874,7 @@ shutdown /r /t 0
 | Realtek RTL8125BG/BGS | Embedded OTP can replace external EEPROM; serial EEPROM and SPI flash are also supported | The same controller family can appear on boards with different storage. OTP writes are permanent. [A] |
 | Realtek RTL8153B-VB | Embedded OTP can replace external 93C46/93C56/93C66 EEPROM; the controller also has an SPI flash interface | An RTL8153 label does not tell you which interface stores the finished adapter's MAC. [A] |
 | Realtek RTL8156B(S)G | Embedded OTP can replace external 93C46/93C56/93C66 EEPROM; the controller also has an SPI flash interface | Confirm the tool's storage mode before any write. [A] |
+| Realtek RTL8159 (Lekuo DR59R11) | 4 KB on-chip eFuse, append-only; no external EEPROM or SPI flash in use on the tested unit | Newest entry wins at power-up. Zeroing newer entries restores an older one for free. Space is finite. [C] |
 | TP-Link UE300 | TP-Link documents an RTL8153 controller; the public product page does not identify the board's active MAC storage | Treat storage type as unknown until the tool reads it, and keep hardware revisions separate. [A] |
 | ASIX AX88179 | Optional 93C56/93C66 serial EEPROM or embedded eFuse | EEPROM may be rewritable; eFuse is one-time programmable. [A] |
 | ASIX AX88179A | Embedded eFuse for device data and external SPI flash for firmware customization | Do not assume that changing flash also replaces data stored in eFuse. [A] |
@@ -850,6 +957,7 @@ A changed current address after only a driver restart proves a software-visible 
 - [Microsoft: ipconfig](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/ipconfig)
 - [Microsoft: Win32_NetworkAdapter](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-networkadapter)
 - [IEEE: Guidelines for EUI, OUI, CID, and local-address bits](https://standards.ieee.org/wp-content/uploads/import/documents/tutorials/eui.pdf)
+- [Lekuo: DR59R11 USB-C 10GbE adapter (RTL8159)](https://lekuo.com/product_view.php?id=661)
 - [TP-Link: UE300 product specifications](https://www.tp-link.com/us/home-networking/usb-converter/ue300/)
 - [TP-Link: UE300 hardware-version support page](https://www.tp-link.com/us/support/download/ue300/)
 - [TP-Link: UE300 V1 datasheet](https://static.tp-link.com/res/down/doc/UE300_V1_Datasheet.pdf)

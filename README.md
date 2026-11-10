@@ -129,8 +129,9 @@ Changes the MAC address the network sees. A Windows `NetworkAddress` override is
   - [Mellanox ConnectX-3 MAC Spoofing Guide](guides/mac-spoofing/mac-spoofing.md#mellanox-connectx-3-cx311a--mcx311a-xcat) - firmware-level, repeatable, 10 Gbps SFP+
   - Note: Certain models might not support flashing or may revert.
 - **USB NICs**: Both Realtek and ASIX adapters support MAC changes:
+  - **Top recommendation**: Realtek RTL8159 USB-C 10GbE, tested on the [Lekuo DR59R11](https://lekuo.com/product_view.php?id=661), with this project's [rtl8159-flasher](guides/mac-spoofing/mac-spoofing.md#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended). One exe, no driver install, changes the stored MAC and the USB serial, often with a free way back. Storage behavior verified on one unit; the app's own write is not yet hardware-tested.
   - [Complete USB NIC Guide](guides/mac-spoofing/mac-spoofing.md#usb-nics)
-  - **Recommended**: [USB‑C 2.5GbE Adapter](https://uniaccessories.com/products/usb-c-to-ethernet-adapter-2500mbps) • [Amazon DE](https://www.amazon.de/-/en/dp/B0C2H9HVH3)
+  - **Recommended (2.5GbE, Realtek USB PG Tool)**: [USB‑C 2.5GbE Adapter](https://uniaccessories.com/products/usb-c-to-ethernet-adapter-2500mbps) • [Amazon DE](https://www.amazon.de/-/en/dp/B0C2H9HVH3)
 - **Purchasable HWID Spoofers**: Some handle NIC spoofing, but certain NICs resist it, and they can produce questionable serial data in other areas.
 - **Best Practice**: Keep the first 6 digits (vendor ID), change only the last 6. For a self-chosen address, the IEEE-correct form is a locally administered unicast address (first octet with the local bit set, multicast bit clear, for example `02:`); Windows, Android, and Apple all use this form for randomized Wi-Fi. **[A]**
 

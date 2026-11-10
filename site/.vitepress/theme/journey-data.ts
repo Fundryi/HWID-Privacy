@@ -324,6 +324,7 @@ export const journeys: ComponentJourney[] = [
       question('connection', 'Windows setting or adapter?'),
       question('internal', 'Which onboard / PCIe NIC?'),
       question('usb', 'Which USB adapter?'),
+      leaf('network-rtl8159', 'RTL8159: rtl8159-flasher', 'Recommended · DR59R11 tested'),
       leaf('network-windows', 'Windows MAC override', 'Software only'),
       leaf('network-intel', 'Intel EEUPDATE', 'Exact controller · Untested'),
       leaf('network-realtek-pcie', 'Realtek PG', 'Exact CFG · Untested'),
@@ -344,6 +345,7 @@ export const journeys: ComponentJourney[] = [
       edge('internal', 'network-realtek-pcie', 'Realtek (not RTL8126)'),
       edge('internal', 'network-connectx3'),
       edge('internal', 'network-storage-limits'),
+      edge('usb', 'network-rtl8159', 'Realtek RTL8159 10GbE'),
       edge('usb', 'network-tplink-ue300'),
       edge('usb', 'network-realtek-usb', 'Realtek RTL8153 / RTL8156'),
       edge('usb', 'network-asix-original'),
@@ -352,6 +354,7 @@ export const journeys: ComponentJourney[] = [
     ],
     destinations: [
       auxiliary('layers', 'Address layers', guideHref('network', 'identify'), 'background', 'Current, permanent and stored addresses are separate views'),
+      topic('network-rtl8159', 'RTL8159 USB 10GbE (recommended)', 'procedure', 'Storage behavior verified on one Lekuo DR59R11; app write not yet hardware-tested', "This project's one-file flasher changes the stored MAC and USB serial. Backup first; switch-back is often free; eFuse space is finite."),
       topic('network-windows', 'Software override', 'procedure', 'Documented Windows mechanism; driver support varies', 'Changes the current address without rewriting NIC storage; applying it restarts the adapter.'),
       topic('network-intel', 'Intel EEUPDATE', 'procedure', 'General programming procedure untested', 'Exact controller, utility version, locks and backup caveats apply.'),
       topic('network-realtek-pcie', 'Realtek PG', 'procedure', 'General workflow untested; exact silicon / configuration required', 'RTL8125-family configuration does not establish RTL8126 support.'),
@@ -363,6 +366,7 @@ export const journeys: ComponentJourney[] = [
       topic('network-storage-limits', 'Controller storage & limits', 'limitation', 'RTL8126 factory provisioning / AQC113 recovery / unknown storage', 'One shared section. Exact controller/card, adapter revision, hardware IDs, tool version and storage mode are needed; no generic detection commands are added.', ['network-rtl8126', 'network-aquantia', 'network-unknown']),
     ],
     sections: [
+      { label: 'Recommended', destinationIds: ['network-rtl8159'] },
       { label: 'Windows and address layers', destinationIds: ['layers', 'network-windows'] },
       { label: 'Internal / PCIe', destinationIds: ['network-intel', 'network-realtek-pcie', 'network-connectx3'] },
       { label: 'USB adapters', destinationIds: ['network-realtek-usb', 'network-tplink-ue300', 'network-asix-original', 'network-asix-ab'] },

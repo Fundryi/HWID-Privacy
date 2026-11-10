@@ -27,6 +27,8 @@ flowchart TD
   j_network_connection{"Windows setting or adapter?"}
   j_network_internal{"Which onboard / PCIe NIC?"}
   j_network_usb{"Which USB adapter?"}
+  j_network_network_rtl8159["RTL8159: rtl8159-flasher\nRecommended · DR59R11 tested"]
+  class j_network_network_rtl8159 journey-procedure
   j_network_network_windows["Windows MAC override\nSoftware only"]
   class j_network_network_windows journey-procedure
   j_network_network_intel["Intel EEUPDATE\nExact controller · Untested"]
@@ -54,11 +56,13 @@ flowchart TD
   j_network_internal -->|"Realtek (not RTL8126)"| j_network_network_realtek_pcie
   j_network_internal --> j_network_network_connectx3
   j_network_internal --> j_network_network_storage_limits
+  j_network_usb -->|"Realtek RTL8159 10GbE"| j_network_network_rtl8159
   j_network_usb --> j_network_network_tplink_ue300
   j_network_usb -->|"Realtek RTL8153 / RTL8156"| j_network_network_realtek_usb
   j_network_usb --> j_network_network_asix_original
   j_network_usb --> j_network_network_asix_ab
   j_network_usb -->|"Other / not sure"| j_network_network_storage_limits
+  click j_network_network_rtl8159 href "https://hwid.idkzal.cc/guides/mac-spoofing/mac-spoofing.html#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended" "RTL8159 USB 10GbE (recommended)" _self
   click j_network_network_windows href "https://hwid.idkzal.cc/guides/mac-spoofing/mac-spoofing.html#windows-networkaddress-override-software-only" "Software override" _self
   click j_network_network_intel href "https://hwid.idkzal.cc/guides/mac-spoofing/mac-spoofing.html#intel-nics" "Intel EEUPDATE" _self
   click j_network_network_realtek_pcie href "https://hwid.idkzal.cc/guides/mac-spoofing/mac-spoofing.html#realtek-nics" "Realtek PG" _self
@@ -69,6 +73,11 @@ flowchart TD
   click j_network_network_connectx3 href "https://hwid.idkzal.cc/guides/mac-spoofing/mac-spoofing.html#mellanox-connectx-3-cx311a--mcx311a-xcat" "ConnectX-3" _self
   click j_network_network_storage_limits href "https://hwid.idkzal.cc/guides/mac-spoofing/mac-spoofing.html#controller-storage-efuse-eeprom-or-flash" "Controller storage #amp; limits" _self
 ```
+
+## Recommended
+
+- [RTL8159 USB 10GbE (recommended)](../../guides/mac-spoofing/mac-spoofing.md#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended) (procedure). **Storage behavior verified on one Lekuo DR59R11; app write not yet hardware-tested** This project's one-file flasher changes the stored MAC and USB serial. Backup first; switch-back is often free; eFuse space is finite.
+  Topic names: Realtek RTL8159 USB 10GbE (Lekuo DR59R11): recommended.
 
 ## Windows and address layers
 

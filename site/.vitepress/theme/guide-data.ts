@@ -365,6 +365,13 @@ export const guides: GuideRoute[] = [
     troubleshoot: { label: 'ConnectX-3 troubleshooting', href: `${paths.network}#troubleshooting` },
     methods: [
       {
+        id: 'network-rtl8159',
+        label: 'Realtek RTL8159 USB 10GbE (Lekuo DR59R11): recommended',
+        href: `${paths.network}#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended`,
+        description: "Change the stored MAC and USB serial with this project's one-file flasher. No driver install; backup first, review before write, often a free way back.",
+        note: "Storage behavior verified on one DR59R11 [C]; the app's own write is not yet hardware-tested. eFuse space is finite.",
+      },
+      {
         id: 'network-windows',
         label: 'Windows NetworkAddress: software-only override',
         href: `${paths.network}#windows-networkaddress-override-software-only`,
