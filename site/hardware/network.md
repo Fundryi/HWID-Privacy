@@ -1,6 +1,6 @@
 ---
 title: "NIC / MAC guide chooser"
-description: "Choose a Windows override or your NIC. Device programming depends on the exact controller, tool and storage."
+description: "Recommended: an RTL8159 USB 10GbE adapter with this project's flasher. Otherwise choose a Windows override or your NIC. Device programming depends on the exact controller, tool and storage."
 aside: false
 journey: network
 ---
@@ -9,7 +9,7 @@ journey: network
 
 # NIC / MAC guide chooser
 
-Choose a Windows override or your NIC. Device programming depends on the exact controller, tool and storage.
+Recommended: an RTL8159 USB 10GbE adapter with this project's flasher. Otherwise choose a Windows override or your NIC. Device programming depends on the exact controller, tool and storage.
 
 - **Identify:** [Current, permanent and stored MAC](../../guides/mac-spoofing/mac-spoofing.md#current-mac-permanent-mac-and-burned-in-storage)
 - **Prepare:** [Backups and recovery checklist](../../guides/getting-started/getting-started.md#safety-checklist)
@@ -22,13 +22,14 @@ Choose a Windows override or your NIC. Device programming depends on the exact c
 %% hwid-journey:network
 flowchart TD
   accTitle: MAC address route
-  accDescr: Choose a Windows override or your NIC. Device programming depends on the exact controller, tool and storage.
+  accDescr: Recommended: an RTL8159 USB 10GbE adapter with this project's flasher. Otherwise choose a Windows override or your NIC. Device programming depends on the exact controller, tool and storage.
   j_network_start(["MAC address"])
   j_network_connection{"Windows setting or adapter?"}
   j_network_internal{"Which onboard / PCIe NIC?"}
   j_network_usb{"Which USB adapter?"}
-  j_network_network_rtl8159["RTL8159: rtl8159-flasher\nRecommended · DR59R11 tested"]
+  j_network_network_rtl8159["Recommended: RTL8159 USB 10GbE\nrtl8159-flasher · DR59R11 tested"]
   class j_network_network_rtl8159 journey-procedure
+  class j_network_network_rtl8159 journey-recommended
   j_network_network_windows["Windows MAC override\nSoftware only"]
   class j_network_network_windows journey-procedure
   j_network_network_intel["Intel EEUPDATE\nExact controller · Untested"]
@@ -47,7 +48,8 @@ flowchart TD
   class j_network_network_connectx3 journey-procedure
   j_network_network_storage_limits["RTL8126 / AQC113 / unknown\nLimits"]
   class j_network_network_storage_limits journey-limitation
-  j_network_start --> j_network_connection
+  j_network_start -->|"Best route"| j_network_network_rtl8159
+  j_network_start -->|"Other routes"| j_network_connection
   j_network_connection --> j_network_network_windows
   j_network_connection -->|"Onboard / PCIe NIC"| j_network_internal
   j_network_connection -->|"USB NIC"| j_network_usb
@@ -56,12 +58,12 @@ flowchart TD
   j_network_internal -->|"Realtek (not RTL8126)"| j_network_network_realtek_pcie
   j_network_internal --> j_network_network_connectx3
   j_network_internal --> j_network_network_storage_limits
-  j_network_usb -->|"Realtek RTL8159 10GbE"| j_network_network_rtl8159
   j_network_usb --> j_network_network_tplink_ue300
   j_network_usb -->|"Realtek RTL8153 / RTL8156"| j_network_network_realtek_usb
   j_network_usb --> j_network_network_asix_original
   j_network_usb --> j_network_network_asix_ab
   j_network_usb -->|"Other / not sure"| j_network_network_storage_limits
+  classDef journey-recommended stroke:#18794e,stroke-width:4px
   click j_network_network_rtl8159 href "https://hwid.idkzal.cc/guides/mac-spoofing/mac-spoofing.html#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended" "RTL8159 USB 10GbE (recommended)" _self
   click j_network_network_windows href "https://hwid.idkzal.cc/guides/mac-spoofing/mac-spoofing.html#windows-networkaddress-override-software-only" "Software override" _self
   click j_network_network_intel href "https://hwid.idkzal.cc/guides/mac-spoofing/mac-spoofing.html#intel-nics" "Intel EEUPDATE" _self
@@ -76,7 +78,7 @@ flowchart TD
 
 ## Recommended
 
-- [RTL8159 USB 10GbE (recommended)](../../guides/mac-spoofing/mac-spoofing.md#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended) (procedure). **Storage behavior verified on one Lekuo DR59R11; app write not yet hardware-tested** This project's one-file flasher changes the stored MAC and USB serial. Backup first; switch-back is often free; eFuse space is finite.
+- [RTL8159 USB 10GbE (recommended)](../../guides/mac-spoofing/mac-spoofing.md#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended) (procedure). **Verified on one Lekuo DR59R11, including a write by the app; two-step one-click change untested** This project's one-file flasher changes the stored MAC and USB serial. Backup first; switch-back is often free; eFuse space is finite.
   Topic names: Realtek RTL8159 USB 10GbE (Lekuo DR59R11): recommended.
 
 ## Windows and address layers

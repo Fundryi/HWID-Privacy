@@ -300,7 +300,7 @@ onBeforeUnmount(() => {
           {{ status }}
           <button v-if="state === 'error'" type="button" @click="refresh">Retry chart</button>
         </p>
-        <p class="decision-tree__legend">Dashed outline: research or limitation. Amber outline: returned node.</p>
+        <p class="decision-tree__legend"><template v-if="journey?.nodes.some((node) => node.recommended)">Thick green outline: recommended route. </template>Dashed outline: research or limitation. Amber outline: returned node.</p>
         <div ref="viewport" class="decision-tree__viewport" :class="{ 'decision-tree__viewport--empty': !hasChart }" :aria-busy="state === 'loading'" tabindex="0" aria-label="Flowchart scroll area">
           <div v-if="hasChart" ref="svgContainer" class="decision-tree__svg" :style="diagramSize" v-html="svg" />
           <div v-else class="decision-tree__placeholder" aria-hidden="true">{{ state === 'error' ? 'Chart unavailable' : 'Loading flowchart…' }}</div>

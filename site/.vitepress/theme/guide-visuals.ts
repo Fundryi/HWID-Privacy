@@ -119,6 +119,7 @@ export const guideVisuals: Record<string, GuideVisualData> = {
     ],
     note: 'A Windows override can survive reboot without rewriting device storage. Driver readbacks do not prove a firmware write. Permanent MAC: Unavailable remains a possible result; a controller name alone does not identify the storage used on a finished adapter.',
     sources: [
+      { label: 'Recommended: RTL8159 USB 10GbE', href: '/guides/mac-spoofing/mac-spoofing.html#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended' },
       { label: 'MAC address layers', href: '/guides/mac-spoofing/mac-spoofing.html#current-mac-permanent-mac-and-burned-in-storage' },
       { label: 'Windows override', href: '/guides/mac-spoofing/mac-spoofing.html#windows-networkaddress-override-software-only' },
       { label: 'Driver readback limits', href: '/guides/mac-spoofing/mac-spoofing.html#3-check-with-hwidchecker' },

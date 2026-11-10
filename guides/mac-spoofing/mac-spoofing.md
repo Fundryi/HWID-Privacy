@@ -4,7 +4,7 @@
 > **TL;DR:** Changes the MAC address your network presents. A Windows `NetworkAddress` override is software-only and reversible; writing the controller's EEPROM, flash, OTP, or eFuse is permanent.
 > Who reads it: the local network, DHCP servers, any fingerprinting stack that enumerates adapters, and anti-cheats that log NIC identity.
 > **Recommended:** a Realtek RTL8159 USB 10GbE adapter (tested: Lekuo DR59R11) with this project's [rtl8159-flasher](#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended). One exe, no driver install, changes the MAC and the USB serial.
-> **Status:** the RTL8159 storage behavior and the ConnectX-3 procedure were tested on real hardware **[C]**. The Intel, Realtek onboard, and ASIX procedures are community-tested or untested **[S]** unless marked.
+> **Status:** the RTL8159 flasher (including a write by the app itself) and the ConnectX-3 procedure were tested on real hardware **[C]**. The Intel, Realtek onboard, and ASIX procedures are community-tested or untested **[S]** unless marked.
 > **Risk:** an eFuse or OTP write is one-time. A wrong write can break the adapter.
 > System requirements: Windows 10/11 for the Windows methods; DOS boot for Intel onboard NICs.
 
@@ -240,7 +240,7 @@ For Realtek network adapters, you can modify the MAC address using the Realtek e
 
 ### Realtek RTL8159 10GbE (Lekuo DR59R11, recommended)
 
-**Status:** the storage behavior is verified by this project on one Lekuo DR59R11 **[C]**: MAC change, every serial mode, and free switch-back, each checked after a replug. Those hardware writes used the project's study scripts. The app sends the same write sequence, but a write done by the app itself has not yet run on hardware. **[S]**
+**Status:** verified by this project on one Lekuo DR59R11 **[C]**: MAC change, every serial mode, and free switch-back, each checked after a replug. The app's own write is proven too: on 2026-11-10 `rtl8159-flasher.exe` switched the serial back from none to all zeros (0 bytes), and after a replug the adapter reported the zero serial. **[C]** Only the one-click two-step change is not yet tested on hardware. **[S]**
 
 This is the top recommendation in this guide for a changeable MAC:
 
@@ -280,6 +280,7 @@ Lekuo's own speed figures: about 9.45 Gbps on a USB 3.2 Gen2x2 port, about 7.2 G
 - The MAC and the USB serial live in the chip's eFuse. Each change adds a small entry at the end. At power-up the newest entry wins.
 - A change shows only after you unplug and replug the adapter. A driver restart (`pnputil /restart-device`) does not reload it.
 - To go back to an earlier value, the tool can zero out the newer entries. The chip skips zeroed bytes, so the older entry is active again. This costs no space.
+- The value you leave that way is used up. Its entry is now zeros, so coming back to it later needs a new entry (4 bytes for a serial setting, 4 to 9 for a MAC).
 
 | Change | eFuse bytes used |
 |---|---:|
@@ -308,7 +309,7 @@ Do not copy these examples. Pick your own values.
 
 #### Download
 
-- **[rtl8159-flasher.exe](./usb-rtl8159/rtl8159-flasher.exe)**. One file, version 1.0.0. Provenance and hash are in `PROVENANCE.md` in the same repository folder.
+- **[rtl8159-flasher.exe](./usb-rtl8159/rtl8159-flasher.exe)**. One file, version 1.0.1. Provenance and hash are in `PROVENANCE.md` in the same repository folder.
 
 #### Change the MAC and serial
 
@@ -331,7 +332,7 @@ Do not copy these examples. Pick your own values.
 - **Restore original...:** returns to the factory MAC and the original serial setting.
 
 > [!WARNING]
-> **Untested on hardware:** a write done by the app itself, and the one-click change that runs two steps (a free switch-back, then a new entry). The six hardware writes behind this section used the project's study scripts with the same write sequence. The app's write path is covered by its own tests but has not yet written a real adapter. Watch the review window and the result after replug. **[S]**
+> **Untested on hardware:** the one-click change that runs two steps in one action (a free switch-back, then a new entry). A single write by the app is proven on hardware; the two-step action is covered only by the app's own tests. Watch the review window and the result after replug. **[S]**
 
 > [!CAUTION]
 > eFuse is one-time programmable. Every new entry uses space for good, and a backup cannot give that space back. Zeroing entries for a switch-back is also permanent. If the adapter loses power during a write, the tool's write order keeps the old identity active, but a write that stopped halfway blocks further changes until the tool reads the adapter again. Never force a plan the tool refuses.
@@ -341,6 +342,16 @@ What this does not change:
 - The USB IDs (`0BDA:815A`), the product strings, and the chip's other settings.
 - Old adapter entries Windows has already stored in the registry.
 - The MAC on any other network adapter in the PC.
+
+#### Troubleshooting the RTL8159 flasher
+
+**The adapter is not listed.** The tool lists only adapters with USB ID `0BDA:815A` that are plugged in now. Check the hardware ID in Device Manager. An adapter with its own vendor USB ID is not supported.
+
+**The change does not show.** Unplug the adapter and plug it back in. A driver restart does not reload the eFuse. Then check for a `NetworkAddress` override, which hides the stored MAC.
+
+**The tool refuses to write.** The backup file is missing or damaged, the plan does not fit the free space, or an earlier write stopped halfway. Keep the `backups` folder next to the exe and let the tool read the adapter again. Do not try to force the write.
+
+**Windows shows several "Ethernet N" adapters.** Each new USB serial, or a port change with no serial, looks like a new adapter to Windows. The old entries are stale.
 
 ### Realtek USB NICs (Update)
 
@@ -932,6 +943,8 @@ HWIDChecker reads the current `Win32_NetworkAdapter.MACAddress` and matches the 
 - Select the adapter again by hardware identity, not by list position alone.
 - Use its read-only query or dump function.
 - Compare the reported `NODEID` or MAC, storage mode, and remaining eFuse capacity with the pre-write record.
+
+For the [RTL8159 flasher](#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended) this check is built in: after the replug it reads the adapter again and shows **Applied** or **Mismatch**. Start the tool again later to see the stored MAC, serial, and free space. **[C]**
 
 ### 5. Cold-power persistence check
 

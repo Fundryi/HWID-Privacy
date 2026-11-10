@@ -26,6 +26,7 @@ export interface JourneyNode {
   label: string
   destinationId?: string
   diagramNote?: string
+  recommended?: boolean
 }
 
 export interface JourneyEdge {
@@ -107,6 +108,10 @@ function question(id: string, label: string): JourneyNode {
 
 function leaf(id: string, label: string, diagramNote?: string, destinationId: string = id): JourneyNode {
   return { id, kind: 'destination', label, destinationId, ...(diagramNote ? { diagramNote } : {}) }
+}
+
+function recommendedLeaf(id: string, label: string, diagramNote?: string): JourneyNode {
+  return { ...leaf(id, label, diagramNote), recommended: true }
 }
 
 function edge(from: string, to: string, label?: string): JourneyEdge {
@@ -315,7 +320,7 @@ export const journeys: ComponentJourney[] = [
   {
     guideId: 'network',
     title: 'MAC address route',
-    intro: 'Choose a Windows override or your NIC. Device programming depends on the exact controller, tool and storage.',
+    intro: "Recommended: an RTL8159 USB 10GbE adapter with this project's flasher. Otherwise choose a Windows override or your NIC. Device programming depends on the exact controller, tool and storage.",
     // Source: mac-spoofing.md#current-mac-permanent-mac-and-burned-in-storage,
     // Windows, Intel, Realtek, USB and ConnectX-3 sections; shared limits are
     // #controller-storage-efuse-eeprom-or-flash, not a generic NIC-detection tutorial.
@@ -324,7 +329,7 @@ export const journeys: ComponentJourney[] = [
       question('connection', 'Windows setting or adapter?'),
       question('internal', 'Which onboard / PCIe NIC?'),
       question('usb', 'Which USB adapter?'),
-      leaf('network-rtl8159', 'RTL8159: rtl8159-flasher', 'Recommended · DR59R11 tested'),
+      recommendedLeaf('network-rtl8159', 'Recommended: RTL8159 USB 10GbE', 'rtl8159-flasher · DR59R11 tested'),
       leaf('network-windows', 'Windows MAC override', 'Software only'),
       leaf('network-intel', 'Intel EEUPDATE', 'Exact controller · Untested'),
       leaf('network-realtek-pcie', 'Realtek PG', 'Exact CFG · Untested'),
@@ -336,7 +341,8 @@ export const journeys: ComponentJourney[] = [
       leaf('network-storage-limits', 'RTL8126 / AQC113 / unknown', 'Limits'),
     ],
     edges: [
-      edge('start', 'connection'),
+      edge('start', 'network-rtl8159', 'Best route'),
+      edge('start', 'connection', 'Other routes'),
       edge('connection', 'network-windows'),
       edge('connection', 'internal', 'Onboard / PCIe NIC'),
       edge('connection', 'usb', 'USB NIC'),
@@ -345,7 +351,6 @@ export const journeys: ComponentJourney[] = [
       edge('internal', 'network-realtek-pcie', 'Realtek (not RTL8126)'),
       edge('internal', 'network-connectx3'),
       edge('internal', 'network-storage-limits'),
-      edge('usb', 'network-rtl8159', 'Realtek RTL8159 10GbE'),
       edge('usb', 'network-tplink-ue300'),
       edge('usb', 'network-realtek-usb', 'Realtek RTL8153 / RTL8156'),
       edge('usb', 'network-asix-original'),
@@ -354,7 +359,7 @@ export const journeys: ComponentJourney[] = [
     ],
     destinations: [
       auxiliary('layers', 'Address layers', guideHref('network', 'identify'), 'background', 'Current, permanent and stored addresses are separate views'),
-      topic('network-rtl8159', 'RTL8159 USB 10GbE (recommended)', 'procedure', 'Storage behavior verified on one Lekuo DR59R11; app write not yet hardware-tested', "This project's one-file flasher changes the stored MAC and USB serial. Backup first; switch-back is often free; eFuse space is finite."),
+      topic('network-rtl8159', 'RTL8159 USB 10GbE (recommended)', 'procedure', 'Verified on one Lekuo DR59R11, including a write by the app; two-step one-click change untested', "This project's one-file flasher changes the stored MAC and USB serial. Backup first; switch-back is often free; eFuse space is finite."),
       topic('network-windows', 'Software override', 'procedure', 'Documented Windows mechanism; driver support varies', 'Changes the current address without rewriting NIC storage; applying it restarts the adapter.'),
       topic('network-intel', 'Intel EEUPDATE', 'procedure', 'General programming procedure untested', 'Exact controller, utility version, locks and backup caveats apply.'),
       topic('network-realtek-pcie', 'Realtek PG', 'procedure', 'General workflow untested; exact silicon / configuration required', 'RTL8125-family configuration does not establish RTL8126 support.'),
@@ -486,7 +491,7 @@ export const journeys: ComponentJourney[] = [
       edge('start', 'scope'),
       edge('scope', 'display-windows'),
       edge('scope', 'device', 'HDMI emulator'),
-      edge('scope', 'display-pg27aqdp'),
+      edge('scope', 'display-pg27aqdp', 'ASUS PG27AQDP only'),
       edge('scope', 'display-eeprom'),
       edge('scope', 'display-displayport'),
       edge('scope', 'identity', 'Input / method unknown'),
@@ -592,6 +597,7 @@ export function mermaidSource(journey: ComponentJourney, linkMode: 'site' | 'git
       const destinationLabel = node.diagramNote ? `${label}\\n${mermaidLabel(node.diagramNote)}` : label
       lines.push(`  ${id}["${destinationLabel}"]`)
       lines.push(`  class ${id} journey-${destination.role}`)
+      if (node.recommended) lines.push(`  class ${id} journey-recommended`)
       links.push(`  click ${id} href "${target}" "${mermaidLabel(destination.label)}" _self`)
     }
   }
@@ -605,5 +611,6 @@ export function mermaidSource(journey: ComponentJourney, linkMode: 'site' | 'git
     const label = connection.label ? `|"${mermaidLabel(connection.label)}"|` : ''
     lines.push(`  ${nodeId(connection.from)} -->${label} ${nodeId(connection.to)}`)
   }
+  if (journey.nodes.some((node) => node.recommended)) lines.push('  classDef journey-recommended stroke:#18794e,stroke-width:4px')
   return [...lines, ...links].join('\n')
 }

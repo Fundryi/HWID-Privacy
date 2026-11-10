@@ -354,7 +354,7 @@ export const guides: GuideRoute[] = [
     id: 'network',
     title: 'NIC and MAC addresses',
     shortTitle: 'NIC / MAC',
-    description: 'Choose between a Windows current-address override and controller-specific permanent-storage work, with exact family and revision checks.',
+    description: "Recommended: the RTL8159 USB 10GbE route with this project's flasher. Otherwise choose a Windows current-address override or controller-specific permanent-storage work, with exact family and revision checks.",
     href: paths.network,
     group: 'Network',
     risk: 'low to high',
@@ -369,7 +369,7 @@ export const guides: GuideRoute[] = [
         label: 'Realtek RTL8159 USB 10GbE (Lekuo DR59R11): recommended',
         href: `${paths.network}#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended`,
         description: "Change the stored MAC and USB serial with this project's one-file flasher. No driver install; backup first, review before write, often a free way back.",
-        note: "Storage behavior verified on one DR59R11 [C]; the app's own write is not yet hardware-tested. eFuse space is finite.",
+        note: 'Verified on one DR59R11 [C], including a write by the app itself. Only the two-step one-click change is untested. eFuse space is finite.',
       },
       {
         id: 'network-windows',

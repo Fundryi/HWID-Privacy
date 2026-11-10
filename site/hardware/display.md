@@ -47,7 +47,7 @@ flowchart TD
   j_display_start --> j_display_scope
   j_display_scope --> j_display_display_windows
   j_display_scope -->|"HDMI emulator"| j_display_device
-  j_display_scope --> j_display_display_pg27aqdp
+  j_display_scope -->|"ASUS PG27AQDP only"| j_display_display_pg27aqdp
   j_display_scope --> j_display_display_eeprom
   j_display_scope --> j_display_display_displayport
   j_display_scope -->|"Input / method unknown"| j_display_identity

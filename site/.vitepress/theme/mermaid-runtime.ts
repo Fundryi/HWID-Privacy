@@ -72,6 +72,7 @@ function configuration(dark: boolean, wrappingWidth = 160, compact = false): Mer
       .node.journey-background rect, .node.journey-preparation rect, .node.journey-verification rect {
         fill: ${dark ? '#252529' : '#f6f6f7'};
       }
+      .node.journey-recommended rect { fill: ${dark ? '#16352a' : '#e7f6ec'}; }
       .edgeLabel text, .nodeLabel { font-size: 16px; }
     `,
   }

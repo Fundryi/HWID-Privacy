@@ -14,9 +14,9 @@ Use this index when you already know what you need. Each link opens the relevant
 | Inspect and compare | [HWIDChecker and before/after snapshots](/guides/getting-started/getting-started.html#hwidcheckerexe) |
 | Motherboard | [AMIDEWIN and DMIEdit scope](/guides/motherboard-spoofing/motherboard-spoofing.html#amidewin-and-dmiedit-workflow-notes), [OEM provisioning tools](/guides/motherboard-spoofing/motherboard-spoofing.html#insyde-h2osde-and-oem-provisioning-tools) |
 | Storage | [Identify the controller first](/guides/ssd-spoofing/ssd-spoofing.html#which-controller-do-i-have), [M.2 prerequisites](/guides/ssd-spoofing/ssd-spoofing.html#prerequisites), [SATA prerequisites](/guides/ssd-spoofing/ssd-spoofing.html#prerequisites-1) |
-| Network adapters | [RTL8159 flasher (recommended)](/guides/mac-spoofing/mac-spoofing.html#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended), [Intel tool caveats and backup](/guides/mac-spoofing/mac-spoofing.html#intel-tool-caveats-and-backup), [NIC method selector](/hardware/network.html) |
+| Network adapters | [RTL8159 flasher (recommended)](/guides/mac-spoofing/mac-spoofing.html#realtek-rtl8159-10gbe-lekuo-dr59r11-recommended) ([download](/guides/mac-spoofing/usb-rtl8159/rtl8159-flasher.exe)), [Intel tool caveats and backup](/guides/mac-spoofing/mac-spoofing.html#intel-tool-caveats-and-backup), [NIC method selector](/hardware/network.html) |
 | RAM | [Read-only views and programmer tools](/guides/ram-spoofing/ram-spoofing.html#tools) |
-| Monitor | [MonitorInfoView, AW EDID Editor and CRU](/guides/monitor-spoofing/monitor-spoofing.html#tools); [PG27AQDP serial tool](/guides/monitor-spoofing/monitor-spoofing.html#option-4-firmware-tool-for-the-asus-pg27aqdp) |
+| Monitor | [MonitorInfoView, AW EDID Editor and CRU](/guides/monitor-spoofing/monitor-spoofing.html#tools); [PG27AQDP serial tool](/guides/monitor-spoofing/monitor-spoofing.html#option-4-firmware-tool-for-the-asus-pg27aqdp) ([download](/guides/monitor-spoofing/tools/pg27aqdp-serial/pg27aqdp-serial.exe); ASUS PG27AQDP with MCM107 firmware only) |
 | Router | [Requirements and recovery access](/guides/arp-spoofing/arp-spoofing.html#requirements) |
 | Firmware variables | [Read-only inspection setup](/guides/nvram-spoofing/nvram-spoofing.html#requirements) |
 

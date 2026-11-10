@@ -20,10 +20,10 @@ const exampleIds: Record<string, [string, string][]> = {
   tpm: [['tpm-discrete', 'TPM types'], ['tpm-clear', 'Clear behavior'], ['tpm-update-continuity', 'Firmware updates']],
   ftpm: [['ftpm-amd-tpmb', 'AMD reports'], ['ftpm-intel-z890', 'Intel evidence'], ['ftpm-pluton-toggle', 'Pluton research']],
   storage: [['storage-map1202', 'MAP1202'], ['storage-yansen-kingspec', 'SATA'], ['storage-rtl9210b', 'USB bridges']],
-  network: [['network-intel', 'Intel'], ['network-realtek-usb', 'Realtek USB'], ['network-connectx3', 'Mellanox']],
+  network: [['network-rtl8159', 'RTL8159 USB (recommended)'], ['network-intel', 'Intel'], ['network-connectx3', 'Mellanox']],
   router: [['router-glinet', 'GL.iNet'], ['router-openwrt', 'OpenWrt'], ['router-pi4', 'Raspberry Pi']],
   memory: [['memory-ddr4', 'DDR4'], ['memory-ddr5', 'DDR5'], ['memory-programmer', 'Programmer workflow']],
-  display: [['display-windows', 'Windows override'], ['display-drhdmi8k', 'Dr HDMI'], ['display-displayport', 'DisplayPort scope']],
+  display: [['display-windows', 'Windows override'], ['display-drhdmi8k', 'Dr HDMI'], ['display-pg27aqdp', 'ASUS PG27AQDP tool'], ['display-displayport', 'DisplayPort scope']],
 }
 function examples(id: string): GuideLink[] {
   const guide = guides.find((item) => item.id === id)!

@@ -1,4 +1,4 @@
-import { readFile, access } from 'node:fs/promises'
+import { readFile, readdir, access } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
@@ -293,10 +293,39 @@ function renderPage(journey, data) {
   return lines.join('\n')
 }
 
+export async function validateShippedTools(data, root = defaultRoot) {
+  const read = (file) => readFile(path.join(root, file), 'utf8')
+  const reference = await read('site/reference.md')
+  const downloads = (await read('site/.vitepress/config.mts')).match(/const localDownloads = \[([\s\S]*?)\]/)?.[1] ?? ''
+  const methods = data.guides.flatMap((guide) => guide.methods)
+  const charted = (ids) => data.journeys.some((journey) => journey.destinations.some((destination) =>
+    destination.topicIds.some((id) => ids.includes(id)) && journey.nodes.some((node) => node.destinationId === destination.id)))
+  const problems = []
+  const folders = (await readdir(path.join(root, 'guides'), { recursive: true }))
+    .filter((file) => path.basename(file) === 'PROVENANCE.md')
+    .map((file) => path.posix.join('guides', path.dirname(file).replaceAll('\\', '/')))
+  for (const dir of folders) {
+    const shipped = (await readdir(path.join(root, dir), { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name !== 'PROVENANCE.md').map((entry) => entry.name)
+    for (const name of shipped) if (!downloads.includes(`'${dir}/${name}'`)) problems.push(`${dir}/${name}: not in localDownloads (site/.vitepress/config.mts)`)
+    const provenance = await read(`${dir}/PROVENANCE.md`)
+    if (!provenance.includes("this project's own tool")) continue
+    const anchor = provenance.match(/\]\([^)#]*\.md(#[^)]+)\)/)?.[1]
+    if (!anchor) { problems.push(`${dir}/PROVENANCE.md: no link to its guide section`); continue }
+    const ids = methods.filter((method) => method.href.endsWith(anchor)).map((method) => method.id)
+    if (!ids.length) problems.push(`${dir}: no guide-data.ts method links ${anchor}`)
+    else if (!charted(ids)) problems.push(`${dir}: no journey-data.ts flowchart node for ${anchor}`)
+    if (!reference.includes(anchor)) problems.push(`${dir}: site/reference.md does not link ${anchor}`)
+    for (const name of shipped) if (!reference.includes(`${dir}/${name}`)) problems.push(`${dir}/${name}: no download link in site/reference.md`)
+  }
+  if (problems.length) throw new Error(`Shipped tools are not wired into the site (see docs/ADDING-ROUTES.md):\n${problems.join('\n')}`)
+}
+
 export async function generatePages(root = defaultRoot) {
   const data = await loadJourneyData(root)
   await validateJourneys(data, root)
   await validateStartJourney(data, root)
+  await validateShippedTools(data, root)
   const pages = Object.fromEntries(data.journeys.map((journey) => [`site/hardware/${journey.guideId}.md`, renderPage(journey, data)]))
   const start = await readFile(path.join(root, 'site/start.md'), 'utf8')
   pages['site/start.md'] = replaceStartOverview(start, data.mermaidSource(data.startJourney, 'github'))
