@@ -27,7 +27,7 @@ flowchart TD
   j_network_connection{"Windows setting or adapter?"}
   j_network_internal{"Which onboard / PCIe NIC?"}
   j_network_usb{"Which USB adapter?"}
-  j_network_network_rtl8159["Recommended: RTL8159 USB 10GbE\nrtl8159-flasher · DR59R11 tested"]
+  j_network_network_rtl8159["Best: RTL8159 10GbE\nrtl8159-flasher · DR59R11 tested"]
   class j_network_network_rtl8159 journey-procedure
   class j_network_network_rtl8159 journey-recommended
   j_network_network_windows["Windows MAC override\nSoftware only"]
@@ -48,8 +48,7 @@ flowchart TD
   class j_network_network_connectx3 journey-procedure
   j_network_network_storage_limits["RTL8126 / AQC113 / unknown\nLimits"]
   class j_network_network_storage_limits journey-limitation
-  j_network_start -->|"Best route"| j_network_network_rtl8159
-  j_network_start -->|"Other routes"| j_network_connection
+  j_network_start --> j_network_connection
   j_network_connection --> j_network_network_windows
   j_network_connection -->|"Onboard / PCIe NIC"| j_network_internal
   j_network_connection -->|"USB NIC"| j_network_usb
@@ -58,6 +57,7 @@ flowchart TD
   j_network_internal -->|"Realtek (not RTL8126)"| j_network_network_realtek_pcie
   j_network_internal --> j_network_network_connectx3
   j_network_internal --> j_network_network_storage_limits
+  j_network_usb --> j_network_network_rtl8159
   j_network_usb --> j_network_network_tplink_ue300
   j_network_usb -->|"Realtek RTL8153 / RTL8156"| j_network_network_realtek_usb
   j_network_usb --> j_network_network_asix_original

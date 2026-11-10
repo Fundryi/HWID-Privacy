@@ -252,6 +252,10 @@ This is the top recommendation in this guide for a changeable MAC:
 | Way back | Every change is a small new entry. Switching back to an earlier value is often free. **Restore original** returns to the factory values. |
 | Safe defaults | Backup first, exact bytes shown before a write, check after the write. |
 
+![rtl8159-flasher: current adapter on the left, the planned change on the right, the stored history below. Example values, not a real adapter.](./images/rtl8159-flasher.png)
+
+The left card shows what the adapter uses now. The right card shows your choice and, under **Result after replug**, exactly what changes and how many bytes it costs. A green border marks the setting on the adapter now, blue marks your choice. **History** lists every stored value and whether switching back to it is free.
+
 #### Hardware
 
 | Item | Value |
